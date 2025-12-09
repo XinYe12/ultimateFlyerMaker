@@ -1,0 +1,14 @@
+node_modules/
+firebase webapp/node_modules/
+firebase webapp/ultimate-flyer-maker/.git/
+.DS_Store
+.vscode/
+**/*.env
+**/service-key.json
+firebase webapp/ultimate-flyer-maker/server/credentials/
+**/*.env
+**/service-key.json
+firebase webapp/ultimate-flyer-maker/server/credentials/
+**/*.env
+**/credentials.json
+**/service-key.json

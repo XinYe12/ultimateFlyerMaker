@@ -1,0 +1,29 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google-cloud/discoveryengine": "^2.5.2",
+    "@google-cloud/firestore": "^8.0.0",
+    "@google-cloud/vertexai": "^1.10.0",
+    "@google-cloud/vision": "^5.3.4",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "firebase-admin": "^13.6.0",
+    "fs": "^0.0.1-security",
+    "multer": "^2.0.2",
+    "node-tesseract-ocr": "^2.2.1",
+    "openai": "^6.9.1",
+    "sharp": "^0.34.4"  
+  }
+}
