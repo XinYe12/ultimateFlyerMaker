@@ -1,0 +1,24 @@
+{
+  "id": "weekly-flyer-v1",
+  "canvas": {
+    "width": 2480,
+    "height": 3508
+  },
+  "sections": [
+    {
+      "id": "grocery",
+      "title": "Grocery",
+      "maxItems": 16,
+      "grid": {
+        "columns": 4,
+        "rowGap": 24,
+        "colGap": 24
+      },
+      "itemSizes": {
+        "SMALL": { "w": 1, "h": 1 },
+        "MEDIUM": { "w": 1, "h": 2 },
+        "LARGE": { "w": 4, "h": 3 }
+      }
+    }
+  ]
+}

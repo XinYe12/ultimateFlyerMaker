@@ -5,12 +5,17 @@ const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY; // store in .env file
 
 // helper to clean OCR junk
 function cleanOCR(text) {
-  // remove URLs, emojis, and punctuation junk
-  text = text.replace(/https?:\/\/\S+|[^\u4e00-\u9fa5A-Za-z0-9\s]/g, ' ');
-  // keep English words and digits (for weights)
-  text = text.replace(/\s+/g, ' ').trim();
-  return text;
+  return text
+    .split(/\n+/)
+    .map(t => t.trim())
+    .filter(t =>
+      /[\u4e00-\u9fa5]/.test(t) ||     // keep Chinese
+      /\b\d+(g|kg|ml|oz|l)\b/i.test(t) // keep weights
+    )
+    .filter(t => t.length > 1)
+    .join("\n");
 }
+
 
 function withTimeout(ms, promise) {
   return new Promise((resolve, reject) => {

@@ -10,12 +10,15 @@ import sharp from "sharp";
 import vision from "@google-cloud/vision";
 import "dotenv/config"; // loads .env automatically
 import "./config/googleAuth.js";  
+import identifyProductRoute from "./routes/identifyProductRoute.js";
+
 
 import { parseProductTitle } from "./parseTitleDeepSeek.js";
 import searchByPhotoRoute from "./routes/searchByPhotoRoute.js";
 import searchByImageRoute from "./routes/searchByImageRoute.js";
 import productRoutes from "./routes/productRoutes.js";
 import checkDuplicateImageRoute from "./routes/checkDuplicateImageRoute.js";
+import { searchBrave, buildBraveQueryFromParsed } from "./services/braveSearchService.js";
 
 
 // ---- SETUP ----
@@ -59,16 +62,46 @@ async function refineWithDeepSeek(ocrText) {
         messages: [
           {
             role: "system",
-            content:
-              "你是一个智能助手，任务是从OCR识别的文字中提取出简洁规范的中文和英文产品标题和重量（如果有的话），只包含品牌名和主产品名称。优先输出食品类标题，忽略药品类产品。忽略口味、净含量、杂乱英文和重复信息。输出中保持一行中文标题，一行英文标题，一行重量（如有）。",
+            content: `
+        你是一个专业的商品标题提取助手。你的任务：
+        1) 从 OCR 文字中提取最能代表该商品的中文名称
+        2) 提取对应的英文名称（只能根据 OCR 中出现或能够直接翻译的内容）
+        3) 如有重量信息，也需要提取；没有则留空
+
+        **严格要求：**
+        - 只能基于 OCR 中真实出现的信息，不得发挥，不得猜测，不得创造不存在的品牌或名称。
+        - 如果 OCR 未出现明确的商品名称（例如“饺子皮”“豆腐”“面条”等），允许输出一个合理的通用名称，例如“食品”或“OCR Unclear”，但不要输出“产品 / Product”这类无意义的词。
+        - 不得参考示例，不得模仿格式中的词语。
+        - 优先使用出现频率最高、字体最大的中文内容。
+        - 如果同时出现中英文字，必须保持语义一致。
+        - 不允许输出示例中的薯片、Lays 等词。
+
+        输出格式（共三行，不多不少）：
+        <中文标题>
+        <English Title>
+        <weight or empty>
+            `,
           },
           {
             role: "user",
-            content: `OCR文字：${ocrText}\n\n输出示例：\n乐事 薯片系列\nLays Potato Chips Series\n300g\n\n请输出产品标题：`,
+            content: `
+        以下是OCR识别文字，请分析其中真实出现的可作为商品名称的内容：
+
+        --------------------
+        ${ocrText}
+        --------------------
+
+        如果 OCR 文本中没有明显的商品名称，请输出最合理的通用描述，如：
+        食品
+        Food Item
+
+        请按三行格式输出，不要添加其他文字。
+            `,
           },
         ],
-        temperature: 0.3,
-        max_tokens: 200,
+
+        temperature: 0.1,   // more deterministic
+        max_tokens: 150,
       }),
     });
 
@@ -81,18 +114,25 @@ async function refineWithDeepSeek(ocrText) {
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content?.trim() || "";
 
-    const lines = content.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+    const lines = content.split(/\n+/).map(s => s.trim()).filter(Boolean);
     const joined = lines.join(" ");
+
     const weightMatch = joined.match(/(\d+(?:\.\d+)?\s?(g|kg|克|毫升|ml|oz|l))/i);
     const weight = weightMatch ? weightMatch[1].trim() : "";
-    const [title_zh, title_en] = [lines[0] || "", lines[1] || ""];
 
-    return { title_zh, title_en, weight, raw: content };
+    return {
+      title_zh: lines[0] || "",
+      title_en: lines[1] || "",
+      weight,
+      raw: content
+    };
   } catch (e) {
     console.error("⚠️ DeepSeek call failed:", e);
     return null;
   }
 }
+
+
 
 // 🈶 Drop English transliterations if Chinese dupes exist
 const dropEnglishDupes = (lines) => {
@@ -190,7 +230,7 @@ app.get("/", (req, res) => {
 app.use("/api/search-by-image", searchByImageRoute);
 app.use("/api/search-by-photo", searchByPhotoRoute);
 app.use("/api/products", productRoutes); // ✅ only once now
-
+app.use("/api/identify-product", identifyProductRoute);
 
 
 // ----------------------------
@@ -215,37 +255,73 @@ app.post("/analyze", upload.single("image"), async (req, res) => {
       : filePath;
 
     // --- Case A: no object localization ---
-    if (!objects.length) {
-      console.log("⚠️ No objects detected. Running OCR on full image...");
-      const [textResult] = await client.textDetection(filePath);
-      texts = textResult.textAnnotations?.map((t) => t.description) || [];
-      const buffer = fs.readFileSync(filePath);
-      croppedBase64 = buffer.toString("base64");
+if (!objects.length) {
+  console.log("⚠️ No objects detected. Running OCR on full image...");
+  const [textResult] = await client.textDetection(filePath);
+  texts = textResult.textAnnotations?.map((t) => t.description) || [];
 
-      const ocrText = texts.join(" ");
-      console.log("🧾 OCR extracted text length:", ocrText.length);
+  const buffer = fs.readFileSync(filePath);
+  croppedBase64 = buffer.toString("base64");
 
+  // 🔍 JOIN OCR TEXT INTO MULTI-LINE STRING
+  const ocrText = texts.join("\n");
+
+  // 📝 PRINT FULL OCR TEXT FOR DEBUGGING
+  console.log("===== 📝 OCR RAW TEXT BEGIN =====");
+  console.log(ocrText);
+  console.log("===== 📝 OCR RAW TEXT END =====");
+
+  console.log("🧾 OCR extracted text length:", ocrText.length);
+
+
+  try {
+      console.log("🤖 Calling DeepSeek parseTitleDeepSeek...");
+      const aiTitle = await parseProductTitle(ocrText);
+
+      const parsed = {
+        title_ai: aiTitle,
+        title_zh: "", // no structured split here, but keep fields for Brave
+        title_en: "",
+        weight: "",
+        note: "Used DeepSeek AI parser due to no localized objects.",
+      };
+
+      // 🧠 Build Brave query from parsed / AI title / OCR text
+      const braveQuery = buildBraveQueryFromParsed(parsed, aiTitle || ocrText);
+
+      let braveResults = [];
       try {
-        console.log("🤖 Calling DeepSeek parseTitleDeepSeek...");
-        const aiTitle = await parseProductTitle(ocrText);
-
-        const parsed = {
-          title_ai: aiTitle,
-          note: "Used DeepSeek AI parser due to no localized objects.",
-        };
-
-        fs.unlinkSync(filePath);
-        return res.json({ detectedObject, texts, parsed, croppedBase64 });
-      } catch (err) {
-        console.error(
-          "❌ DeepSeek failed, falling back to local parser:",
-          err.message
-        );
-        const parsed = parseProductText(texts);
-        fs.unlinkSync(filePath);
-        return res.json({ detectedObject, texts, parsed, croppedBase64 });
+        braveResults = await searchBrave(braveQuery, { count: 5 });
+        console.log("🧭 Brave results (no-objects):", braveResults.length);
+      } catch (e) {
+        console.error("⚠️ Brave search failed in no-objects branch:", e);
       }
-    } else {
+
+      fs.unlinkSync(filePath);
+      return res.json({ detectedObject, texts, parsed, croppedBase64, braveResults });
+    } catch (err) {
+      console.error(
+        "❌ DeepSeek failed, falling back to local parser:",
+        err.message
+      );
+      const parsed = parseProductText(texts);
+
+      // 🧠 Build Brave query from local parsed result + OCR
+      const braveQuery = buildBraveQueryFromParsed(parsed, ocrText);
+
+      let braveResults = [];
+      try {
+        braveResults = await searchBrave(braveQuery, { count: 5 });
+        console.log("🧭 Brave results (fallback no-objects):", braveResults.length);
+      } catch (e) {
+        console.error("⚠️ Brave search failed in fallback no-objects branch:", e);
+      }
+
+      fs.unlinkSync(filePath);
+      return res.json({ detectedObject, texts, parsed, croppedBase64, braveResults });
+    }
+  }
+   else {
       // --- Case B: crop the most central/large object, but rank by OCR density ---
       const { width, height } = await sharp(filePath).metadata();
       const centerX = width / 2;
@@ -309,6 +385,14 @@ app.post("/analyze", upload.single("image"), async (req, res) => {
 
       const [textResult] = await client.textDetection(cropPath);
       texts = textResult.textAnnotations?.map((t) => t.description) || [];
+      // 🔍 JOIN OCR TEXT INTO MULTI-LINE STRING
+      const ocrText = texts.join("\n");
+
+      // 📝 PRINT FULL OCR TEXT FOR DEBUGGING
+      console.log("===== 📝 OCR RAW TEXT BEGIN =====");
+      console.log(ocrText);
+      console.log("===== 📝 OCR RAW TEXT END =====");
+
 
       // fallback if cropped OCR is empty
       if (!texts.length) {
@@ -324,7 +408,7 @@ app.post("/analyze", upload.single("image"), async (req, res) => {
       }
     }
 
-    // ---- 6️⃣ Use local parser first ----
+        // ---- 6️⃣ Use local parser first ----
     const parsed = parseProductText(texts);
     console.log("✅ Local parsed title:", parsed.title);
 
@@ -348,13 +432,25 @@ app.post("/analyze", upload.single("image"), async (req, res) => {
       parsed.title_ai = parsed.title;
     }
 
-    res.json({ detectedObject, texts, parsed, croppedBase64 });
+    // ---- 8️⃣ Brave search using parsed info ----
+    const braveQuery = buildBraveQueryFromParsed(parsed, joinedText);
+
+    let braveResults = [];
+    try {
+      braveResults = await searchBrave(braveQuery, { count: 5 });
+      console.log("🧭 Brave results (objects branch):", braveResults.length);
+    } catch (e) {
+      console.error("⚠️ Brave search failed in objects branch:", e);
+    }
+
+    res.json({ detectedObject, texts, parsed, croppedBase64, braveResults });
     fs.unlinkSync(filePath);
   } catch (err) {
     console.error("❌ Error:", err);
     res.status(500).json({ error: "Failed to analyze image." });
   }
 });
+
 
 // ---- START SERVER ----
 const PORT = process.env.PORT || 5050;

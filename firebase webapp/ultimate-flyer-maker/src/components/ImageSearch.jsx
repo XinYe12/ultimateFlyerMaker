@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 
-export default function ImageSearch() {
+export default function ImageSearch({ onImageSelected }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [results, setResults] = useState([]);
@@ -15,6 +15,10 @@ export default function ImageSearch() {
     setPreview(URL.createObjectURL(file));
     setError("");
     setResults([]);
+
+    if (onImageSelected) {
+      onImageSelected(file);
+    }
   };
 
   const handleSearch = async () => {

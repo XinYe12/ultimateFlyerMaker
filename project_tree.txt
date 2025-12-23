@@ -1,0 +1,452 @@
+.
+├── .DS_Store
+├── .git
+│   ├── COMMIT_EDITMSG
+│   ├── config
+│   ├── description
+│   ├── HEAD
+│   ├── hooks
+│   │   ├── applypatch-msg.sample
+│   │   ├── commit-msg.sample
+│   │   ├── fsmonitor-watchman.sample
+│   │   ├── post-update.sample
+│   │   ├── pre-applypatch.sample
+│   │   ├── pre-commit.sample
+│   │   ├── pre-merge-commit.sample
+│   │   ├── pre-push.sample
+│   │   ├── pre-rebase.sample
+│   │   ├── pre-receive.sample
+│   │   ├── prepare-commit-msg.sample
+│   │   ├── push-to-checkout.sample
+│   │   ├── sendemail-validate.sample
+│   │   └── update.sample
+│   ├── index
+│   ├── info
+│   │   └── exclude
+│   ├── logs
+│   │   ├── HEAD
+│   │   └── refs
+│   │       ├── heads
+│   │       │   └── main
+│   │       └── remotes
+│   │           └── origin
+│   │               └── main
+│   ├── objects
+│   │   ├── 01
+│   │   │   ├── 78082626e4b82b9b9c639b582d38bab0859a5e
+│   │   │   └── f50b4051c892106ff9034c843d6ed293d27f8e
+│   │   ├── 08
+│   │   │   └── 0d6c77ac21bb2ef88a6992b2b73ad93daaca92
+│   │   ├── 09
+│   │   │   └── f18d6738f5cc58584cf9c5b3d67f88a03340a1
+│   │   ├── 0a
+│   │   │   ├── 38cced00ec9b2c07f3caec58f2db1935713f58
+│   │   │   └── 5a71a024539bbb2aade422a8dbd29546dc6ad2
+│   │   ├── 0c
+│   │   │   └── 20432e9842ffc65815dab03d7ba507504d34b3
+│   │   ├── 10
+│   │   │   └── a45d58543ee851bb5a63c843364ba529f2c382
+│   │   ├── 13
+│   │   │   ├── 220ee9fc3253d94ddb6c0f0bee9156c05beb07
+│   │   │   └── a553dfb0cf505fab895ff8e493b757153392f3
+│   │   ├── 15
+│   │   │   └── 394fea6b4c89df5be5ce631a69c11eb7e4a7cf
+│   │   ├── 1b
+│   │   │   └── e03a8f41c1461c9cc332e5038a36488971a0a6
+│   │   ├── 1e
+│   │   │   └── b07062e3c392bab5a4672545b2b9399f2c7f55
+│   │   ├── 1f
+│   │   │   ├── 03afeece5ac28064fa3c73a29215037465f789
+│   │   │   └── 04757efb123a18003222537c2552ce3689142f
+│   │   ├── 29
+│   │   │   └── f4a8e5a53c36c46a55e27a86960f35c779ffa4
+│   │   ├── 2a
+│   │   │   └── 26bf702ae962eaffa31055c7d5b688fc2f7198
+│   │   ├── 2b
+│   │   │   └── 0bb3ce0c375b373ea963d8d4f85360548421b3
+│   │   ├── 2c
+│   │   │   ├── 7c215aa52b8f97d054ffee4b0edc0e20bc2745
+│   │   │   └── db83a005d2734dea16795a79c930b63deb29e6
+│   │   ├── 2d
+│   │   │   └── e3b8d630c50a95b40b8d3860fe3d8a91f384ef
+│   │   ├── 30
+│   │   │   └── b339bb87a9f9dbc08c1f2bed3619b7f121c643
+│   │   ├── 31
+│   │   │   └── 12029927b2f7be8f8e85bf2ef4d7e9c5f640ed
+│   │   ├── 3b
+│   │   │   └── 0212cf2a77eb07d833aadb044234831f4a5ab1
+│   │   ├── 3f
+│   │   │   └── 3e3644de67995437e2bd257c7c2db812d17f15
+│   │   ├── 40
+│   │   │   └── 4b047627f51438a5e54850bfc052a36af23e6b
+│   │   ├── 46
+│   │   │   └── 97d40415f61a44a515d4806682d57aa4f4a288
+│   │   ├── 48
+│   │   │   └── bce6ba758d281ef11ba53ff3796ef9126fb4cc
+│   │   ├── 4b
+│   │   │   └── 8f6a1dbbe4b09989dd66ce7d3f705968cb1cc6
+│   │   ├── 4d
+│   │   │   └── 29575de80483b005c29bfcac5061cd2f45313e
+│   │   ├── 4f
+│   │   │   └── cbfa0dafd383a3c114d681ddd0d6bbe13ff3c3
+│   │   ├── 51
+│   │   │   ├── aae2ad7fe2bdb2c3dac721c3622dac32834941
+│   │   │   └── c1578214e6534118210371d6f5181be19bda75
+│   │   ├── 52
+│   │   │   └── 53d3ad9e6be6690549cb255f5952337b02401d
+│   │   ├── 53
+│   │   │   └── 461b1657cffd795c25731c0959e66318515e68
+│   │   ├── 57
+│   │   │   └── 24e4c5e0ae221b866edccec78032ced2e0185c
+│   │   ├── 58
+│   │   │   └── beeaccd87e230076cab531b8f418f40b6d1aeb
+│   │   ├── 5d
+│   │   │   └── 36b0cb993ce6900266f1d056b59793888843ad
+│   │   ├── 5e
+│   │   │   └── 74f1a0515b81d3fd8d17e18e66124a9bd0c7f7
+│   │   ├── 61
+│   │   │   └── 05b234c1b080d67febbc5be7970cba2a877ad5
+│   │   ├── 69
+│   │   │   ├── 1a48a42ea85f7f2cc02b054f14cb14607d6485
+│   │   │   ├── 4e6416875de08b2572af4f7b628fbad18cbe65
+│   │   │   └── bffc50605a826408dd351f0cece642fa9cd835
+│   │   ├── 6d
+│   │   │   └── 357db042580ae5cb32a76b6632c75455d0749e
+│   │   ├── 6f
+│   │   │   └── 92918e34bef726eeab9baa8f099362135c190f
+│   │   ├── 71
+│   │   │   └── 85c59cc1143ea9faf5eca27cf76a99356af8fe
+│   │   ├── 73
+│   │   │   └── 682dee00a471438bdd5629cf6bace98c9fc691
+│   │   ├── 74
+│   │   │   ├── 3751295b58b5951c5840554ad883d815578b10
+│   │   │   ├── b5e053450a48a6bdb4d71aad648e7af821975c
+│   │   │   └── d7622ccad562282d38e6e996e12b32e2755a43
+│   │   ├── 7b
+│   │   │   └── afacf43311536b095dc6bc04f4ce95390588c2
+│   │   ├── 7c
+│   │   │   └── 7e14231d4b4c40a8e17d240088b88e64c4e097
+│   │   ├── 7f
+│   │   │   └── f27f7c321a0200152e1d3d115fcf8da43b7d7f
+│   │   ├── 88
+│   │   │   ├── 71d236ae26e9349d32e2c06781de0de46652e4
+│   │   │   └── c0a2193a83cc639e31c794b1da268ed0d994f1
+│   │   ├── 8b
+│   │   │   └── ffbf25ffa0d1d8c7e6aee78e3ea34c71517941
+│   │   ├── 8d
+│   │   │   └── 7e4d9b122d6eb3cf29632a5882179617b3491b
+│   │   ├── 8e
+│   │   │   └── 29b36dea7f04ae8729d8b33ecc05c3c9b0fe46
+│   │   ├── 8f
+│   │   │   ├── 2609b7b3e0e3897ab3bcaad13caf6876e48699
+│   │   │   └── 94ff470dd96c290f82bb60d82951f09c4ecfe9
+│   │   ├── 91
+│   │   │   ├── 0552c3d220226fd25eb3657579c461f6885181
+│   │   │   └── 1675118e1ec0ccbac89b5034ad8376edd581fa
+│   │   ├── 93
+│   │   │   └── 80d38a54714bd4838921b42a8973fe690ce4c2
+│   │   ├── 95
+│   │   │   └── 81bd716f06300e05eff2c5a8738d8b0ed72cf9
+│   │   ├── 98
+│   │   │   ├── 44f6da911080cb87407666fda5681a19551d74
+│   │   │   └── dc3b5311be6203d7cd09df68e5a6d43239c6a3
+│   │   ├── 99
+│   │   │   └── 07838efe62da702631f2476890140aa065a9a2
+│   │   ├── 9c
+│   │   │   └── f09678d5c6fd38c65a2251c7e41a46f2ae11b0
+│   │   ├── 9d
+│   │   │   └── fc1c058cebbef8b891c5062be6f31033d7d186
+│   │   ├── a1
+│   │   │   └── 1777cc471a4344702741ab1c8a588998b1311a
+│   │   ├── a2
+│   │   │   └── f8a944b7839874203e1e81642408134c2ad6ce
+│   │   ├── a3
+│   │   │   └── 7b646c5a99c1d693ff24db6442a052a6593ed0
+│   │   ├── a4
+│   │   │   └── e47a6545bc15971f8f63fba70e4013df88a664
+│   │   ├── a8
+│   │   │   └── 39ba6a55abe870526039d214adf4e767bb6479
+│   │   ├── aa
+│   │   │   └── 069f27cbd9d53394428171c3989fd03db73c76
+│   │   ├── b1
+│   │   │   └── 3fb9bec473c9467186de6477445e212d6a9d58
+│   │   ├── b2
+│   │   │   └── a5ccb89cf05798d56292c93d40d499cc864c36
+│   │   ├── b9
+│   │   │   └── 373b07317470267254b64cba561f92b076f538
+│   │   ├── bb
+│   │   │   └── c0d131ee56cf287a483b74b7f0273c2d0d6989
+│   │   ├── bd
+│   │   │   └── 4cd95d6abf226fd0ebc420c6309185ada88861
+│   │   ├── c3
+│   │   │   └── f397facb5ae281df02564cd9e26d4a5fc4c9ac
+│   │   ├── c5
+│   │   │   └── e1eb4f849d453f7c46e0dfa4d324e1cbd932ed
+│   │   ├── ca
+│   │   │   └── 67b0386031633c45484467348a9c06e4a4bbd0
+│   │   ├── cb
+│   │   │   └── a3c4e2f7772f82c5eddbcdcec4dd1251efa3b3
+│   │   ├── cc
+│   │   │   ├── 32fa166dc93c94417a641b20ae3616223b610a
+│   │   │   └── eed2044d554d10312072c42335fa7c17d5617b
+│   │   ├── d2
+│   │   │   └── 8023abb0fe554b1e615b9294f6624ff19f47ad
+│   │   ├── d3
+│   │   │   └── d3af6f47d659452b3117e711809ef91e56e749
+│   │   ├── d4
+│   │   │   └── 46cc9d5de1a08ec3b1b3b5f3db508636216234
+│   │   ├── d5
+│   │   │   └── 63c0fb10ba0e42724b21286eb546ee4e5734fc
+│   │   ├── d6
+│   │   │   └── eff76e309955f7e514c04b6d0f7f4d8bbab626
+│   │   ├── d9
+│   │   │   └── 287c256bda2a7030a9a072c99ae40fd923fd20
+│   │   ├── da
+│   │   │   ├── 15650459db1aee24ce4d114eb4d48b28f62110
+│   │   │   └── e571382ba7bcc4601c74e98061924f0b651b1f
+│   │   ├── dd
+│   │   │   └── 7a96cee6383e4efefa3d08c3ddd81873f93441
+│   │   ├── de
+│   │   │   └── 24020dbb33569c7f69f59e69b67772faf7b592
+│   │   ├── e7
+│   │   │   └── 48bc8d56e0884506d3b33d4b9d4b2307cbf29c
+│   │   ├── e8
+│   │   │   ├── 1a4f93726cd54f6c80499503029b08f488ead7
+│   │   │   └── 2e6eade443fad23728c6334594d9b17cdbbc00
+│   │   ├── e9
+│   │   │   ├── ca6537d77f6be6928d2503e192c3f7a1b70adc
+│   │   │   └── e57dc4d41b9b46e05112e9f45b7ea6ac0ba15e
+│   │   ├── ec
+│   │   │   └── 2585e8c0bb8188184ed1e0703c4c8f2a8419b0
+│   │   ├── ee
+│   │   │   ├── 8cd7479f1afcb683f6a5e201181b84da2f6008
+│   │   │   └── a7c0a9aeeaa27f02bdd8b669acbd17cc468e01
+│   │   ├── ef
+│   │   │   └── 251c27890e91c91a1e87c1fc07536e2d11d9e5
+│   │   ├── f0
+│   │   │   ├── 3f00f6d23b481d985dd2440f0c06d8c91f9292
+│   │   │   └── ab2528d3306ac0ea847f5ae30efa61ca9d7ae5
+│   │   ├── f3
+│   │   │   └── a0a0a178ad4970c2a5a7e71292ce9f465a3d53
+│   │   ├── f5
+│   │   │   └── cfe5e019d1b2c8509a52f8ba5285a67f418626
+│   │   ├── f6
+│   │   │   └── 98b1199a479653322d14e8d0a784b56653e514
+│   │   ├── f9
+│   │   │   └── 5a349b6ebef87e4864f4e47194ea2992f0df46
+│   │   ├── fc
+│   │   │   └── 44b0a3796c0e0a64c3d858ca038bd4570465d9
+│   │   ├── fe
+│   │   │   ├── 071f6cb7b69b7ad759c21c4ae6e0e96287ea1f
+│   │   │   └── b954a85a7372a6cff0abcbd7973457b441a273
+│   │   ├── info
+│   │   └── pack
+│   └── refs
+│       ├── heads
+│       │   └── main
+│       ├── remotes
+│       │   └── origin
+│       │       └── main
+│       └── tags
+├── .gitignore
+├── .vscode
+│   └── settings.json
+├── apps
+│   ├── desktop
+│   │   ├── .DS_Store
+│   │   ├── apps
+│   │   │   └── desktop
+│   │   │       └── project_assets
+│   │   │           └── cutouts
+│   │   ├── package-lock.json
+│   │   ├── package.json
+│   │   ├── project_tree.txt
+│   │   ├── scripts
+│   │   │   └── collectCutouts.js
+│   │   ├── src
+│   │   │   ├── main
+│   │   │   │   ├── applyImageTreatment.js
+│   │   │   │   ├── cutoutClient.js
+│   │   │   │   ├── devTestCutout.js
+│   │   │   │   ├── imagePipeline.js
+│   │   │   │   ├── main.js
+│   │   │   │   ├── preload.js
+│   │   │   │   └── preload.ts
+│   │   │   └── renderer
+│   │   │       ├── App.tsx
+│   │   │       ├── index.html
+│   │   │       └── main.tsx
+│   │   ├── test
+│   │   │   ├── .DS_Store
+│   │   │   ├── cutout_1766295070485.png
+│   │   │   ├── cutout_1766369956906.png
+│   │   │   ├── cutout_result.png
+│   │   │   └── input.jpg
+│   │   ├── tsconfig.json
+│   │   └── vite.config.ts
+│   └── shared
+│       └── flyer
+│           ├── image
+│           │   ├── applyCardTreatment.js
+│           │   ├── computeMetadata.js
+│           │   ├── removeBackground.js
+│           │   └── trimAndPad.js
+│           ├── layout
+│           │   ├── placeItems.js
+│           │   └── sizeFromImage.js
+│           └── models
+│               └── FlyerItem.js
+├── firebase webapp
+│   ├── .DS_Store
+│   ├── .zshrc
+│   ├── package-lock.json
+│   ├── package.json
+│   └── ultimate-flyer-maker
+│       ├── .DS_Store
+│       ├── .gitignore
+│       ├── ingestion-java
+│       │   ├── .env
+│       │   ├── pom.xml
+│       │   ├── single
+│       │   │   ├── taosu copy.jpg
+│       │   │   └── taosu.jpg
+│       │   ├── src
+│       │   │   └── main
+│       │   │       └── java
+│       │   │           └── com
+│       │   │               └── unitedflyer
+│       │   │                   ├── ClearOldPHash.java
+│       │   │                   ├── ImageHash.java
+│       │   │                   └── ProductBulkAnalyzer.java
+│       │   └── target
+│       │       ├── classes
+│       │       │   └── com
+│       │       │       └── unitedflyer
+│       │       │           ├── ClearOldPHash.class
+│       │       │           ├── ImageHash.class
+│       │       │           └── ProductBulkAnalyzer.class
+│       │       ├── generated-sources
+│       │       │   └── annotations
+│       │       ├── maven-archiver
+│       │       │   └── pom.properties
+│       │       ├── maven-status
+│       │       │   └── maven-compiler-plugin
+│       │       │       └── compile
+│       │       │           └── default-compile
+│       │       │               ├── createdFiles.lst
+│       │       │               └── inputFiles.lst
+│       │       └── product-ingestion-1.0-SNAPSHOT.jar
+│       ├── package-lock.json
+│       ├── package.json
+│       ├── public
+│       │   ├── favicon.ico
+│       │   ├── index.html
+│       │   ├── logo192.png
+│       │   ├── logo512.png
+│       │   ├── manifest.json
+│       │   ├── models
+│       │   │   └── u2netp
+│       │   │       ├── config.json
+│       │   │       ├── model.onnx
+│       │   │       └── preprocessor_config.json
+│       │   └── robots.txt
+│       ├── README.md
+│       ├── server
+│       │   ├── .env
+│       │   ├── config
+│       │   │   ├── firebase.js
+│       │   │   ├── googleAuth.js
+│       │   │   ├── loadEnv.js
+│       │   │   ├── openaiConfig.js
+│       │   │   └── vectorConfig.js
+│       │   ├── controllers
+│       │   │   └── searchByImageController.js
+│       │   ├── createBranch.js
+│       │   ├── credentials
+│       │   │   └── service-key.json
+│       │   ├── credentials.json
+│       │   ├── flyer-automation
+│       │   │   ├── assets
+│       │   │   │   └── templates
+│       │   │   │       └── flyerTemplate_v1.json
+│       │   │   ├── image
+│       │   │   │   ├── applyCardTreatment.js
+│       │   │   │   ├── computeMetadata.js
+│       │   │   │   ├── removeBackground.js
+│       │   │   │   └── trimAndPad.js
+│       │   │   ├── layout
+│       │   │   │   ├── placeItems.js
+│       │   │   │   └── sizeFromImage.js
+│       │   │   ├── models
+│       │   │   │   └── FlyerItem.js
+│       │   │   ├── parseFlyerTextDeepSeek.js
+│       │   │   ├── testCardImage.js
+│       │   │   ├── testPlacement.js
+│       │   │   ├── testSizing.js
+│       │   │   └── textFlyerText.js
+│       │   ├── index_metadata.json
+│       │   ├── package-lock.json
+│       │   ├── package.json
+│       │   ├── parseTitleDeepSeek.js
+│       │   ├── routes
+│       │   │   ├── checkDuplicateImageRoute.js
+│       │   │   ├── identifyProductRoute.js
+│       │   │   ├── productRoutes.js
+│       │   │   ├── searchByImageRoute.js
+│       │   │   └── searchByPhotoRoute.js
+│       │   ├── scripts
+│       │   │   ├── addProductFromImage.js
+│       │   │   ├── listCollections.js
+│       │   │   ├── printProject.js
+│       │   │   ├── repairPublicUrls.js
+│       │   │   ├── searchByImage.js
+│       │   │   ├── taosu.jpg
+│       │   │   ├── testDedup.js
+│       │   │   ├── testEnv.js
+│       │   │   └── validateProducts.js
+│       │   ├── server
+│       │   ├── server.js
+│       │   ├── services
+│       │   │   ├── braveSearchService.js
+│       │   │   ├── imageAnalysisService.js
+│       │   │   ├── imageEmbeddingService.js
+│       │   │   ├── ocrService.js
+│       │   │   ├── phash.js
+│       │   │   ├── productRepo.js
+│       │   │   ├── productSearchService.js
+│       │   │   ├── productService.js
+│       │   │   ├── queryEmbeddingService.js
+│       │   │   ├── searchService.js
+│       │   │   └── visionService.js
+│       │   ├── test-db.js
+│       │   ├── test.jpg
+│       │   └── utils
+│       │       └── vectorUtils.js
+│       └── src
+│           ├── App.css
+│           ├── App.js
+│           ├── App.test.js
+│           ├── browser-ml
+│           │   └── cutoutService.js
+│           ├── components
+│           │   └── ImageSearch.jsx
+│           ├── firebase.js
+│           ├── flyer
+│           │   └── applyImageTreatment.js
+│           ├── index.css
+│           ├── index.js
+│           ├── logo.svg
+│           ├── reportWebVitals.js
+│           └── setupTests.js
+├── package-lock.json
+├── package.json
+├── parseTitle-deepseek.js
+├── project_tree.txt
+└── services
+    └── cutout
+        └── src
+            └── cutout_service
+                ├── __init__.py
+                └── server.py
+
+173 directories, 277 files

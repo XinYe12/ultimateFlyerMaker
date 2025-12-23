@@ -1,14 +1,29 @@
+# Node / Electron
 node_modules/
-firebase webapp/node_modules/
-firebase webapp/ultimate-flyer-maker/.git/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Environment & secrets
+.env
+*.env
+credentials.json
+service-key.json
+
+# OS / Editor
 .DS_Store
 .vscode/
-**/*.env
-**/service-key.json
-firebase webapp/ultimate-flyer-maker/server/credentials/
-**/*.env
-**/service-key.json
-firebase webapp/ultimate-flyer-maker/server/credentials/
-**/*.env
-**/credentials.json
-**/service-key.json
+
+# Firebase legacy junk
+firebase webapp/**/node_modules/
+firebase webapp/**/.git/
+firebase webapp/**/credentials/
+
+# Build / cache
+dist/
+build/

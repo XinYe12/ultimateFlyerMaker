@@ -1,0 +1,31 @@
+{
+  "name": "ultimate-flyer-desktop",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/main/main.js",
+  "private": true,
+  "scripts": {
+  "dev:renderer": "vite",
+  "dev:electron": "NODE_ENV=development electron .",
+  "dev": "concurrently \"npm run dev:renderer\" \"npm run dev:electron\"",
+  "build:renderer": "vite build",
+  "build": "npm run build:renderer"
+  },
+  "dependencies": {
+    "electron": "^30.0.0",
+    "node-fetch": "^3.3.2",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.2",
+    "concurrently": "^9.2.1",
+    "electron-builder": "^24.13.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.10"
+  }
+}
