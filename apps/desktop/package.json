@@ -5,15 +5,18 @@
   "main": "src/main/main.js",
   "private": true,
   "scripts": {
-  "dev:renderer": "vite",
-  "dev:electron": "NODE_ENV=development electron .",
-  "dev": "concurrently \"npm run dev:renderer\" \"npm run dev:electron\"",
-  "build:renderer": "vite build",
-  "build": "npm run build:renderer"
+    "dev:renderer": "vite",
+    "dev:electron": "NODE_ENV=development electron .",
+    "dev": "export PYTHONPATH=services && export NODE_OPTIONS=--dns-result-order=ipv4first && concurrently \"npm run dev:renderer\" \"npm run dev:electron\"",
+    "build:renderer": "vite build",
+    "build": "npm run build:renderer"
   },
   "dependencies": {
+    "dotenv": "^17.2.3",
     "electron": "^30.0.0",
+    "firebase-admin": "^13.6.0",
     "node-fetch": "^3.3.2",
+    "openai": "^6.15.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"
   },

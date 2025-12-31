@@ -1,78 +1,109 @@
+// src/renderer/App.tsx
+
 import { useState } from "react";
+import ImageDropArea from "./components/ImageDropArea";
+import IngestResultView from "./IngestResultView";
+import { IngestItem } from "./types";
 
-type ElectronFile = File & {
-  path: string;
-};
+type ElectronFile = File & { path: string };
 
-type Result = {
-  input: string;
-  output: string;
-  seconds: string;
-};
+declare global {
+  interface Window {
+    ufm?: {
+      ingestPhoto: (path: string) => Promise<any>;
+    };
+  }
+}
+
+type IngestState =
+  | { status: "idle" }
+  | { status: "running" }
+  | { status: "error"; error: string }
+  | { status: "done"; result: any };
 
 export default function App() {
-  const [logs, setLogs] = useState<Result[]>([]);
-  const [total, setTotal] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [state, setState] = useState<IngestState>({ status: "idle" });
 
-  const onDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop = async (files: ElectronFile[]) => {
+    if (state.status === "running") return;
 
-    e.preventDefault();
-    console.log("DROP EVENT FIRED");
-    if (busy) return;
+    if (!window.ufm?.ingestPhoto) {
+      setState({
+        status: "error",
+        error: "window.ufm.ingestPhoto is NOT available"
+      });
+      return;
+    }
 
-    const files = Array.from(e.dataTransfer.files) as ElectronFile[];
-    const paths = files
-      .map(f => f.path)
-      .filter(p => /\.(jpg|jpeg|png)$/i.test(p));
+    const file = files.find(f => /\.(jpg|jpeg|png)$/i.test(f.path));
+    if (!file) {
+      setState({
+        status: "error",
+        error: "No valid image file dropped"
+      });
+      return;
+    }
 
-    if (paths.length === 0) return;
+    setState({ status: "running" });
 
-    setBusy(true);
-    setLogs([]);
-    setTotal(null);
-    console.log("SENDING PATHS:", paths);
-
-    const res = await (window as any).cutoutAPI.batchCutout(paths);
-
-    setLogs(res.results);
-    setTotal(res.totalSeconds);
-    setBusy(false);
+    try {
+      const result = await window.ufm.ingestPhoto(file.path);
+      setState({ status: "done", result });
+    } catch (err: any) {
+      setState({
+        status: "error",
+        error: err?.message ?? String(err)
+      });
+    }
   };
+
+  const doneItem: IngestItem | null =
+    state.status === "done"
+      ? {
+          id: "single",
+          path: "",
+          status: "done",
+          result: state.result
+        }
+      : null;
 
   return (
     <div
-      onDragOver={e => e.preventDefault()}
-      onDrop={onDrop}
-      style={{ height: "100vh", padding: 40, background: "#f5f5f5" }}
+      style={{
+        height: "100vh",
+        padding: 32,
+        boxSizing: "border-box",
+        background: "#f5f5f5",
+        fontFamily: "system-ui",
+        overflow: "auto"
+      }}
     >
-      <h1>Batch Image CUTOUT</h1>
+      <h1>Ultimate Flyer Maker — Ingestion</h1>
 
-      <div
-        style={{
-          border: "3px dashed #999",
-          padding: 40,
-          marginTop: 20,
-          background: "#fff",
-          opacity: busy ? 0.5 : 1
-        }}
-      >
-        {busy ? "Processing…" : "Drag & drop images here"}
-      </div>
+      {/* 1️⃣ Drop area */}
+      <ImageDropArea
+        busy={state.status === "running"}
+        onDrop={handleDrop}
+      />
 
-      {logs.length > 0 && (
-        <>
-          <h3 style={{ marginTop: 30 }}>Results</h3>
-          <ul>
-            {logs.map((l, i) => (
-              <li key={i}>
-                {l.input.split("/").pop()} → {l.seconds}s
-              </li>
-            ))}
-          </ul>
-          <strong>Total time: {total}s</strong>
-        </>
+      {/* 2️⃣ Error */}
+      {state.status === "error" && (
+        <pre
+          style={{
+            marginTop: 20,
+            padding: 12,
+            background: "#fff0f0",
+            border: "1px solid #f3b0b0",
+            whiteSpace: "pre-wrap"
+          }}
+        >
+          {state.error}
+        </pre>
       )}
+
+      {/* 3️⃣ + 4️⃣ Results (Cutout / OCR / DB / Web) */}
+      {doneItem && <IngestResultView item={doneItem} />}
     </div>
   );
 }
+

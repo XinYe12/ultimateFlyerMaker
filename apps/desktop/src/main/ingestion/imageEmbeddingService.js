@@ -1,71 +1,86 @@
 import OpenAI from "openai";
 import fs from "fs";
 
-export async function getImageEmbedding(imagePath) {
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const MAX_RETRIES = 3;
 
-  // 1️⃣ Read image into base64
+export async function getImageEmbedding(imagePath) {
+  const client = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+    timeout: 30_000
+  });
+
   const base64 = fs.readFileSync(imagePath, { encoding: "base64" });
 
-  // 2️⃣ Full structured extraction (MATCHES INGESTION PIPELINE)
-  const visionResponse = await client.responses.create({
-    model: "gpt-4o-mini",
-    response_format: { type: "json_object" },
-    input: [
-      {
-        role: "user",
-        content: [
+  let parsed = {
+    englishTitle: "",
+    chineseTitle: "",
+    brand: "",
+    size: "",
+    category: "",
+    ocrText: "",
+    cleanTitle: ""
+  };
+
+  // ---------- VISION (BEST EFFORT) ----------
+  for (let i = 0; i < MAX_RETRIES; i++) {
+    try {
+      const vision = await client.responses.create({
+        model: "gpt-4o-mini",
+        input: [
           {
-            type: "input_image",
-            image_url: `data:image/jpeg;base64,${base64}`
-          },
-          {
-            type: "input_text",
-            text: `
-Extract product metadata. Output JSON with EXACT keys:
-{
-  "englishTitle": "",
-  "chineseTitle": "",
-  "brand": "",
-  "size": "",
-  "category": "",
-  "ocrText": "",
-  "cleanTitle": ""
-}
-If unsure, return empty strings.`
+            role: "user",
+            content: [
+              {
+                type: "input_image",
+                image_url: `data:image/jpeg;base64,${base64}`
+              },
+              {
+                type: "input_text",
+                text: `
+Return ONLY valid JSON with keys:
+englishTitle, chineseTitle, brand, size, category, ocrText, cleanTitle
+Empty strings allowed.`
+              }
+            ]
           }
         ]
+      });
+
+      parsed = JSON.parse(vision.output_text);
+      break;
+    } catch (err) {
+      if (i === MAX_RETRIES - 1) {
+        console.warn("VISION FAILED — CONTINUING WITHOUT IT");
       }
-    ]
-  });
+    }
+  }
 
-  const parsed = JSON.parse(visionResponse.output_text);
+  const embeddingText = [
+    parsed.englishTitle,
+    parsed.chineseTitle,
+    parsed.brand,
+    parsed.size,
+    parsed.category,
+    parsed.cleanTitle,
+    parsed.ocrText
+  ].filter(Boolean).join(" | ");
 
-  // 3️⃣ Build embedding text exactly like ingestion Java pipeline
- const embeddingText = [
-  parsed.englishTitle,
-  parsed.chineseTitle,
-  parsed.brand,
-  parsed.size,
-  parsed.category,
-  parsed.cleanTitle,
-  parsed.ocrText
-].filter(Boolean).join(" | ");
+  // ---------- EMBEDDING (BEST EFFORT) ----------
+  try {
+    const emb = await client.embeddings.create({
+      model: "text-embedding-3-large",
+      input: embeddingText || "generic product"
+    });
 
-
-  //console.log("🧠 Embedding text:", embeddingText);
-
-  // 4️⃣ Generate embedding using SAME MODEL as Java ingestion
-  const emb = await client.embeddings.create({
-    model: "text-embedding-3-large",
-    input: embeddingText || "generic product"
-  });
-  console.log("🔍 EMBEDDING TEXT (SEARCH):", embeddingText);
-  console.log("🔢 Length:", embeddingText.length);
-
-
-  return {
-    embedding: emb.data[0].embedding,
-    parsed
-  };
+    return {
+      embedding: emb.data[0].embedding,
+      parsed
+    };
+  } catch (err) {
+    console.warn("EMBEDDING FAILED — RETURNING EMPTY VECTOR");
+    return {
+      embedding: [],
+      parsed
+    };
+  }
 }

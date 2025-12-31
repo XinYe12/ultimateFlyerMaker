@@ -8,21 +8,24 @@ import { fileURLToPath } from "url";
 import { dialog, Menu, shell } from "electron";
 import { processFlyerImage } from "./imagePipeline.js";
 import { ingestPhoto } from "./ingestion/ingestPhoto.js";
-
-
-
-/* ---------- __dirname fix (ESM) ---------- */
+import "dotenv/config";
+console.log("🔥 MAIN sees DEEPSEEK_API_KEY =", process.env.DEEPSEEK_API_KEY);
+/* ---------- ESM __dirname fix (MUST BE FIRST) ---------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/* ---------- Project paths ---------- */
+const PROJECT_ROOT = path.resolve(__dirname, "../../../../");
+const SERVICES_PATH = path.join(PROJECT_ROOT, "services");
+
+/* ---------- Python environment (authoritative) ---------- */
+process.env.PYTHONPATH = SERVICES_PATH;
 
 /* ---------- Electron window ---------- */
 let mainWindow = null;
 
 function createWindow() {
-  const preloadPath = path.resolve(
-    __dirname,
-    "preload.js"
-  );
+  const preloadPath = path.join(__dirname, "preload.cjs");
 
   console.log("USING PRELOAD:", preloadPath);
 
@@ -32,19 +35,18 @@ function createWindow() {
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      webSecurity: false
     }
   });
 
   mainWindow.loadURL("http://localhost:5173");
-
   mainWindow.webContents.openDevTools();
 
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
 }
-
 
 /* ---------- CUTOUT service launcher (DEV / macOS) ---------- */
 function startCutoutService() {
@@ -67,10 +69,10 @@ function startCutoutService() {
       "info"
     ],
     {
-      cwd: path.join(process.cwd(), "../../services/cutout/src"),
+      cwd: path.join(SERVICES_PATH, "cutout", "src"),
       env: {
         ...process.env,
-        PYTHONPATH: path.join(process.cwd(), "../../services/cutout/src")
+        PYTHONPATH: SERVICES_PATH
       },
       stdio: "inherit"
     }
@@ -82,25 +84,17 @@ async function ensureCutoutAlive() {
   if (!res.ok) throw new Error("CUTOUT not healthy");
 }
 
-
-/* ---------- IPC: batch cutout (SINGLE SOURCE OF TRUTH) ---------- */
+/* ---------- IPC: batch cutout ---------- */
 ipcMain.handle("batch-cutout", async (_, filePaths) => {
-  console.log("IPC batch-cutout CALLED");
-  console.log("FILES:", filePaths);
-
   const results = [];
   const totalStart = Date.now();
 
   for (const filePath of filePaths) {
-    console.log("CUTOUT START:", filePath);
-
     const flyerItem = { image: { src: filePath } };
 
     const start = Date.now();
     await processFlyerImage(flyerItem);
     const end = Date.now();
-
-    console.log("CUTOUT DONE:", filePath);
 
     results.push({
       input: filePath,
@@ -109,19 +103,17 @@ ipcMain.handle("batch-cutout", async (_, filePaths) => {
     });
   }
 
-  const totalEnd = Date.now();
-  console.log("BATCH DONE");
-
   return {
     results,
-    totalSeconds: ((totalEnd - totalStart) / 1000).toFixed(2)
+    totalSeconds: ((Date.now() - totalStart) / 1000).toFixed(2)
   };
 });
 
-
+/* ---------- IPC: ingestion ---------- */
 ipcMain.handle("ufm:ingestPhoto", async (_, inputPath) => {
   return ingestPhoto(inputPath);
 });
+
 /* ---------- App lifecycle ---------- */
 app.whenReady().then(() => {
   startCutoutService();
