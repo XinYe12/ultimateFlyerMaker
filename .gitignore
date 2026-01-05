@@ -27,3 +27,7 @@ firebase webapp/**/credentials/
 # Build / cache
 dist/
 build/
+
+# Electron build output
+apps/desktop/dist-win/
+apps/desktop/dist/
