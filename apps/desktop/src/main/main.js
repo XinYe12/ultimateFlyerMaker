@@ -9,6 +9,12 @@ import { dialog, Menu, shell } from "electron";
 import { processFlyerImage } from "./imagePipeline.js";
 import { ingestPhoto } from "./ingestion/ingestPhoto.js";
 import "dotenv/config";
+import { parseDiscountText } from "./ipc/parseDiscountText.js";
+import { exportDiscountImages } from "./ipc/exportDiscountImages.js";
+import { parseDiscountXlsx } from "./ipc/parseDiscountXlsx.js";
+import { ingestImages } from "./ipc/ingestImages.js";
+
+
 console.log("🔥 MAIN sees DEEPSEEK_API_KEY =", process.env.DEEPSEEK_API_KEY);
 /* ---------- ESM __dirname fix (MUST BE FIRST) ---------- */
 const __filename = fileURLToPath(import.meta.url);
@@ -25,7 +31,10 @@ process.env.PYTHONPATH = SERVICES_PATH;
 let mainWindow = null;
 
 function createWindow() {
-  const preloadPath = path.join(__dirname, "preload.cjs");
+  console.log("PRELOAD PATH =", path.join(__dirname, "preload.cjs"));
+
+  const preloadPath = path.resolve(__dirname, "preload.cjs");
+  console.log("✅ PRELOAD PATH =", preloadPath);
 
   console.log("USING PRELOAD:", preloadPath);
 
@@ -113,6 +122,28 @@ ipcMain.handle("batch-cutout", async (_, filePaths) => {
 ipcMain.handle("ufm:ingestPhoto", async (_, inputPath) => {
   return ingestPhoto(inputPath);
 });
+
+/* ---------- IPC: parsing ---------- */
+ipcMain.handle(
+  "ufm:parseDiscountXlsx",
+  parseDiscountXlsx
+);
+
+ipcMain.handle(
+  "ufm:parseDiscountText",
+  parseDiscountText
+);
+
+
+/* ---------- IPC: export discount labels ---------- */
+ipcMain.handle("ufm:exportDiscountImages", (_event, items) => {
+  return exportDiscountImages(items);
+});
+
+ipcMain.handle("ingestImages", ingestImages);
+
+
+
 
 /* ---------- App lifecycle ---------- */
 app.whenReady().then(() => {

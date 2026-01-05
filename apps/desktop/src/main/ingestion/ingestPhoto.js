@@ -17,9 +17,9 @@ export async function ingestPhoto(inputPath) {
   return {
     inputPath,
     cutoutPath,
-    ocr,
     title,
     dbMatches,
     webMatches,
+    ocr,
   };
 }

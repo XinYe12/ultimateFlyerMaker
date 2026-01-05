@@ -1,35 +1,60 @@
-import React from "react";
-
-type ElectronFile = File & { path: string };
+import "../styles/newspaper.css";
 
 type Props = {
   busy?: boolean;
-  onDrop: (files: ElectronFile[]) => void;
+  onDrop: (files: any[]) => void;
 };
 
-export default function ImageDropArea({ busy = false, onDrop }: Props) {
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    if (busy) return;
-
-    const files = Array.from(e.dataTransfer.files) as ElectronFile[];
-    onDrop(files);
-  };
-
+export default function ImageDropArea({ busy, onDrop }: Props) {
   return (
     <div
+      className="card"
+      style={{ marginTop: 32 }}
       onDragOver={e => e.preventDefault()}
-      onDrop={handleDrop}
-      style={{
-        border: "3px dashed #999",
-        padding: 40,
-        marginTop: 20,
-        background: "#fff",
-        opacity: busy ? 0.5 : 1,
-        userSelect: "none"
+      onDrop={e => {
+        e.preventDefault();
+        if (busy) return;
+        onDrop(Array.from(e.dataTransfer.files));
       }}
     >
-      {busy ? "Ingesting…" : "Drag & drop images here"}
+      <div className="section">
+        <label
+          style={{
+            border: "3px solid #000",
+            padding: 24,
+            textAlign: "center",
+            fontWeight: 900,
+            textTransform: "uppercase",
+            cursor: busy ? "not-allowed" : "pointer",
+            background: busy ? "#eee" : "#fff",
+            display: "block"
+          }}
+        >
+          {busy ? "Processing Image…" : "Drop Product Images Here"}
+
+          <div
+            style={{
+              fontSize: 12,
+              fontWeight: 400,
+              marginTop: 8
+            }}
+          >
+            JPG · PNG · JPEG (multiple allowed)
+          </div>
+
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            disabled={busy}
+            onChange={e => {
+              if (!e.target.files || busy) return;
+              onDrop(Array.from(e.target.files));
+            }}
+          />
+        </label>
+      </div>
     </div>
   );
 }
