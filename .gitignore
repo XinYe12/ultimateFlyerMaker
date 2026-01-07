@@ -31,3 +31,75 @@ build/
 # Electron build output
 apps/desktop/dist-win/
 apps/desktop/dist/
+
+apps/desktop/backend/config/firebase-service-account.json
+
+# =====================
+# Electron / Node
+# =====================
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =====================
+# Python / ML
+# =====================
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Embedded Python runtime (DO NOT COMMIT)
+apps/desktop/backend/python/
+apps/desktop/backend/Lib/
+
+# ML models / OCR
+services/**/models/
+services/**/model/
+services/**/model.onnx
+services/**/u2net*
+services/**/paddle*
+services/**/ppocr*
+services/**/inference*
+services/**/weights*
+
+# =====================
+# Firebase / Secrets
+# =====================
+.env
+*.env
+credentials.json
+service-key.json
+firebase-service-account.json
+apps/desktop/backend/config/firebase-service-account.json
+
+# =====================
+# Build / Output
+# =====================
+dist/
+build/
+apps/desktop/dist/
+apps/desktop/dist-win/
+apps/**/dist/
+apps/**/build/
+
+# =====================
+# OS / Editor
+# =====================
+.DS_Store
+.vscode/
+.idea/
+
+# =====================
+# Legacy firebase webapp junk
+# =====================
+firebase webapp/**/node_modules/
+firebase webapp/**/.git/
+firebase webapp/**/credentials/
+# Embedded backend runtime (generated)
+apps/desktop/backend/
+get-pip.py
+ufm-backend.spec

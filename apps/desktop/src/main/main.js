@@ -13,6 +13,13 @@ import { parseDiscountText } from "./ipc/parseDiscountText.js";
 import { exportDiscountImages } from "./ipc/exportDiscountImages.js";
 import { parseDiscountXlsx } from "./ipc/parseDiscountXlsx.js";
 import { ingestImages } from "./ipc/ingestImages.js";
+import { startBackend, stopBackend } from "./startBackend.js";
+import { waitForBackend } from "./waitForBackend.js";
+import { initFirebase } from "./firebase.js";
+
+app.on("before-quit", () => {
+  stopBackend();
+});
 
 
 console.log("🔥 MAIN sees DEEPSEEK_API_KEY =", process.env.DEEPSEEK_API_KEY);
@@ -142,14 +149,18 @@ ipcMain.handle("ufm:exportDiscountImages", (_event, items) => {
 
 ipcMain.handle("ingestImages", ingestImages);
 
+app.whenReady().then(async () => {
+  // 1️⃣ Start backend (Python / FastAPI)
+  startBackend();
+  initFirebase();          // 🔥 ADD THIS
 
+  // 2️⃣ Wait until backend is healthy
+  await waitForBackend({ port: 8000 });
 
-
-/* ---------- App lifecycle ---------- */
-app.whenReady().then(() => {
-  startCutoutService();
+  // 3️⃣ Create Electron window
   createWindow();
 });
+
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {

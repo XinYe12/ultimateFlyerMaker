@@ -4,21 +4,17 @@
   "type": "module",
   "description": "Ultimate Flyer Maker desktop application",
   "author": "Xinye Xu",
-
   "main": "src/main/main.js",
   "private": true,
   "scripts": {
     "dev:renderer": "vite",
-    "dev:electron": "NODE_ENV=development electron .",
-    "dev": "export PYTHONPATH=services && export NODE_OPTIONS=--dns-result-order=ipv4first && concurrently \"npm run dev:renderer\" \"npm run dev:electron\"",
-
+    "dev:electron": "cross-env NODE_ENV=development electron .",
+    "dev": "cross-env NODE_OPTIONS=--dns-result-order=ipv4first concurrently \"npm run dev:renderer\" \"npm run dev:electron\"",
     "build:renderer": "vite build",
     "build:electron": "ts-node src/main/main.js",
     "build": "npm run build:renderer",
-
     "dist:win": "npm run build:renderer && electron-builder --win"
-  }
-  ,
+  },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.88",
     "dotenv": "^17.2.3",
@@ -28,38 +24,37 @@
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "xlsx": "^0.18.5"
-  }
-    ,
- "devDependencies": {
-  "@types/node": "^20.11.30",
-  "@types/react": "^19.2.7",
-  "@types/react-dom": "^19.2.3",
-  "@vitejs/plugin-react": "^5.1.2",
-  "concurrently": "^9.2.1",
-  "electron": "^30.0.0",
-  "electron-builder": "^24.13.3",
-  "ts-node": "^10.9.2",
-  "typescript": "^5.4.5",
-  "vite": "^5.2.10"
-},
-
-  "build": {
-  "appId": "com.united.ufm",
-  "productName": "Ultimate Flyer Maker",
-  "asar": true,
-  "directories": {
-    "output": "dist-win"
   },
-  "files": [
-    "dist/**",
-    "src/main/**",
-    "services/**",
-    "package.json"
-  ],
-  "win": {
-    "target": "nsis",
-    "icon": "assets/icon.ico"
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.2",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.10"
+  },
+  "build": {
+    "appId": "com.united.ufm",
+    "productName": "Ultimate Flyer Maker",
+    "asar": true,
+    "directories": {
+      "output": "dist-win"
+    },
+    "files": [
+      "dist/**",
+      "src/main/**",
+      "backend/**",
+      "assets/**",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    }
   }
-}
-
 }

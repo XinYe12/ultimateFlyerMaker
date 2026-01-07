@@ -45,3 +45,17 @@ async def ocr(file: UploadFile = File(...)):
     rec_texts = result["rec_texts"] if "rec_texts" in result else []
 
     return { "rec_texts": rec_texts }
+if __name__ == "__main__":
+    import uvicorn
+    import os
+
+    host = os.environ.get("UFM_HOST", "127.0.0.1")
+    port = int(os.environ.get("UFM_PORT", "8000"))
+
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level="info"
+    )
+
