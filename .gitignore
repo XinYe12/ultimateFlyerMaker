@@ -100,6 +100,20 @@ firebase webapp/**/node_modules/
 firebase webapp/**/.git/
 firebase webapp/**/credentials/
 # Embedded backend runtime (generated)
-apps/desktop/backend/
+# Backend secrets (ONLY secrets)
+apps/desktop/backend/config/firebase-service-account.json
+**/firebase-service-account.json
+**/credentials.json
+**/*service-account*.json
+
+# Embedded backend runtime (generated, DO NOT COMMIT)
+apps/desktop/backend/python/
+apps/desktop/backend/Lib/
+apps/desktop/backend/Scripts/
+apps/desktop/backend/*.exe
+apps/desktop/backend/*.dll
+apps/desktop/backend/*.pyd
+apps/desktop/backend/*.zip
+
 get-pip.py
 ufm-backend.spec
