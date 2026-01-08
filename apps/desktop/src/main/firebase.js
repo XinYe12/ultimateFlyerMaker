@@ -1,22 +1,34 @@
+// ✅ FIREBASE ADMIN — ELECTRON-SAFE SINGLETON
+
 import admin from "firebase-admin";
 import fs from "fs";
 import path from "path";
 import { app } from "electron";
 
-let initialized = false;
+function resolveServiceAccountPath() {
+  const base = app.isPackaged
+    ? process.resourcesPath
+    : app.getAppPath();
+
+  return path.join(
+    base,
+    "backend",
+    "config",
+    "firebase-service-account.json"
+  );
+}
 
 export function initFirebase() {
-  if (initialized) return;
+  // 🔒 REAL singleton guard (Firebase-native)
+  if (admin.apps.length > 0) {
+    return admin.app();
+  }
 
-  const isDev = !app.isPackaged;
-
-  const serviceAccountPath = isDev
-    ? path.join(app.getAppPath(), "backend", "config", "firebase-service-account.json")
-    : path.join(process.resourcesPath, "backend", "config", "firebase-service-account.json");
+  const serviceAccountPath = resolveServiceAccountPath();
 
   if (!fs.existsSync(serviceAccountPath)) {
     throw new Error(
-      `Firebase service account NOT FOUND at: ${serviceAccountPath}`
+      `[firebase] service account NOT FOUND: ${serviceAccountPath}`
     );
   }
 
@@ -24,11 +36,13 @@ export function initFirebase() {
     fs.readFileSync(serviceAccountPath, "utf-8")
   );
 
+  console.log("[firebase] initializing with:", serviceAccountPath);
+
   admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
+    credential: admin.credential.cert(serviceAccount),
   });
 
-  initialized = true;
+  return admin.app();
 }
 
 export { admin };

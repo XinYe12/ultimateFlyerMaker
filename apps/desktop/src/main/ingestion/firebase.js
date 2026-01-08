@@ -1,21 +1,38 @@
-// apps/desktop/apps/desktop/src/main/ingestion/firebase.js
-// ✅ ELECTRON MAIN VERSION — COPY / PASTE AS-IS
+// ✅ ELECTRON MAIN — SAFE, DEV + PROD, WINDOWS-SAFE
 
 import { readFileSync } from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import { app } from "electron";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+/**
+ * NEVER resolve credentials relative to src/main.
+ * ALWAYS resolve from app root / resources.
+ */
+function resolveFirebaseCredentialPath() {
+  // Dev mode (electron + vite)
+  if (!app.isPackaged) {
+    return path.join(
+      app.getAppPath(),
+      "backend",
+      "config",
+      "firebase-service-account.json"
+    );
+  }
 
-/*
-  credentials.json MUST live here:
-  apps/desktop/apps/desktop/src/main/credentials.json
-*/
+  // Production (future-safe)
+  return path.join(
+    process.resourcesPath,
+    "backend",
+    "config",
+    "firebase-service-account.json"
+  );
+}
 
-const CRED_PATH = path.resolve(__dirname, "../credentials.json");
+const CRED_PATH = resolveFirebaseCredentialPath();
+
+console.log("[firebase] loading credentials from:", CRED_PATH);
 
 // Load service account
 const serviceAccount = JSON.parse(readFileSync(CRED_PATH, "utf8"));
