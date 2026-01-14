@@ -1,7 +1,6 @@
-import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
-import FormData from "form-data";
+import { getBackendInfo } from "./startBackend.js";
 
 /**
  * Single source of truth for project cutout assets
@@ -16,17 +15,25 @@ function getCutoutPath(inputPath) {
   return path.join(PROJECT_CUTOUT_DIR, `${base}.cutout.png`);
 }
 
+/**
+ * Runs cutout via backend proxy (NO hardcoded host/port)
+ */
 export async function runCutout(inputPath) {
   fs.mkdirSync(PROJECT_CUTOUT_DIR, { recursive: true });
 
   const outPath = getCutoutPath(inputPath);
 
-  const form = new FormData();
-  form.append("file", fs.createReadStream(inputPath));
+  const backend = getBackendInfo();
+  if (!backend) {
+    throw new Error("Backend not started");
+  }
 
-  const res = await fetch("http://127.0.0.1:17890/cutout", {
+  const res = await fetch(`${backend.url}/cutout`, {
     method: "POST",
-    body: form
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ filePath: inputPath }),
   });
 
   if (!res.ok) {

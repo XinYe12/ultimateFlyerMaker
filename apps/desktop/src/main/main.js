@@ -1,49 +1,35 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell } from "electron";
 import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
 import fetch from "node-fetch";
 import FormData from "form-data";
 import { fileURLToPath } from "url";
-import { dialog, Menu, shell } from "electron";
+import "dotenv/config";
+
 import { processFlyerImage } from "./imagePipeline.js";
 import { ingestPhoto } from "./ingestion/ingestPhoto.js";
-import "dotenv/config";
 import { parseDiscountText } from "./ipc/parseDiscountText.js";
 import { exportDiscountImages } from "./ipc/exportDiscountImages.js";
 import { parseDiscountXlsx } from "./ipc/parseDiscountXlsx.js";
 import { ingestImages } from "./ipc/ingestImages.js";
+
 import { startBackend, stopBackend } from "./startBackend.js";
 import { waitForBackend } from "./waitForBackend.js";
 import { initFirebase } from "./firebase.js";
+import { registerBackendIpc } from "./ipc/backend.js";
+import { registerBackendProxyIpc } from "./ipc/backendProxy.js";
+import "./net/longFetch.js";
 
-app.on("before-quit", () => {
-  stopBackend();
-});
-
-
-console.log("🔥 MAIN sees DEEPSEEK_API_KEY =", process.env.DEEPSEEK_API_KEY);
-/* ---------- ESM __dirname fix (MUST BE FIRST) ---------- */
+/* ---------- ESM __dirname fix ---------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-/* ---------- Project paths ---------- */
-const PROJECT_ROOT = path.resolve(__dirname, "../../../../");
-const SERVICES_PATH = path.join(PROJECT_ROOT, "services");
-
-/* ---------- Python environment (authoritative) ---------- */
-process.env.PYTHONPATH = SERVICES_PATH;
 
 /* ---------- Electron window ---------- */
 let mainWindow = null;
 
 function createWindow() {
-  console.log("PRELOAD PATH =", path.join(__dirname, "preload.cjs"));
-
   const preloadPath = path.resolve(__dirname, "preload.cjs");
-  console.log("✅ PRELOAD PATH =", preloadPath);
-
-  console.log("USING PRELOAD:", preloadPath);
 
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -64,41 +50,10 @@ function createWindow() {
   });
 }
 
-/* ---------- CUTOUT service launcher (DEV / macOS) ---------- */
-function startCutoutService() {
-  if (process.platform !== "darwin") return;
-
-  const pythonPath =
-    "/Users/xuxinye/Documents/projects/ultimate flyer make/services/cutout/.venv/bin/python";
-
-  spawn(
-    pythonPath,
-    [
-      "-m",
-      "uvicorn",
-      "cutout_service.server:app",
-      "--host",
-      "127.0.0.1",
-      "--port",
-      "17890",
-      "--log-level",
-      "info"
-    ],
-    {
-      cwd: path.join(SERVICES_PATH, "cutout", "src"),
-      env: {
-        ...process.env,
-        PYTHONPATH: SERVICES_PATH
-      },
-      stdio: "inherit"
-    }
-  );
-}
-
-async function ensureCutoutAlive() {
-  const res = await fetch("http://127.0.0.1:17890/health");
-  if (!res.ok) throw new Error("CUTOUT not healthy");
-}
+/* ---------- App lifecycle ---------- */
+app.on("before-quit", () => {
+  stopBackend();
+});
 
 /* ---------- IPC: batch cutout ---------- */
 ipcMain.handle("batch-cutout", async (_, filePaths) => {
@@ -131,16 +86,8 @@ ipcMain.handle("ufm:ingestPhoto", async (_, inputPath) => {
 });
 
 /* ---------- IPC: parsing ---------- */
-ipcMain.handle(
-  "ufm:parseDiscountXlsx",
-  parseDiscountXlsx
-);
-
-ipcMain.handle(
-  "ufm:parseDiscountText",
-  parseDiscountText
-);
-
+ipcMain.handle("ufm:parseDiscountXlsx", parseDiscountXlsx);
+ipcMain.handle("ufm:parseDiscountText", parseDiscountText);
 
 /* ---------- IPC: export discount labels ---------- */
 ipcMain.handle("ufm:exportDiscountImages", (_event, items) => {
@@ -149,16 +96,33 @@ ipcMain.handle("ufm:exportDiscountImages", (_event, items) => {
 
 ipcMain.handle("ingestImages", ingestImages);
 
+/* ---------- App bootstrap ---------- */
 app.whenReady().then(async () => {
-  // 1️⃣ Start backend (Python / FastAPI)
-  startBackend();
-  initFirebase();          // 🔥 ADD THIS
+  try {
+    // 1️⃣ Start backend (selector-based)
+    const backend = await startBackend("cutout");
 
-  // 2️⃣ Wait until backend is healthy
-  await waitForBackend({ port: 8000 });
+    // 2️⃣ Wait for backend health
+    await waitForBackend(backend);
 
-  // 3️⃣ Create Electron window
-  createWindow();
+    // 3️⃣ Init Firebase (idempotent)
+    initFirebase();
+
+    // 4️⃣ Register IPC (backend info)
+    registerBackendIpc();
+    registerBackendProxyIpc();
+
+
+    // 5️⃣ Create window
+    createWindow();
+  } catch (err) {
+    console.error("❌ App startup failed:", err);
+    dialog.showErrorBox(
+      "Startup Error",
+      err?.message || "Failed to start application"
+    );
+    app.quit();
+  }
 });
 
 

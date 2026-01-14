@@ -1,41 +1,44 @@
- import http from "http";
+import http from "http";
 
-export function waitForBackend({
-  host = "127.0.0.1",
-  port = 8000,
-  timeoutMs = 15000
-}) {
-  const start = Date.now();
+const MAX_RETRIES = 30;
+const INTERVAL_MS = 500;
+
+export function waitForBackend(backend) {
+  if (!backend?.url) {
+    return Promise.reject(
+      new Error("waitForBackend called without backend.url")
+    );
+  }
+
+  const url = `${backend.url}/health`;
+  let attempts = 0;
 
   return new Promise((resolve, reject) => {
-    function check() {
-      const req = http.get(
-        {
-          host,
-          port,
-          path: "/health",
-          timeout: 2000
-        },
-        res => {
-          if (res.statusCode === 200) {
-            resolve(true);
-          } else {
-            retry();
-          }
+    const check = () => {
+      attempts++;
+
+      const req = http.get(url, (res) => {
+        if (res.statusCode === 200) {
+          console.log(`✅ Backend [${backend.name}] is healthy`);
+          resolve();
+        } else {
+          retry();
         }
-      );
+      });
 
       req.on("error", retry);
-      req.on("timeout", retry);
-    }
+      req.end();
+    };
 
-    function retry() {
-      if (Date.now() - start > timeoutMs) {
-        reject(new Error("Backend health timeout"));
+    const retry = () => {
+      if (attempts >= MAX_RETRIES) {
+        reject(
+          new Error(`Backend [${backend.name}] health timeout`)
+        );
         return;
       }
-      setTimeout(check, 500);
-    }
+      setTimeout(check, INTERVAL_MS);
+    };
 
     check();
   });

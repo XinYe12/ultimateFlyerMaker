@@ -7,10 +7,18 @@ import { cosineSimilarity } from "./vectorUtils.js";
 const db = getFirestore();
 
 export async function searchByImage(imagePath) {
-  // 🔑 FIX: destructure embedding
-  const { embedding: queryEmbedding } = await getImageEmbedding(imagePath);
+  let queryEmbedding;
 
-  if (!queryEmbedding || !queryEmbedding.length) {
+  try {
+    // 🔒 Embeddings are OPTIONAL — never block ingestion
+    const res = await getImageEmbedding(imagePath);
+    queryEmbedding = res?.embedding;
+  } catch (err) {
+    console.warn("⚠️ Embedding failed — skipping image search");
+    return [];
+  }
+
+  if (!Array.isArray(queryEmbedding) || !queryEmbedding.length) {
     return [];
   }
 

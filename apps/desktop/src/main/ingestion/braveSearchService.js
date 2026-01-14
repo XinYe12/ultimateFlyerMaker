@@ -15,25 +15,36 @@ async function searchBrave(query, limit = 5) {
   if (!BRAVE_API_KEY) return [];
   if (!query || !query.trim()) return [];
 
-  const url = `${BRAVE_ENDPOINT}?q=${encodeURIComponent(query)}&count=${limit}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000); // ⏱️ 8s max
 
-  const res = await fetch(url, {
-    headers: {
-      "X-Subscription-Token": BRAVE_API_KEY,
-      Accept: "application/json",
-    },
-  });
+  try {
+    const url = `${BRAVE_ENDPOINT}?q=${encodeURIComponent(query)}&count=${limit}`;
 
-  if (!res.ok) return [];
+    const res = await fetch(url, {
+      headers: {
+        "X-Subscription-Token": BRAVE_API_KEY,
+        Accept: "application/json",
+      },
+      signal: controller.signal,
+    });
 
-  const data = await res.json();
-  const raw = data?.web?.results || [];
+    if (!res.ok) return [];
 
-  return raw.slice(0, limit).map((r) => ({
-    title: r.title || "",
-    url: r.url || "",
-    description: r.description || "",
-  }));
+    const data = await res.json();
+    const raw = data?.web?.results || [];
+
+    return raw.slice(0, limit).map((r) => ({
+      title: r.title || "",
+      url: r.url || "",
+      description: r.description || "",
+    }));
+  } catch (err) {
+    console.warn("⚠️ Brave search failed — continuing without it");
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function braveImageSearch(imagePath, ocr, limit = 5) {

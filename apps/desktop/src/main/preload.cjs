@@ -62,5 +62,9 @@ contextBridge.exposeInMainWorld("ufm", {
   ingestImages: (paths) =>
   ipcRenderer.invoke("ingestImages", paths),
 
+    // ---------- BACKEND PROXY ----------
+  backendRequest: (req) => {
+    return ipcRenderer.invoke("backend:request", req);
+  }
 
 });

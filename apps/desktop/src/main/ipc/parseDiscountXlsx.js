@@ -252,8 +252,11 @@ function xlsxToText(filePath) {
     if (name) parts.push(`EN:${name}`);
     if (zh) parts.push(`ZH:${zh}`);
 
-    if (size) parts.push(size);
     parts.push(now);
+
+    if (size) parts.push(`SIZE:${size}`);
+
+    
     if (/^\d+\.\d{2}$/.test(was)) parts.push(`Was ${was}`);
 
     lines.push(`${n}、 ${parts.join(" ")}`);

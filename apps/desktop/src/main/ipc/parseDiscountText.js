@@ -144,7 +144,7 @@ function buildMessages(rawText) {
     "2) Ignore banners like 这周特价 / 限时优惠.",
     '3) Output objects like {"zh":"","en":"","salePrice":"10.99","regularPrice":"","unit":"ea","size":""}.',
     '4) If only one price exists, it is salePrice; regularPrice is empty string.',
-    '5) Multi-buy must be "3/9.99".',
+    '5) Multi-buy prices MUST preserve original format like "2/4.99", "3/9.99". Do NOT rewrite as natural language.',
     '6) unit must be one of: "lb", "ea", "bag", "order". If missing, use "ea".',
     '7) size is portion size like "100g", "100mL", "250g", "1L", or "12x355mL". If missing or unclear, output empty string.',
     "",
