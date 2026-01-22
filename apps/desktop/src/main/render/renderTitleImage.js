@@ -49,7 +49,7 @@ function wrapEnglish(ctx, text, maxWidth, maxLines) {
     if (w <= maxWidth) {
       line = test;
     } else {
-      lines.push(line);
+      if (line) lines.push(line);
       line = word;
       if (lines.length === maxLines - 1) break;
     }
@@ -68,17 +68,12 @@ export function renderTitleImage({ en = "", zh = "", size = "", outputPath }) {
   const height = 700;
 
   const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext("2d"); // ✅ FIX: ctx DEFINED HERE
+  const ctx = canvas.getContext("2d");
 
   const EN_FONT = "82px Bebas";
   ctx.font = EN_FONT;
 
-  const enLines = wrapEnglish(
-    ctx,
-    String(en).toUpperCase(),
-    820,
-    3
-  );
+  const enLines = wrapEnglish(ctx, String(en).toUpperCase(), 820, 3);
 
   const x = 80;
   let y = 160;
@@ -88,20 +83,20 @@ export function renderTitleImage({ en = "", zh = "", size = "", outputPath }) {
   const SIZE_LINE_HEIGHT = 72;
 
   // ENGLISH
-  enLines.forEach(line => {
+  enLines.forEach((line) => {
     drawOutlinedText(ctx, line, x, y, EN_FONT, 12);
     y += EN_LINE_HEIGHT;
   });
 
-  // CHINESE
+  // CHINESE (DO NOT STRIP NUMBERS)
   if (zh) {
-    drawOutlinedText(ctx, zh, x, y, "70px SourceHan", 12);
+    drawOutlinedText(ctx, String(zh), x, y, "70px SourceHan", 12);
     y += CN_LINE_HEIGHT;
   }
 
-  // SIZE
+  // SIZE (SHOW AS-IS, INCLUDING NUMBERS)
   if (size) {
-    drawOutlinedText(ctx, size, x, y, "72px Anton", 12);
+    drawOutlinedText(ctx, String(size), x, y, "72px Anton", 12);
     y += SIZE_LINE_HEIGHT;
   }
 

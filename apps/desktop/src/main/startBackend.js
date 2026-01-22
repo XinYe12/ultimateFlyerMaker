@@ -2,71 +2,92 @@ import { spawn } from "child_process";
 import path from "path";
 import { app } from "electron";
 import "dotenv/config";
-import getPort from "get-port";
+import fetch from "node-fetch";
 import { BACKENDS } from "./backendRegistry.js";
 
 let backendProcess = null;
 let backendInfo = null;
 
-export async function startBackend(name = "cutout") {
-  if (backendProcess) return backendInfo;
+async function isBackendAlive(host, port) {
+  try {
+    const res = await fetch(`http://${host}:${port}/health`, {
+      timeout: 500,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
-  console.log(`🟢 startBackend("${name}") called`);
+export async function startBackend(name = "cutout") {
+  if (backendInfo) return backendInfo;
 
   const cfg = BACKENDS[name];
   if (!cfg) {
     throw new Error(`Unknown backend: ${name}`);
   }
 
-  const backendRoot = path.join(
-    app.getAppPath(),
-    "backend",
-    "src"
-  );
+  if (!cfg.port) {
+    throw new Error("Backend port must be fixed in backendRegistry");
+  }
 
-  const port = cfg.port ?? (await getPort({ port: 8000 }));
-
-  console.log("Backend root:", backendRoot);
-  console.log("Backend port:", port);
+  const backendRoot = path.join(app.getAppPath(), "backend", "src");
+  const port = cfg.port;
 
   const pythonBin = process.env.PYTHON_BIN;
   if (!pythonBin) {
     throw new Error("PYTHON_BIN is not set");
   }
 
-  backendProcess = spawn(
-    pythonBin,
-    ["-m", "cutout_service.server"],
-    {
-      cwd: backendRoot,
-      env: {
-        ...process.env,
-        UFM_HOST: cfg.host,
-        UFM_PORT: String(port),
+  // reuse existing backend if already running
+  if (await isBackendAlive(cfg.host, port)) {
+    backendInfo = {
+      name,
+      pid: null,
+      host: cfg.host,
+      port,
+      url: `http://${cfg.host}:${port}`,
+    };
+    return backendInfo;
+  }
 
-        // critical on macOS
-        PATH: [
-          "/usr/local/bin",
-          "/opt/homebrew/bin",
-          "/usr/bin",
-          "/bin",
-          process.env.PATH || "",
-        ].join(":"),
+backendProcess = spawn(
+  pythonBin,
+  [
+    "-m",
+    "uvicorn",
+    "cutout_service.server:app",
+    "--host",
+    cfg.host,
+    "--port",
+    String(port),
+  ],
+  {
+    cwd: backendRoot,
+    env: {
+      ...process.env,
+      PATH: [
+        "/usr/local/bin",
+        "/opt/homebrew/bin",
+        "/usr/bin",
+        "/bin",
+        process.env.PATH || "",
+      ].join(":"),
+      PYTHONPATH: backendRoot,
+    },
+    stdio: "inherit",
+  }
+);
 
-        PYTHONPATH: backendRoot,
-      },
-      stdio: "inherit",
-    }
-  );
 
-  backendProcess.on("exit", (code, signal) => {
-    console.error("❌ Backend exited", { code, signal });
+  backendProcess.on("exit", () => {
     backendProcess = null;
     backendInfo = null;
   });
 
-  backendProcess.on("error", (err) => {
-    console.error("❌ Backend spawn error:", err);
+  backendProcess.on("error", () => {
+    backendProcess = null;
+    backendInfo = null;
   });
 
   backendInfo = {
@@ -82,7 +103,7 @@ export async function startBackend(name = "cutout") {
 
 export function stopBackend() {
   if (backendProcess) {
-    backendProcess.kill();
+    backendProcess.kill("SIGTERM");
     backendProcess = null;
     backendInfo = null;
   }
@@ -91,3 +112,15 @@ export function stopBackend() {
 export function getBackendInfo() {
   return backendInfo;
 }
+
+app.on("before-quit", () => {
+  if (backendProcess) {
+    backendProcess.kill("SIGTERM");
+  }
+});
+
+process.on("exit", () => {
+  if (backendProcess) {
+    backendProcess.kill("SIGTERM");
+  }
+});

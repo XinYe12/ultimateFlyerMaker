@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import "../styles/newspaper.css";
 import "./DiscountInputView.css";
 
@@ -12,187 +12,146 @@ export default function DiscountInputView() {
   const [xlsxPath, setXlsxPath] = useState<string | null>(null);
   const [inputSource, setInputSource] = useState<InputSource>(null);
 
+  // ✅ single source of truth
+  const [parsedItems, setParsedItems] = useState<any[]>([]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-const handleFiles = async (fileList: FileList | null) => {
-  if (!fileList || fileList.length === 0) return;
+  /* ---------- EXPORT FROM STATE ONLY ---------- */
+  useEffect(() => {
+    if (parsedItems.length === 0) return;
 
-  const file = fileList[0];
-  const name = file.name.toLowerCase();
-  const type = file.type;
+    console.log("🧨 EXPORTING FROM STATE:", parsedItems);
+    window.ufm.exportDiscountImages(parsedItems);
+  }, [parsedItems]);
 
-  setFiles([file.name]);
-  setTextInput("");
+  const handleFiles = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
 
-  // ---------- IMAGE ----------
-  if (type.startsWith("image/")) {
-    setInputSource("image");
-    setXlsxPath(null);
-    setTextInput("[Image file detected — backend processing]");
-    return;
-  }
+    const file = fileList[0];
+    const name = file.name.toLowerCase();
+    const type = file.type;
 
-  // ---------- EXCEL ----------
-  // ❗ XLSX is NOT allowed via drag/drop or browser picker
-  if (name.endsWith(".xlsx")) {
-    setInputSource("xlsx");
-    setXlsxPath(null);
-
-    // UI hint only — real selection must come from dialog
     setFiles([file.name]);
     setTextInput("");
 
-    return;
-  }
-
-  // ---------- TEXT ----------
-  const text = await file.text();
-  setInputSource("text");
-  setXlsxPath(null);
-  setTextInput(text.trim());
-};
-
-
-const submit = async () => {
-  // 🔒 HARD SYNC: decide source at submit time
-  const effectiveSource: InputSource =
-    xlsxPath ? "xlsx" : textInput.trim() ? "text" : null;
-
-  if (!effectiveSource) {
-    throw new Error("No valid discount input to submit");
-  }
-
-  setBusy(true);
-
-  try {
-
-    // ---------- XLSX ----------
-    if (effectiveSource === "xlsx") {
-      if (typeof xlsxPath !== "string" || !xlsxPath.trim()) {
-        throw new Error("XLSX selected but file path is empty");
-      }
-
-      const items = await window.ufm.parseDiscountXlsx(xlsxPath);
-
-      if (!items.length) {
-        throw new Error("No valid discount items detected from XLSX");
-      }
-
-      await window.ufm.exportDiscountImages(items);
+    if (type.startsWith("image/")) {
+      setInputSource("image");
+      setXlsxPath(null);
+      setTextInput("[Image file detected — backend processing]");
       return;
     }
 
+    if (name.endsWith(".xlsx")) {
+      setInputSource("xlsx");
+      setXlsxPath(null);
+      setTextInput("");
+      return;
+    }
 
-    // ---------- TEXT ----------
-    if (effectiveSource === "text") {
-      const rawText = textInput;
+    const text = await file.text();
+    setInputSource("text");
+    setXlsxPath(null);
+    setTextInput(text.trim());
+  };
 
-      if (!rawText || !rawText.trim()) {
-        throw new Error("Discount input is empty — abort parse");
+  const submit = async () => {
+    const effectiveSource: InputSource =
+      xlsxPath ? "xlsx" : textInput.trim() ? "text" : null;
+
+    if (!effectiveSource) {
+      throw new Error("No valid discount input to submit");
+    }
+
+    setBusy(true);
+
+    try {
+      if (effectiveSource === "xlsx") {
+        if (!xlsxPath) throw new Error("XLSX path missing");
+        const items = await window.ufm.parseDiscountXlsx(xlsxPath);
+        setParsedItems(items);
+        return;
       }
 
-      console.log(
-        "🧪 RAW DISCOUNT INPUT >>>",
-        JSON.stringify(rawText),
-        typeof rawText
-      );
+      if (effectiveSource === "text") {
+        if (!textInput.trim()) {
+          throw new Error("Discount input is empty");
+        }
 
-      const items = await window.ufm.parseDiscountText(rawText);
-
-      console.log("UI received parsed items:", items.length);
-
-      await window.ufm.exportDiscountImages(items);
+        console.log("🧪 RAW INPUT:", textInput);
+        const items = await window.ufm.parseDiscountText(textInput);
+        console.log("🧠 PARSED ITEMS:", items);
+        setParsedItems(items);
+      }
+    } finally {
+      setBusy(false);
     }
-  } finally {
-    setBusy(false);
-  }
-};
+  };
 
-function handleSelectedFile(file: File) {
-  setFiles([file.name]);
+  function handleSelectedFile(file: File) {
+    setFiles([file.name]);
+    const ext = file.name.split(".").pop()?.toLowerCase();
 
-  const ext = file.name.split(".").pop()?.toLowerCase();
-
-  if (ext === "xlsx") {
-    setInputSource("xlsx");
-
-    // 🔑 Electron-only: absolute file path
-    // This is what parseDiscountXlsx MUST receive
-    const path = (file as any).path;
-
-    if (typeof path !== "string" || !path.trim()) {
-      throw new Error("Selected XLSX file has no valid path");
+    if (ext === "xlsx") {
+      setInputSource("xlsx");
+      const path = (file as any).path;
+      if (!path) throw new Error("XLSX has no path");
+      setXlsxPath(path);
+      return;
     }
 
-    setXlsxPath(path);
-    return;
-  }
+    if (ext === "txt" || ext === "csv" || ext === "tsv") {
+      setInputSource("text");
+      return;
+    }
 
-  if (ext === "txt" || ext === "csv" || ext === "tsv") {
-    setInputSource("text");
-    // your existing text handling logic stays
-    return;
+    if (file.type.startsWith("image/")) {
+      setInputSource("image");
+      return;
+    }
   }
-
-  if (file.type.startsWith("image/")) {
-    setInputSource("image");
-    // your existing image logic stays
-    return;
-  }
-}
 
   return (
     <div style={{ marginTop: 40 }}>
       <h2 className="discount-title">Discount Input</h2>
 
       <div className="card">
-        {/* FILE INPUT */}
- 
         <div className="section">
           <div
-              className="file-drop"
-              onClick={async () => {
-                if (busy) return;
+            className="file-drop"
+            onClick={async () => {
+              if (busy) return;
 
-                // XLSX → Electron dialog (path-based)
-                if (inputSource === "xlsx") {
-                  const path = await window.ufm.openXlsxDialog();
-                  if (!path) return;
+              if (inputSource === "xlsx") {
+                const path = await window.ufm.openXlsxDialog();
+                if (!path) return;
+                setInputSource("xlsx");
+                setXlsxPath(path);
+                setFiles([path.split("/").pop() || "file.xlsx"]);
+                return;
+              }
 
-                  setInputSource("xlsx");
-                  setXlsxPath(path);
-                  setFiles([path.split("/").pop() || "file.xlsx"]);
-                  return;
-                }
-
-                // everything else → browser picker
-                fileInputRef.current?.click();
-              }}
-              onDragOver={e => e.preventDefault()}
-              onDrop={e => {
-                e.preventDefault();
-                if (busy) return;
-
-                const files = e.dataTransfer.files;
-                if (!files || !files.length) return;
-
-                handleFiles(files);
-              }}
-            >
-              {files.length === 0 ? (
-                <>
-                  Drop files or click to upload
-                  <span className="hint">TXT · CSV · Excel · Image</span>
-                </>
-              ) : (
-                <>
-                  File selected
-                  <span className="hint">Click Generate to continue</span>
-                </>
-              )}
-            </div>
-
-
+              fileInputRef.current?.click();
+            }}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (busy) return;
+              handleFiles(e.dataTransfer.files);
+            }}
+          >
+            {files.length === 0 ? (
+              <>
+                Drop files or click to upload
+                <span className="hint">TXT · CSV · Excel · Image</span>
+              </>
+            ) : (
+              <>
+                File selected
+                <span className="hint">Click Generate to continue</span>
+              </>
+            )}
+          </div>
 
           <input
             ref={fileInputRef}
@@ -201,8 +160,7 @@ function handleSelectedFile(file: File) {
             accept=".txt,.csv,.tsv,.xlsx,image/*"
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (!file) return;
-              handleSelectedFile(file);
+              if (file) handleSelectedFile(file);
             }}
           />
 
@@ -216,35 +174,27 @@ function handleSelectedFile(file: File) {
           )}
         </div>
 
-
         <div className="divider" />
-        <div
-          style={{
-            marginBottom: 8,
-            fontSize: 12,
-            fontWeight: 700,
-            letterSpacing: 0.5
-          }}
-        >
-          {inputMode === "excel" ? "🟦 Excel table detected" : "🟨 Free text detected"}
+
+        <div style={{ marginBottom: 8, fontSize: 12, fontWeight: 700 }}>
+          {inputMode === "excel"
+            ? "🟦 Excel table detected"
+            : "🟨 Free text detected"}
         </div>
 
-        {/* TEXT INPUT */}
         <div className="section">
           <textarea
             className="text-input"
             value={textInput}
             disabled={inputSource === "xlsx" || busy}
-            onChange={e => {
+            onChange={(e) => {
               const value = e.target.value;
-
               setTextInput(value);
               setInputMode(value.includes("\t") ? "excel" : "text");
               setInputSource("text");
               setFiles([]);
               setXlsxPath(null);
             }}
-
             placeholder="Paste discount lines here"
           />
 

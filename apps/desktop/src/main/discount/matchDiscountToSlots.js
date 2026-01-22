@@ -12,7 +12,6 @@ function norm(s) {
 }
 
 function normZh(s) {
-  // keep only CJK + digits/letters
   return (s ?? "")
     .toString()
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
@@ -24,18 +23,15 @@ function normalizeSize(s) {
   const t = norm(s);
   if (!t) return "";
 
-  // 20g*4 or 4x20g
   let m = t.match(/^(\d+)\s*[x*]\s*(\d+(?:\.\d+)?)\s*(g|kg|ml|l|lb|oz)\b$/i);
   if (m) return `${m[1]}x${m[2]}${m[3].toLowerCase()}`;
 
   m = t.match(/^(\d+(?:\.\d+)?)\s*(g|kg|ml|l|lb|oz)\s*[*x]\s*(\d+)\b$/i);
   if (m) return `${m[3]}x${m[1]}${m[2].toLowerCase()}`;
 
-  // range: 261g-300g or 500ml-1l
   m = t.match(/^(\d+(?:\.\d+)?)\s*(g|kg|ml|l|lb|oz)\s*-\s*(\d+(?:\.\d+)?)\s*\2\b$/i);
   if (m) return `${m[1]}${m[2].toLowerCase()}-${m[3]}${m[2].toLowerCase()}`;
 
-  // single: 700g / 1l
   m = t.match(/^(\d+(?:\.\d+)?)\s*(g|kg|ml|l|lb|oz)\b$/i);
   if (m) return `${m[1]}${m[2].toLowerCase()}`;
 
@@ -44,8 +40,7 @@ function normalizeSize(s) {
 
 function tokens(s) {
   const t = norm(s);
-  if (!t) return [];
-  return t.split(" ").filter(Boolean);
+  return t ? t.split(" ").filter(Boolean) : [];
 }
 
 function charBigrams(s) {
@@ -59,8 +54,8 @@ function charBigrams(s) {
 function jaccard(a, b) {
   const A = new Set(a);
   const B = new Set(b);
-  if (A.size === 0 && B.size === 0) return 1;
-  if (A.size === 0 || B.size === 0) return 0;
+  if (!A.size && !B.size) return 1;
+  if (!A.size || !B.size) return 0;
   let inter = 0;
   for (const x of A) if (B.has(x)) inter++;
   return inter / (A.size + B.size - inter);
@@ -74,78 +69,70 @@ function sizeCompatible(a, b) {
 }
 
 function buildRowKey(row) {
-  const en = norm(row.en);
-  const zh = normZh(row.zh);
-  const size = normalizeSize(row.size);
-  return `${en} ${zh} ${size}`.trim();
+  return `${norm(row.en)} ${normZh(row.zh)} ${normalizeSize(row.size)}`.trim();
 }
 
 function buildSlotKey(slot) {
   const meta = slot.meta ?? slot;
-  const en = norm(meta.en);
-  const zh = normZh(meta.zh);
-  const size = normalizeSize(meta.size);
-  return `${en} ${zh} ${size}`.trim();
+  return `${norm(meta.en)} ${normZh(meta.zh)} ${normalizeSize(meta.size)}`.trim();
 }
 
 function score(slot, row) {
-  const slotKey = buildSlotKey(slot);
-  const rowKey = buildRowKey(row);
-
-  const wTok = jaccard(tokens(slotKey), tokens(rowKey));
-  const wBi = jaccard(charBigrams(slotKey), charBigrams(rowKey));
-
-  // stronger weight on token overlap; bigrams help with minor OCR/spacing noise
-  return 0.75 * wTok + 0.25 * wBi;
+  const sk = buildSlotKey(slot);
+  const rk = buildRowKey(row);
+  return (
+    0.75 * jaccard(tokens(sk), tokens(rk)) +
+    0.25 * jaccard(charBigrams(sk), charBigrams(rk))
+  );
 }
 
 /**
- * slots: [{ slotId?, x,y,width,height,imagePath, meta?:{en?,zh?,size?} }, ...]
- * discountRows: [{ id, en?, zh?, size?, salePrice, ... }, ...]
+ * slots: ingest results (images)
+ * discountRows: parsed discounts
+ * RETURNS: slots[] with `discount` attached
  */
 export function matchDiscountToSlots(slots, discountRows, opts = {}) {
-  const threshold = typeof opts.threshold === "number" ? opts.threshold : 0.35;
+  const threshold =
+    typeof opts.threshold === "number" ? opts.threshold : 0.35;
 
   const rows = (discountRows ?? []).map((r, i) => ({
     ...r,
-    id: r.id ?? `row_${i + 1}`,
+    id: r.id ?? `row_${i + 1}`
   }));
 
-  const usedRows = new Set();
-  const matched = [];
-  const unmatchedSlots = [];
-  const unmatchedDiscounts = [];
+  const used = new Set();
 
-  for (let si = 0; si < (slots ?? []).length; si++) {
-    const slot = slots[si];
+  return (slots ?? []).map(slot => {
     let best = null;
 
-    for (let ri = 0; ri < rows.length; ri++) {
-      const row = rows[ri];
-      if (usedRows.has(row.id)) continue;
-
-      if (!sizeCompatible((slot.meta ?? slot).size, row.size)) continue;
+    for (const row of rows) {
+      if (used.has(row.id)) continue;
+      if (!sizeCompatible(slot.layout?.size, row.size)) continue;
 
       const s = score(slot, row);
-      if (!best || s > best.score) best = { row, score: s };
+      if (!best || s > best.score) {
+        best = { row, score: s };
+      }
     }
 
-    if (best && best.score >= threshold) {
-      usedRows.add(best.row.id);
+    if (best) {
+      used.add(best.row.id);
 
-      matched.push({
+      return {
         ...slot,
         discount: best.row,
         matchScore: best.score,
-      });
-    } else {
-      unmatchedSlots.push(slot);
+        matchConfidence:
+          best.score >= threshold ? "high" : "low"
+      };
     }
-  }
 
-  for (const row of rows) {
-    if (!usedRows.has(row.id)) unmatchedDiscounts.push(row);
-  }
-
-  return { matched, unmatchedSlots, unmatchedDiscounts };
+    // no discount rows at all
+    return {
+      ...slot,
+      discount: null,
+      matchScore: 0,
+      matchConfidence: "none"
+    };
+  });
 }

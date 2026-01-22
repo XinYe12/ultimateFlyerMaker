@@ -5,15 +5,10 @@ import { renderTitleImage } from "../render/renderTitleImage.js";
 import { renderPriceImage } from "../render/renderPriceImage.js";
 
 export async function exportDiscountImages(items) {
-  if (!Array.isArray(items)) {
-    throw new Error("❌ exportDiscountImages received NON-array");
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error("exportDiscountImages: invalid items");
   }
 
-  if (items.length === 0) {
-    throw new Error("❌ exportDiscountImages received EMPTY array");
-  }
-
-  // 🔥 GUARANTEED VISIBLE LOCATION
   const outputDir = path.join(
     app.getPath("desktop"),
     "UFM_Discount_Labels"
@@ -30,23 +25,45 @@ export async function exportDiscountImages(items) {
     const titlePath = path.join(outputDir, `${base}_title.png`);
     const pricePath = path.join(outputDir, `${base}_price.png`);
 
+    // ---------- TITLE DATA ----------
+    const en = item.en ?? item.english_name ?? "";
+    const zh = item.zh ?? item.chinese_name ?? "";
+    const size = item.size ?? "";
+
     renderTitleImage({
-      en: item.en,
-      zh: item.zh,
-      size: item.size || "",
+      en,
+      zh,
+      size,
       outputPath: titlePath
     });
-    const outputPath = path.join(
-    outputDir,
-    `price_${index}.png`
-    );
-    renderPriceImage({
-      afterPrice: item.salePrice,
-      beforePrice: item.regularPrice,
-      priceUnit: item.unit,
-      outputPath
+
+    // ---------- PRICE DATA ----------
+    const salePrice =
+      item.salePrice ??
+      item.sale_price ??
+      "";
+
+    const regularPrice =
+      item.regularPrice ??
+      item.regular_price ??
+      "";
+
+    const unit = item.unit ?? "";
+
+    console.log("🧾 FINAL PRICE DATA", {
+      sale: salePrice,
+      regular: regularPrice,
+      unit
     });
 
+    // 🔒 ALWAYS attempt to render price image
+    // renderPriceImage itself decides whether to draw or skip
+    renderPriceImage({
+      afterPrice: salePrice,
+      beforePrice: regularPrice,
+      priceUnit: unit,
+      outputPath: pricePath
+    });
   });
 
   console.log("✅ EXPORT COMPLETE");

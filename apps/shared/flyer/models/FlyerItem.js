@@ -8,6 +8,7 @@ export function createFlyerItem({
   priceValue,
   unit,
   category,
+  department = "grocery",   // ✅ ADD
   imageSrc = "",
   confidence = 0.9,
   sourceText = ""
@@ -26,10 +27,11 @@ export function createFlyerItem({
     category,
     image: {
       src: imageSrc,
-      source: imageSrc ? "internal" : "external"
+      source: imageSrc ? "internal" : "external",
+      aspectRatio
     },
     layout: {
-      size: "SMALL"
+      size
     },
     confidence,
     meta: {

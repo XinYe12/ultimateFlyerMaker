@@ -1,3 +1,5 @@
+// apps/desktop/src/renderer/useIngestQueue.ts
+
 import { useEffect, useRef, useState } from "react";
 import { IngestItem } from "./types";
 
@@ -15,21 +17,21 @@ export function useIngestQueue() {
           .map(p => ({
             id: crypto.randomUUID(),
             path: p,
-            status: "pending"
+            status: "pending",
           }))
       );
     });
   };
 
-  /* ---------- worker ---------- */
+  /* ---------- single-worker ---------- */
   useEffect(() => {
     if (runningRef.current) return;
 
     const next = queue.find(q => q.status === "pending");
     if (!next) return;
 
-    if (!window.electron?.invoke) {
-      console.error("Electron IPC not available");
+    if (!window.ufm?.ingestPhoto) {
+      console.error("UFM IPC not available");
       return;
     }
 
@@ -43,10 +45,8 @@ export function useIngestQueue() {
 
     (async () => {
       try {
-        const result = await window.electron.invoke(
-          "ufm:ingestPhoto",
-          next.path
-        );
+        // ingestPhoto now returns ONE object, not array
+        const result = await window.ufm.ingestPhoto(next.path);
 
         setQueue(prev =>
           prev.map(q =>
@@ -62,7 +62,7 @@ export function useIngestQueue() {
               ? {
                   ...q,
                   status: "error",
-                  error: err?.message ?? String(err)
+                  error: err?.message ?? String(err),
                 }
               : q
           )
@@ -82,7 +82,7 @@ export function useIngestQueue() {
               ...q,
               status: "pending",
               error: undefined,
-              result: undefined
+              result: undefined,
             }
           : q
       )

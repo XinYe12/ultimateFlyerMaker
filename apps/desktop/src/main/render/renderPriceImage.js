@@ -20,25 +20,37 @@ function drawOutlinedText(ctx, text, x, y, font, strokeWidth) {
 export function renderPriceImage({
   afterPrice,
   beforePrice,
-  priceUnit = "EA",
+  priceUnit = "",
   outputPath
 }) {
   // ---------- PRICE CLASSIFICATION ----------
-  const parsed = classifyPrice(afterPrice);
+  let parsed = classifyPrice(afterPrice);
 
-  // ✅ HARD GUARD: no valid sale price → render nothing
-  if (!parsed || !parsed.price) {
-    return;
+  // ---------- FALLBACK (CRITICAL) ----------
+  if (!parsed && typeof afterPrice === "string") {
+    const m = afterPrice.match(/(\d+\.\d{2})/);
+    if (m) {
+      parsed = {
+        type: "SINGLE",
+        price: m[1],
+        unit: ""
+      };
+    } else {
+      return;
+    }
   }
 
-  // 🔒 UNIT OVERRIDE (CRITICAL)
-  // Unit is PRODUCT data, NOT price data
-  const unit = priceUnit ? priceUnit.toUpperCase() : "";
 
-  // Force SINGLE when unit is LB (produce)
-  if (unit === "LB") {
-    parsed.type = "SINGLE";
-  }
+  // 🔒 UNIT OVERRIDE (PRODUCT DATA WINS)
+  const unit =
+    parsed.unit
+      ? parsed.unit.toUpperCase()
+      : priceUnit
+      ? priceUnit.toUpperCase()
+      : "";
+
+  // 🔒 RENDER MODE (DO NOT MUTATE parsed)
+  const renderType = parsed.type;
 
   const canvas = createCanvas(1000, 420);
   const ctx = canvas.getContext("2d");
@@ -47,7 +59,7 @@ export function renderPriceImage({
   let x = 80;
 
   // ---------- MULTI BUY ----------
-  if (parsed.type === "MULTI") {
+  if (renderType === "MULTI") {
     drawOutlinedText(ctx, parsed.qty, x, baseY, "150px Anton", 26);
     x += ctx.measureText(parsed.qty).width + 16;
 
@@ -79,29 +91,45 @@ export function renderPriceImage({
 
   // ---------- UNIT ----------
   // ONLY render unit for SINGLE prices
-  // NEVER auto-insert EA
-  if (parsed.type === "SINGLE" && unit) {
-    drawOutlinedText(
-      ctx,
-      unit,
-      x + bigWidth + 14,
-      baseY,
-      "100px Anton",
-      28
-    );
-  }
+// ---------- UNIT ----------
+// NEVER render ORDER next to the main price (prevents overlap)
+if (renderType === "SINGLE" && unit) {
+  drawOutlinedText(
+    ctx,
+    unit,
+    x + bigWidth + 14,
+    baseY,
+    "100px Anton",
+    28
+  );
+}
+
 
   // ---------- REG PRICE ----------
   if (beforePrice) {
-    drawOutlinedText(
-      ctx,
-      `REG: ${beforePrice}`,
-      80,
-      baseY + 70,
-      "76px Anton",
-      18
-    );
+    // strip unit from REG if SALE already shows it
+    // ---------- REG PRICE Y POSITION ----------
+    const regY =
+      renderType === "MULTI"
+        ? baseY + 110
+        : baseY + 70;
+
+      const regText =
+        unit && typeof beforePrice === "string"
+          ? beforePrice.replace(/\/\s*(order|ea|lb|case|box|pack|pkg)/i, "")
+          : beforePrice;
+
+      drawOutlinedText(
+        ctx,
+        `REG: ${regText}`,
+        80,
+        regY,
+        "76px Anton",
+        18
+      );
+
   }
+
 
   fs.writeFileSync(outputPath, canvas.toBuffer("image/png"));
 }

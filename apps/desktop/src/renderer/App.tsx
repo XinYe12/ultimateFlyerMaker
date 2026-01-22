@@ -3,86 +3,82 @@
 import { useState } from "react";
 import ImageDropArea from "./components/ImageDropArea";
 import IngestResultView from "./IngestResultView";
-import { IngestItem } from "./types";
 import DiscountInputView from "./discount/DiscountInputView";
+import { useIngestQueue } from "./useIngestQueue";
 import { buildFlyerItems } from "./buildFlyerItems";
 import { placeItems } from "../../../shared/flyer/layout/placeItems";
+import { buildCanvaPayload } from "../../../shared/flyer/export/buildCanvaPayload";
+import { IngestItem } from "./types";
 
 type ElectronFile = File & { path: string };
 
-type IngestState =
-  | { status: "idle" }
-  | { status: "running" }
-  | { status: "error"; error: string }
-  | { status: "done" };
-
 export default function App() {
-  // overall ingest state
-  const [state, setState] = useState<IngestState>({ status: "idle" });
+  const { queue, enqueue } = useIngestQueue();
+
+  const [flyerItems, setFlyerItems] = useState<any[]>([]);
   const [placements, setPlacements] = useState<any[]>([]);
+  const [canvaPayload, setCanvaPayload] = useState<any | null>(null);
+  const [discounts, setDiscounts] = useState<any[]>([]);
 
 
-  // 🔑 ACCUMULATED IMAGE RESULTS (BATCH)
-  const [imageResults, setImageResults] = useState<any[]>([]);
-
-  const busy = state.status === "running";
-
-  /**
-   * HANDLE IMAGE DROP (BATCH)
-   * This is the ONLY place image ingestion happens.
-   */
-  const handleDrop = async (files: ElectronFile[]) => {
-    if (busy) return;
-
-    if (!window.ufm?.ingestImages) {
-      setState({
-        status: "error",
-        error: "window.ufm.ingestImages is NOT available"
-      });
-      return;
-    }
-
-    // filter valid image paths
+  const handleDrop = (files: ElectronFile[]) => {
     const imagePaths = files
-      .filter(f => /\.(jpg|jpeg|png)$/i.test(f.path))
+      .filter(f => {
+        const name = f.path.toLowerCase();
+        return (
+          name.endsWith(".jpg") ||
+          name.endsWith(".jpeg") ||
+          name.endsWith(".png")
+        );
+      })
       .map(f => f.path);
 
-    if (!imagePaths.length) {
-      setState({
-        status: "error",
-        error: "No valid image files dropped"
-      });
-      return;
-    }
-
-    setState({ status: "running" });
-
-    try {
-      // 🔑 BATCH INGEST
-      const results = await window.ufm.ingestImages(imagePaths);
-
-      // 🔑 ACCUMULATE (DO NOT OVERWRITE)
-      setImageResults(prev => [...prev, ...results]);
-      // 🔑 BUILD FLYER ITEMS FOR LAYOUT
-      const allImages = [...imageResults, ...results];
-      const flyerItems = buildFlyerItems(allImages);
-
-      // 🔑 PLACE ITEMS INTO GRID (MAX 16)
-      const placed = placeItems(flyerItems, {
-        columns: 4,
-        maxItems: 16
-      });
-
-      setPlacements(placed);
-
-      setState({ status: "done" });
-    } catch (err: any) {
-      setState({
-        status: "error",
-        error: err?.message ?? String(err)
-      });
+    if (imagePaths.length > 0) {
+      enqueue(imagePaths);
     }
   };
+
+  const buildFlyer = async () => {
+    const readyImages = queue
+      .filter(q => q.status === "done" && q.result)
+      .map(q => q.result);
+
+    if (!readyImages.length) return;
+
+    // 🔑 MATCH DISCOUNTS → SLOTS (AUTHORITATIVE)
+    const discounts = await window.ufm.getDiscounts();
+    console.log("[App] discounts from main =", discounts);
+
+    const matchedImages = await window.ufm.matchDiscountToSlots({
+      images: readyImages,
+      discounts
+    });
+
+
+
+    // 1️⃣ build flyer items
+    const items = buildFlyerItems(matchedImages);
+    setFlyerItems(items);
+
+    // 2️⃣ place items
+    const grid = placeItems(items, {
+      columns: 4,
+      maxItems: 16
+    });
+    setPlacements(grid);
+
+    // 3️⃣ build canva payload
+    const payload = buildCanvaPayload({
+      items,
+      placements: grid
+    });
+
+    setCanvaPayload(payload);
+  };
+// pull parsed discounts from main (authoritative)
+
+
+  const itemMap = new Map(flyerItems.map(i => [i.id, i]));
 
   return (
     <div
@@ -97,73 +93,95 @@ export default function App() {
     >
       <h1>Ultimate Flyer Maker — Ingestion</h1>
 
-      {/* 🔹 Discount input (TEXT / XLSX ONLY) */}
       <DiscountInputView />
 
-      {/* 🔹 Image batch upload */}
-      <ImageDropArea
-        busy={busy}
-        onDrop={handleDrop}
-      />
+      <ImageDropArea busy={false} onDrop={handleDrop} />
 
-      {/* 🔹 Error display */}
-      {state.status === "error" && (
-        <pre
-          style={{
-            marginTop: 20,
-            padding: 12,
-            background: "#fff0f0",
-            border: "1px solid #f3b0b0",
-            whiteSpace: "pre-wrap"
-          }}
-        >
-          {state.error}
-        </pre>
-      )}
-
-      {/* 🔹 Render ALL ingested image results */}
-      {imageResults.length > 0 && (
+      {queue.length > 0 && (
         <div style={{ marginTop: 32 }}>
-          <h2>Ingested Images ({imageResults.length})</h2>
+          <h2>Ingested Images ({queue.length})</h2>
 
-          {imageResults.map((result, idx) => {
-            const item: IngestItem = {
-              id: `image_${idx}`,
-              path: result?.imagePath || "",
-              status: "done",
-              result
-            };
-
-            return (
-              <IngestResultView
-                key={item.id}
-                item={item}
-              />
-            );
-          })}
+          {queue.map((item: IngestItem) => (
+            <IngestResultView key={item.id} item={item} />
+          ))}
         </div>
       )}
 
-      {/* 🔹 Layout Debug */}
-        {placements.length > 0 && (
-          <div style={{ marginTop: 32 }}>
-            <h2>Grid Placements ({placements.length})</h2>
+      <div style={{ marginTop: 24 }}>
+        <button
+          onClick={buildFlyer}
+          disabled={!queue.some(q => q.status === "done")}
+        >
+          Build Flyer
+        </button>
+      </div>
 
-            <pre
-              style={{
-                padding: 12,
-                background: "#fff",
-                border: "1px solid #ccc",
-                maxHeight: 300,
-                overflow: "auto",
-                fontSize: 12
-              }}
-            >
-              {JSON.stringify(placements, null, 2)}
-            </pre>
+      {placements.length > 0 && (
+        <div style={{ marginTop: 32 }}>
+          <h2>Flyer Preview (Debug)</h2>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(4, 1fr)",
+              gap: 12,
+              background: "#ddd",
+              padding: 12
+            }}
+          >
+            {placements.map((p: any) => {
+              const item = itemMap.get(p.itemId);
+
+              return (
+                <div
+                  key={p.itemId}
+                  style={{
+                    background: "#fff",
+                    padding: 8,
+                    border:
+                      item?.matchConfidence === "low"
+                        ? "2px solid orange"
+                        : "1px solid #ccc",
+                    gridColumn: `span ${p.w || 1}`,
+                    gridRow: `span ${p.h || 1}`
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: "bold" }}>
+                    {item?.meta?.en || "NO TITLE"}
+                  </div>
+
+                  {item?.matchConfidence === "low" && (
+                    <div style={{ fontSize: 10, color: "orange", fontWeight: 600 }}>
+                      ⚠ Low confidence match
+                    </div>
+                  )}
+                  <div style={{ fontSize: 11, color: "#c00" }}>
+                    {item?.price?.display || ""}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        )}
+        </div>
+      )}
 
+      {canvaPayload && (
+        <div style={{ marginTop: 32 }}>
+          <h2>Canva Payload</h2>
+          <pre
+            style={{
+              padding: 12,
+              background: "#111",
+              color: "#0ff",
+              maxHeight: 400,
+              overflow: "auto",
+              fontSize: 12
+            }}
+          >
+            {JSON.stringify(canvaPayload, null, 2)}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

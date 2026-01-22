@@ -1,58 +1,108 @@
-# apps/desktop/backend/src/ocr/ocr_engine.py
+import os
+import sys
+import json
+from typing import List, Dict, Any
 
-import threading
-from typing import Any, Dict, List
+# -----------------------------
+# Hard caps for low-end machines
+# -----------------------------
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
 
-# If you are using PaddleX pipelines, keep it here.
-# Adjust imports to match your current implementation.
-from paddlex import create_pipeline
+from paddleocr import PaddleOCR
 
-_lock = threading.Lock()
-_pipeline = None
+# -----------------------------
+# Singleton OCR instance
+# -----------------------------
+_ocr = None
+
+def _get_ocr() -> PaddleOCR:
+    global _ocr
+    if _ocr is None:
+        _ocr = PaddleOCR(
+            use_angle_cls=False,
+            lang="en",
+            show_log=False
+        )
+    return _ocr
 
 
-def _get_pipeline():
+# -----------------------------
+# Public entry point
+# -----------------------------
+def run_ocr(image_path: str) -> List[Dict[str, Any]]:
     """
-    Create the OCR pipeline ONCE per process.
+    OCR on ORIGINAL image only.
+    Returns:
+      [
+        {
+          "rec_texts": [str, ...],
+          "rec_scores": [float, ...]
+        }
+      ]
     """
-    global _pipeline
-    if _pipeline is not None:
-        return _pipeline
+    if not image_path or not os.path.exists(image_path):
+        return [{"rec_texts": [], "rec_scores": []}]
 
-    with _lock:
-        if _pipeline is not None:
-            return _pipeline
+    ocr = _get_ocr()
 
-        # ✅ Create only once
-        # NOTE: this name must match what you used before.
-        # If your original code used a different pipeline name, keep it.
-        _pipeline = create_pipeline(pipeline="OCR")
+    try:
+        result = ocr.ocr(image_path, cls=False)
+        print("=== RAW OCR RESULT ===")
+        print(result)
+        print("======================")
 
-        return _pipeline
-def run_ocr(image_path: str):
-    pipe = _get_pipeline()
-    result = pipe.predict(image_path)
+    except Exception as e:
+        # Fail closed, never crash caller
+        return [{"rec_texts": [], "rec_scores": []}]
 
-    if not result:
-        return []
+    rec_texts = []
+    rec_scores = []
 
-    cleaned = []
+    # PaddleOCR may return:
+    # Shape A: [ [box, (text, score)], ... ]
+    # Shape B: [ [ [box, (text, score)], ... ] ]
+    pages = result if isinstance(result, list) else []
 
-    for item in result:
-        if not isinstance(item, dict):
+    for page in pages:
+        if not isinstance(page, list):
             continue
 
-        rec_texts = item.get("rec_texts", [])
-        rec_scores = item.get("rec_scores", [])
+        for line in page:
+            if not isinstance(line, (list, tuple)) or len(line) != 2:
+                continue
 
-        safe_texts = []
-        for t in rec_texts:
-            if isinstance(t, str):
-                safe_texts.append(t)
+            box, rec = line
+            if not isinstance(rec, (list, tuple)) or len(rec) != 2:
+                continue
 
-        cleaned.append({
-            "rec_texts": safe_texts,
-            "rec_scores": rec_scores[:len(safe_texts)]
-        })
+            text, score = rec
+            if not isinstance(text, str) or not text.strip():
+                continue
 
-    return cleaned
+            rec_texts.append(text.strip())
+            try:
+                rec_scores.append(float(score))
+            except Exception:
+                rec_scores.append(0.0)
+
+
+    return [{
+        "rec_texts": rec_texts,
+        "rec_scores": rec_scores
+    }]
+
+
+# -----------------------------
+# CLI / subprocess support
+# -----------------------------
+if __name__ == "__main__":
+    # Expected usage:
+    #   python ocr_engine.py /path/to/image.jpg
+    if len(sys.argv) < 2:
+        print(json.dumps([{"rec_texts": [], "rec_scores": []}]))
+        sys.exit(0)
+
+    image_path = sys.argv[1]
+    result = run_ocr(image_path)
+    print(json.dumps(result))

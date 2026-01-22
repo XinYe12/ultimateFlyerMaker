@@ -9,13 +9,19 @@ declare global {
     ufm: {
       ingestPhoto: (path: string) => Promise<any>;
       parseDiscountText: (text: string) => Promise<any>;
-      parseDiscountXlsx: (filePath: string) => Promise<any>; // ✅ FIXED
+      parseDiscountXlsx: (filePath: string) => Promise<any>;
       exportDiscountImages: (items: any[]) => Promise<any>;
-            // ---------- XLSX DIALOG ----------
       openXlsxDialog: () => Promise<string>;
       ingestImages: (paths: string[]) => Promise<any[]>;
+      getDiscounts: () => Promise<any[]>;
+
+
+      // ✅ ADD THIS
+      matchDiscountToSlots: (args: {
+        images: any[];
+        discounts: any[];
+        opts?: any;
+      }) => Promise<any[]>;
     };
   }
 }
-
-

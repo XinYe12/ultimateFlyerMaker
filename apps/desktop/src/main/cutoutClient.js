@@ -1,49 +1,51 @@
-import fs from "fs";
+import fs from "fs/promises";
+import fsSync from "fs";
 import path from "path";
-import { getBackendInfo } from "./startBackend.js";
+import { fileURLToPath } from "url";
+import fetch from "node-fetch";
+import FormData from "form-data";
 
-/**
- * Single source of truth for project cutout assets
- */
-const PROJECT_CUTOUT_DIR = path.resolve(
-  process.cwd(),
-  "apps/desktop/project_assets/cutouts"
-);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-function getCutoutPath(inputPath) {
-  const base = path.basename(inputPath, path.extname(inputPath));
-  return path.join(PROJECT_CUTOUT_DIR, `${base}.cutout.png`);
+// project-owned exports dir
+const EXPORT_ROOT = path.resolve(__dirname, "../../../exports/cutouts");
+
+async function ensureExportDir() {
+  await fs.mkdir(EXPORT_ROOT, { recursive: true });
 }
 
-/**
- * Runs cutout via backend proxy (NO hardcoded host/port)
- */
 export async function runCutout(inputPath) {
-  fs.mkdirSync(PROJECT_CUTOUT_DIR, { recursive: true });
+  await ensureExportDir();
 
-  const outPath = getCutoutPath(inputPath);
+  const form = new FormData();
+  const stream = fsSync.createReadStream(inputPath);
+  form.append("file", stream);
 
-  const backend = getBackendInfo();
-  if (!backend) {
-    throw new Error("Backend not started");
+  let res;
+  try {
+    res = await fetch("http://127.0.0.1:17890/cutout", {
+      method: "POST",
+      body: form,
+      timeout: 30_000,
+    });
+  } finally {
+    // ensure fd is released
+    stream.destroy();
   }
 
-  const res = await fetch(`${backend.url}/cutout`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ filePath: inputPath }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`CUTOUT failed: ${res.status}`);
+  if (!res || !res.ok) {
+    throw new Error(`Cutout failed`);
   }
 
-  const buffer = Buffer.from(await res.arrayBuffer());
-  fs.writeFileSync(outPath, buffer);
+  const { output_path } = await res.json();
 
-  console.log("✅ CUTOUT WRITTEN:", outPath);
+  const finalName =
+    path.basename(inputPath).replace(/\s+/g, "_") + ".cutout.png";
 
-  return outPath;
+  const finalPath = path.join(EXPORT_ROOT, finalName);
+
+  await fs.rename(output_path, finalPath);
+
+  return finalPath;
 }

@@ -12,20 +12,18 @@ export default function IngestResultView({ item }: { item: IngestItem }) {
 
   if (item.status !== "done" || !item.result) return null;
 
- return (
+  return (
     <>
-        {item.result?.cutoutPath && (
+      {item.result?.cutoutPath && (
         <CutoutPreview cutoutPath={item.result.cutoutPath} />
-        )}
+      )}
 
-        {item.result?.ocr && (
+      {item.result?.ocr && (
         <OcrResult ocr={item.result.ocr} />
-        )}
+      )}
 
-        <DbMatches matches={item.result?.dbMatches} />
-
-        <WebMatches matches={item.result?.webMatches} />
+      <DbMatches matches={item.result?.dbMatches} />
+      <WebMatches matches={item.result?.webMatches} />
     </>
-    );
-
+  );
 }

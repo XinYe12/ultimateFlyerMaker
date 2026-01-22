@@ -1,30 +1,54 @@
 import { runCutout } from "../cutoutClient.js";
 import { runOCR } from "./ocrService.js";
-import { searchByImage } from "./searchService.js";
-import { braveImageSearch } from "./braveSearchService.js";
-import { parseTitleDeepseek } from "./parseTitleDeepseek.js";
+import { runDeepSeek } from "./deepseekService.js";
+import sizeOf from "image-size";
+import { decideSizeFromAspectRatio } from "../../../../shared/flyer/layout/sizeFromImage.js";
 
 export async function ingestPhoto(inputPath) {
+  // ---------- OCR FIRST ----------
+  const ocrResult = await runOCR(inputPath);
+  console.log("OCR DEBUG [ingestPhoto] ocrResult:", ocrResult);
+
+  const rec_texts = Array.isArray(ocrResult)
+    ? ocrResult[0]?.rec_texts ?? []
+    : [];
+
+  // ---------- DEEPSEEK ----------
+  let llmResult = { items: [] };
+  if (rec_texts.length > 0) {
+    llmResult = await runDeepSeek({
+      raw_ocr_text: rec_texts,
+      image_path: inputPath,
+    });
+  }
+
+  const bestItem = Array.isArray(llmResult?.items)
+    ? llmResult.items[0]
+    : null;
+
+  // ---------- CUTOUT ----------
   const cutoutPath = await runCutout(inputPath);
 
-  const ocr = await runOCR(cutoutPath);
-
-  // ✅ make sure UI + downstream always have ocr.text
-  const rec_texts = Array.isArray(ocr?.rec_texts) ? ocr.rec_texts : [];
-  ocr.text = rec_texts.join(" ");
-  console.log("[INGEST] ocr:", ocr);
-  console.log("[INGEST] ocr.text:", ocr?.text);
-
-  const title = await parseTitleDeepseek(ocr.text);
-  const dbMatches = await searchByImage(cutoutPath);
-  const webMatches = await braveImageSearch(cutoutPath, ocr);
+  // ---------- LAYOUT ----------
+  let layout = { size: "SMALL" };
+  try {
+    const { width, height } = sizeOf(cutoutPath);
+    const aspectRatio =
+      typeof width === "number" && typeof height === "number"
+        ? width / height
+        : null;
+    layout.size = decideSizeFromAspectRatio(aspectRatio);
+  } catch {}
 
   return {
     inputPath,
     cutoutPath,
-    title,
-    dbMatches,
-    webMatches,
-    ocr, // ✅ unchanged shape for UI
+    layout,
+    title: {
+      en: bestItem?.english_name || "",
+      zh: bestItem?.chinese_name || "",
+    },
+    ocr: ocrResult, // ✅ preserve full OCR array
+    llmResult,
   };
 }

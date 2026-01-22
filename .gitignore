@@ -117,3 +117,11 @@ apps/desktop/backend/*.zip
 
 get-pip.py
 ufm-backend.spec
+
+# Generated / runtime outputs
+apps/exports/
+apps/desktop/exports/
+apps/desktop/output/
+apps/desktop/apps/desktop/project_assets/cutouts/
+apps/desktop/backend/uploads/
+apps/desktop/backend/src/**/cutouts/

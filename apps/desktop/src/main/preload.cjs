@@ -9,6 +9,11 @@ const { contextBridge, ipcRenderer } = require("electron");
  */
 
 contextBridge.exposeInMainWorld("ufm", {
+  
+  getDiscounts: () => {
+    return ipcRenderer.invoke("ufm:getDiscounts");
+  },
+
   // ---------- TEXT ----------
   parseDiscountText: (rawText) => {
     console.log(
@@ -16,7 +21,6 @@ contextBridge.exposeInMainWorld("ufm", {
       JSON.stringify(rawText),
       typeof rawText
     );
-
     return ipcRenderer.invoke("ufm:parseDiscountText", rawText);
   },
 
@@ -27,7 +31,6 @@ contextBridge.exposeInMainWorld("ufm", {
       JSON.stringify(filePath),
       typeof filePath
     );
-
     return ipcRenderer.invoke("ufm:parseDiscountXlsx", filePath);
   },
 
@@ -37,7 +40,6 @@ contextBridge.exposeInMainWorld("ufm", {
       "🧩 PRELOAD exportDiscountImages received items:",
       Array.isArray(items) ? items.length : items
     );
-
     return ipcRenderer.invoke("ufm:exportDiscountImages", items);
   },
 
@@ -48,23 +50,28 @@ contextBridge.exposeInMainWorld("ufm", {
       JSON.stringify(filePath),
       typeof filePath
     );
-
     return ipcRenderer.invoke("ufm:ingestPhoto", filePath);
-  }
-    ,
+  },
+
+ ingestPhoto: (path) =>
+  ipcRenderer.invoke("ingestImages", [path]).then(r => r[0]),
+
 
   // ---------- XLSX DIALOG ----------
   openXlsxDialog: () => {
     console.log("🧩 PRELOAD openXlsxDialog called");
     return ipcRenderer.invoke("ufm:openXlsxDialog");
   },
-  
-  ingestImages: (paths) =>
-  ipcRenderer.invoke("ingestImages", paths),
 
-    // ---------- BACKEND PROXY ----------
+  // ---------- MATCH DISCOUNTS ----------
+  matchDiscountToSlots: (args) => {
+    console.log("🧩 PRELOAD matchDiscountToSlots called");
+    return ipcRenderer.invoke("ufm:matchDiscountToSlots", args);
+  },
+
+  // ---------- BACKEND PROXY ----------
   backendRequest: (req) => {
     return ipcRenderer.invoke("backend:request", req);
   }
-
+  
 });
