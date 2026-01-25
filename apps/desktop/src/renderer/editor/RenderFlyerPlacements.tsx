@@ -1,4 +1,5 @@
-import { buildFlyerCard } from "../../../../shared/flyer/models/buildFlyerCard";
+// PATH: apps/desktop/src/renderer/editor/RenderFlyerPlacements.tsx
+// REAL RENDERER — placements are authoritative
 
 export default function RenderFlyerPlacements({
   items,
@@ -7,18 +8,26 @@ export default function RenderFlyerPlacements({
   items: any[];
   placements: any[];
 }) {
+  if (!Array.isArray(items) || !Array.isArray(placements)) return null;
+
   return (
     <>
       {placements.map((p) => {
-        const item = items.find(it => it.id === p.itemId);
+        const item = items.find((it) => it.id === p.itemId);
         if (!item) return null;
 
-        const card = buildFlyerCard(p);
+        const rawSrc =
+          item?.image?.src ??
+          item?.cutoutPath ??
+          item?.result?.cutoutPath ??
+          null;
+
+        if (!rawSrc) return null;
 
         const imgSrc =
-          item.image.src.startsWith("http") || item.image.src.startsWith("file://")
-            ? item.image.src
-            : `file://${item.image.src}`;
+          rawSrc.startsWith("http") || rawSrc.startsWith("file://")
+            ? rawSrc
+            : `file://${rawSrc}`;
 
         return (
           <div
@@ -30,32 +39,17 @@ export default function RenderFlyerPlacements({
               width: p.width,
               height: p.height,
               overflow: "hidden",
-              background: "transparent",
             }}
           >
-            <div
+            <img
+              src={imgSrc}
               style={{
-                position: "absolute",
-                left: card.image.x - p.x,
-                top: card.image.y - p.y,
-                width: card.image.width,
-                height: card.image.height,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                overflow: "hidden",
+                width: "100%",
+                height: "100%",
+                objectFit: "contain",
+                display: "block",
               }}
-            >
-              <img
-                src={imgSrc}
-                style={{
-                  maxWidth: "100%",
-                  maxHeight: "100%",
-                  objectFit: "contain",
-                  display: "block",
-                }}
-              />
-            </div>
+            />
           </div>
         );
       })}

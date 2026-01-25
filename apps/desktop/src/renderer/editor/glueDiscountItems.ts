@@ -1,66 +1,39 @@
-// apps/desktop/src/renderer/editor/glueDiscountItems.ts
+// PATH: apps/desktop/src/renderer/editor/glueDiscountItems.ts
+// GUARANTEED SAFE VERSION (NO .map ON UNDEFINED POSSIBLE)
 
-export type DiscountItem = {
-  id: string;
+import { IngestItem, DiscountItem, DiscountMatch } from "../types";
 
-  image: {
-    src: string;
-  };
+export function glueDiscountItems(
+  ingestedItems?: IngestItem[],
+  matches?: DiscountMatch[]
+): DiscountItem[] {
+  const safeIngested = Array.isArray(ingestedItems) ? ingestedItems : [];
+  const safeMatches = Array.isArray(matches) ? matches : [];
 
-  title: {
-    en: string;
-    zh?: string;
-  };
+  const ingestMap = new Map(
+    safeIngested
+      .filter(i => i && i.status === "done" && i.result)
+      .map(i => [i.id, i.result!])
+  );
 
-  price: {
-    display: string;
-  };
+  const out: DiscountItem[] = [];
 
+  for (let i = 0; i < safeMatches.length; i++) {
+    const match = safeMatches[i];
+    const source = ingestMap.get(match.ingestedItemId);
+    if (!source) continue;
 
-  match: {
-    confidence: "high" | "low" | "none";
-    score: number;
-  };
-};
-
-export function glueDiscountItems(editorQueue: any[]): DiscountItem[] {
-  return editorQueue.map((q, idx) => {
-    // support DEBUG items + real pipeline items
-    const r = q.result ?? q;
-    const d = r.discount ?? {};
-
-    return {
-      id: q.id ?? `discount_item_${idx + 1}`,
-
-      image: {
-        src: r.cutoutPath ?? r.image?.path ?? "",
+    out.push({
+      id: match.ingestedItemId,
+      image: { src: source.cutoutPath },
+      title: { en: match.title.en, zh: match.title.zh },
+      price: { display: match.price.display, value: match.price.value },
+      confidence: {
+        score: match.confidence.score,
+        reasons: match.confidence.reasons,
       },
+    });
+  }
 
-      title: {
-        en:
-          d.en ||
-          d.english_name ||
-          r.title?.en ||
-          r.title ||
-          "",
-        zh:
-          d.zh ||
-          d.chinese_name ||
-          r.title?.zh ||
-          "",
-      },
-
-      price: {
-        display:
-          d.price?.display ||
-          r.price?.display ||
-          "",
-      },
-
-      match: {
-        confidence: r.matchConfidence ?? "high",
-        score: r.matchScore ?? 1,
-      },
-    };
-  });
+  return out;
 }

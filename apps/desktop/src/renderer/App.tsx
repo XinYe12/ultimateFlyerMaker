@@ -11,7 +11,7 @@ import { useIngestQueue } from "./useIngestQueue";
 import { matchDiscountsInEditor } from "./services/matchDiscounts";
 import { glueDiscountItems } from "./editor/glueDiscountItems";
 import { buildCanvaPayload } from "../../../shared/flyer/export/buildCanvaPayload";
-
+import { IngestItem } from "./types";
 import EditorCanvas from "./editor/EditorCanvas";
 import { loadDepartmentDraft } from "./editor/draftStorage";
 
@@ -91,13 +91,14 @@ export default function App() {
 
   // ---------------- RUN MATCHING (EDITOR) ----------------
   const runEditorMatching = async () => {
-    const images = editorQueue
-      .filter(q => q.status === "done" && q.result)
-      .map(q => q.result);
+    const ingestItems: IngestItem[] = editorQueue.filter(
+      (i): i is IngestItem => i && typeof i === "object" && "id" in i
+    );
 
-    if (!images.length) return;
+    if (!ingestItems.length) return;
 
-    const matched = await matchDiscountsInEditor(images);
+    const matched = await matchDiscountsInEditor(ingestItems);
+
 
     matched.forEach((m: any, idx: number) => {
       const item = editorQueue[idx];
@@ -116,7 +117,13 @@ export default function App() {
 
   // ---------------- BUILD FLYER (EXPORT ONLY) ----------------
   const buildFlyer = async () => {
-    const gluedItems = glueDiscountItems(editorQueue);
+    const ingestItems: IngestItem[] = editorQueue.filter(
+      (i): i is IngestItem => i && typeof i === "object" && "id" in i
+    );
+
+    const matches = matchDiscountsInEditor(ingestItems);
+    const gluedItems = glueDiscountItems(ingestItems, matches);
+
     if (!gluedItems.length) return;
 
     // NOTE:
@@ -169,7 +176,7 @@ export default function App() {
         </div>
 
         <EditorCanvas
-          editorQueue={glueDiscountItems(editorQueue)}
+          editorQueue={editorQueue}
           templateId="weekly_v1"
           department={department}
         />

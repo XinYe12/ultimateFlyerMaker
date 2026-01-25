@@ -1,4 +1,5 @@
 // PATH: apps/desktop/src/renderer/types.ts
+// 🔧 ADD: DiscountMatch + DiscountItem exports (keep existing ingestion/editor fields)
 
 export type IngestStatus = "pending" | "running" | "done" | "error";
 
@@ -8,22 +9,20 @@ export type OCRResult = Array<{
 }>;
 
 export type DepartmentId =
-  | 'grocery'
-  | 'frozen'
-  | 'hot_food'
-  | 'sushi'
-  | 'meat'
-  | 'seafood'
-  | 'fruit'
-  | 'vegetable'
-
+  | "grocery"
+  | "frozen"
+  | "hot_food"
+  | "sushi"
+  | "meat"
+  | "seafood"
+  | "fruit"
+  | "vegetable";
 
 export type IngestResult = {
   inputPath: string;
   cutoutPath: string;
   layout: { size: string };
 
-  // authoritative (can become user-entered later)
   title: {
     en: string;
     zh?: string;
@@ -32,7 +31,6 @@ export type IngestResult = {
     source?: "deepseek";
   };
 
-  // preserved AI suggestion (never overwritten)
   aiTitle?: {
     en: string;
     zh?: string;
@@ -46,13 +44,15 @@ export type IngestResult = {
   dbMatches?: any;
   webMatches?: any;
 
-    // ---------- MATCHING RESULT (EDITOR VISIBILITY) ----------
-  discount?: any;
+  // ---------- MATCHING (EDITOR / DEBUG ONLY) ----------
+  discount?: {
+    en?: string;
+    english_name?: string;
+    [key: string]: any;
+  };
 
   matchScore?: number;
-
   matchConfidence?: "high" | "low" | "none";
-
 };
 
 export type IngestItem = {
@@ -69,10 +69,59 @@ export type IngestItem = {
     size?: boolean;
   };
 
-  // used for "cancel replace"
   titleReplaceBackup?: {
     en: string;
     zh?: string;
     size?: string;
+  };
+};
+
+// =======================
+// MATCHING (NO LAYOUT)
+// =======================
+
+export type DiscountMatch = {
+  ingestedItemId: string;
+
+  title: {
+    en: string;
+    zh?: string;
+  };
+
+  price: {
+    display: string;
+    value?: number;
+  };
+
+  confidence: {
+    score: number; // 0–1
+    reasons: string[];
+  };
+};
+
+// =======================
+// DISCOUNT ITEM (NO LAYOUT)
+// =======================
+
+export type DiscountItem = {
+  id: string;
+
+  image: {
+    src: string;
+  };
+
+  title: {
+    en: string;
+    zh?: string;
+  };
+
+  price: {
+    display: string;
+    value?: number;
+  };
+
+  confidence: {
+    score: number; // 0–1
+    reasons: string[];
   };
 };

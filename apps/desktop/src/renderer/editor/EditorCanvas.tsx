@@ -48,7 +48,7 @@ export default function EditorCanvas({
     if (!page || !region || items.length === 0) return [];
 
     return layoutFlyer({
-      items: items.map(it => ({ id: it.id })),
+       items,
       pageId: page.pageId,
       region: {
         id: department,
@@ -71,6 +71,8 @@ export default function EditorCanvas({
       </div>
     );
   }
+  console.log("EditorCanvas items:", items);
+  console.log("EditorCanvas placements:", placements);
 
   return (
     <div
@@ -125,6 +127,7 @@ export default function EditorCanvas({
 
           {/* items */}
           {placements.length > 0 && (
+            
             <RenderFlyerPlacements
               items={items}
               placements={placements}
