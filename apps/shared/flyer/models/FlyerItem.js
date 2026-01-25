@@ -1,5 +1,3 @@
-// server/flyer-automation/models/FlyerItem.js
-import { decideSizeFromAspectRatio } from "./layout/sizeFromImage.js";
 
 export function createFlyerItem({
   id,
@@ -8,37 +6,40 @@ export function createFlyerItem({
   priceValue,
   unit,
   category,
-  department = "grocery",   // ✅ ADD
+  department = "grocery",
   imageSrc = "",
+  aspectRatio = null,
   confidence = 0.9,
   sourceText = ""
 }) {
+
+
   return {
     id,
+    department,
     title: {
       en: enTitle,
-      cn: cnTitle
+      cn: cnTitle,
     },
     price: {
       value: priceValue,
       unit,
-      display: `$${priceValue.toFixed(2)} /${unit}`
+      display: unit
+        ? `$${priceValue.toFixed(2)} /${unit}`
+        : `$${priceValue.toFixed(2)}`,
     },
     category,
     image: {
       src: imageSrc,
       source: imageSrc ? "internal" : "external",
-      aspectRatio
+      aspectRatio,
     },
-    layout: {
-      size
-    },
+
+    // 🔒 CARD IS NOW PART O
+
     confidence,
     meta: {
-      sourceText
-    }
+      sourceText,
+    },
   };
 }
-// after image is chosen
-item.image.aspectRatio = aspectRatio;
-item.layout.size = decideSizeFromAspectRatio(aspectRatio);

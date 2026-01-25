@@ -1,97 +1,112 @@
-// apps/desktop/src/renderer/useIngestQueue.ts
-
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { IngestItem } from "./types";
+import { v4 as uuidv4 } from "uuid";
 
 export function useIngestQueue() {
   const [queue, setQueue] = useState<IngestItem[]>([]);
-  const runningRef = useRef(false);
 
-  /* ---------- enqueue ---------- */
-  const enqueue = (paths: string[]) => {
-    setQueue(prev => {
-      const existing = new Set(prev.map(i => i.path));
-      return prev.concat(
-        paths
-          .filter(p => !existing.has(p))
-          .map(p => ({
-            id: crypto.randomUUID(),
-            path: p,
-            status: "pending",
-          }))
-      );
-    });
-  };
+  // ---------- INGEST ----------
+  async function enqueue(paths: string[]) {
+    for (const path of paths) {
+      const id = uuidv4();
 
-  /* ---------- single-worker ---------- */
-  useEffect(() => {
-    if (runningRef.current) return;
+      setQueue(prev => [
+        ...prev,
+        {
+          id,
+          path,
+          status: "running",
+        },
+      ]);
 
-    const next = queue.find(q => q.status === "pending");
-    if (!next) return;
-
-    if (!window.ufm?.ingestPhoto) {
-      console.error("UFM IPC not available");
-      return;
-    }
-
-    runningRef.current = true;
-
-    setQueue(prev =>
-      prev.map(q =>
-        q.id === next.id ? { ...q, status: "running" } : q
-      )
-    );
-
-    (async () => {
       try {
-        // ingestPhoto now returns ONE object, not array
-        const result = await window.ufm.ingestPhoto(next.path);
+        const result = await window.ufm.ingestPhoto(path);
 
         setQueue(prev =>
-          prev.map(q =>
-            q.id === next.id
-              ? { ...q, status: "done", result }
-              : q
+          prev.map(item =>
+            item.id === id
+              ? {
+                  ...item,
+                  status: "done",
+                  result: {
+                    ...result,
+                    // editor-state invariants
+                    title: result.title,
+                    aiTitle: result.aiTitle,
+                  },
+                }
+              : item
           )
         );
       } catch (err: any) {
         setQueue(prev =>
-          prev.map(q =>
-            q.id === next.id
+          prev.map(item =>
+            item.id === id
               ? {
-                  ...q,
+                  ...item,
                   status: "error",
-                  error: err?.message ?? String(err),
+                  error: String(err),
                 }
-              : q
+              : item
           )
         );
-      } finally {
-        runningRef.current = false;
       }
-    })();
-  }, [queue]);
+    }
+  }
 
-  /* ---------- controls ---------- */
-  const retry = (id: string) =>
+  // ---------- EDITOR UPDATE ----------
+  function updateItem(id: string, patch: Partial<IngestItem>) {
     setQueue(prev =>
-      prev.map(q =>
-        q.id === id
-          ? {
-              ...q,
-              status: "pending",
-              error: undefined,
-              result: undefined,
-            }
-          : q
-      )
+      prev.map(item => {
+        if (item.id !== id) return item;
+
+        return {
+          ...item,
+          ...patch,
+
+          // merge result safely (authoritative editor state)
+          result: patch.result
+            ? {
+                ...item.result,
+                ...patch.result,
+              }
+            : item.result,
+
+          // merge editor flags
+          userEdited: patch.userEdited
+            ? {
+                ...item.userEdited,
+                ...patch.userEdited,
+              }
+            : item.userEdited,
+        };
+      })
     );
+  }
 
-  const remove = (id: string) =>
-    setQueue(prev => prev.filter(q => q.id !== id));
+  // ---------- RETRY ----------
+  function retry(id: string) {
+    const item = queue.find(q => q.id === id);
+    if (!item) return;
+    enqueue([item.path]);
+  }
 
-  const clear = () => setQueue([]);
+  // ---------- REMOVE ----------
+  function remove(id: string) {
+    setQueue(prev => prev.filter(item => item.id !== id));
+  }
 
-  return { queue, enqueue, retry, remove, clear };
+  // ---------- CLEAR ----------
+  function clear() {
+    setQueue([]);
+  }
+
+  return {
+    queue,          // editor state
+    enqueue,
+    updateItem,     // authoritative editor mutations
+    retry,
+    remove,
+    clear,
+  };
 }

@@ -30,13 +30,18 @@
  *  - 2.58/lb
  */
 
-export function classifyPrice(raw) {
+export function classifyPrice(raw, context = "") {  
   if (!raw || typeof raw !== "string") return null;
+   const combined = `${raw} ${context}`
+    .trim()
+    .toLowerCase()
+    .replace(/\$/g, "")
+    .replace(/\s+/g, " ");
 
   const text = raw
     .trim()
     .toLowerCase()
-    .replace(/^\$/, ""); // strip leading $
+    .replace(/^\$/, "");
 
   // --------------------------------------------------
   // MULTI ① price / qty  → 8.99/8pcs
@@ -66,6 +71,24 @@ export function classifyPrice(raw) {
       unit: "pcs"
     };
   }
+  // --------------------------------------------------
+// MULTI ③a split tokens → 3.99 + 2 for
+// --------------------------------------------------
+m = combined.match(
+  /^(\d+\.\d{2})\s*(\d+)\s*for$|^(\d+)\s*for\s*(\d+\.\d{2})$/
+);
+if (m) {
+  const price = m[1] || m[4];
+  const qty = m[2] || m[3];
+
+  return {
+    type: "MULTI",
+    price,
+    qty,
+    unit: "pcs"
+  };
+}
+
 
   // --------------------------------------------------
   // MULTI ③ qty for price → 3 for 3.99

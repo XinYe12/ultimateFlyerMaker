@@ -1,50 +1,50 @@
 // apps/desktop/src/renderer/buildFlyerItems.ts
+// FINALIZED PREVIEW INPUT ONLY
+// apps/desktop/src/renderer/buildFlyerItems.ts
+// FINALIZED PREVIEW INPUT ONLY
 
-export function buildFlyerItems(imageResults: any[]) {
-  return imageResults.map((r, index) => {
-    const discount = r.discount || null;
+export function buildFlyerItems(matchedResults: any[]) {
+  return matchedResults
+    .filter((r) => r.discount) // 🚨 ONLY items with matched discounts
+    .map((r, index) => {
+      const discount = r.discount;
 
-    // ---------- TITLE (AUTHORITATIVE) ----------
-    const zh =
-      discount?.zh && discount.zh.trim()
-        ? discount.zh.trim()
-        : "";
+      return {
+        id: `item_${index + 1}`,
 
-    const en =
-      discount?.en && discount.en.trim()
-        ? discount.en.trim()
-        : r.title?.en || "";
+        // ---------- IMAGE ----------
+        image: {
+          src: r.cutoutPath || r.inputPath
+        },
 
-    // ---------- PRICE DISPLAY (ALREADY NORMALIZED) ----------
-    // price.display must be prepared in MAIN
-    const priceDisplay =
-      discount?.price?.display ??
-      discount?.display ??
-      "";
+        // ---------- LAYOUT ----------
 
-    return {
-      id: `item_${index + 1}`,
 
-      // ---------- IMAGE ----------
-      image: {
-        src: r.image?.src || ""
-      },
+        department: r.department ?? "grocery",
 
-      // ---------- LAYOUT ----------
-      layout: r.layout,
+        // ---------- TITLE (REQUIRED) ----------
+        title:
+          discount?.en ||
+          discount?.english_name ||
+          r.title?.en ||
+          "",
 
-      department: r.department ?? "grocery",
+        // ---------- META ----------
+        meta: {
+          en:
+            discount?.en ||
+            discount?.english_name ||
+            r.title?.en ||
+            ""
+        },
 
-      // ---------- META ----------
-      meta: {
-        en,
-        zh
-      },
-
-      // ---------- PRICE (TEXT ONLY) ----------
-      price: {
-        display: priceDisplay
-      }
-    };
-  });
+        // ---------- PRICE ----------
+        price: {
+          display:
+            discount?.price?.display ||
+            discount?.sale_price ||
+            ""
+        }
+      };
+    });
 }

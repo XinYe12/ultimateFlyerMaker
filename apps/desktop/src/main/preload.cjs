@@ -72,6 +72,9 @@ contextBridge.exposeInMainWorld("ufm", {
   // ---------- BACKEND PROXY ----------
   backendRequest: (req) => {
     return ipcRenderer.invoke("backend:request", req);
-  }
+  },
+  matchDiscountToSlots: (payload) =>
+  ipcRenderer.invoke("match-discount-to-slots", payload),
+
   
 });

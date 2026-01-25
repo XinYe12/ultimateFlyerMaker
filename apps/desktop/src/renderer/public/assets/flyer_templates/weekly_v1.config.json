@@ -1,0 +1,71 @@
+{
+  "templateId": "weekly_v1",
+  "pages": [
+    {
+      "pageId": "p1",
+      "imagePath": "/assets/flyer_templates/weekly_v1.png",
+      "departments": {
+        "grocery": {
+          "x": 39,
+          "y": 462,
+          "width": 1572,
+          "height": 2051
+        }
+      }
+    },
+    {
+      "pageId": "p2",
+      "imagePath": "/assets/flyer_templates/weekly_v1_p2.png",
+      "departments": {
+        "frozen": {
+          "x": 39,
+          "y": 53,
+          "width": 1572,
+          "height": 884
+        },
+        "hot_food": {
+          "x": 39,
+          "y": 1022,
+          "width": 1572,
+          "height": 777
+        },
+        "sushi": {
+          "x": 39,
+          "y": 1875,
+          "width": 1572,
+          "height": 591
+        }
+      }
+    },
+    {
+      "pageId": "p3",
+      "imagePath": "/assets/flyer_templates/weekly_v1_p3.png",
+      "departments": {
+        "meat": {
+          "x": 39,
+          "y": 53,
+          "width": 1572,
+          "height": 692
+        },
+        "vegetable": {
+          "x": 39,
+          "y": 802,
+          "width": 1572,
+          "height": 496
+        },
+        "fruit": {
+          "x": 39,
+          "y": 1351,
+          "width": 1572,
+          "height": 569
+        },
+        "seafood": {
+          "x": 39,
+          "y": 2008,
+          "width": 1572,
+          "height": 455
+        }
+      }
+    }
+  ]
+}

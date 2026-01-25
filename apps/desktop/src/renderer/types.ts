@@ -7,15 +7,52 @@ export type OCRResult = Array<{
   rec_scores?: number[];
 }>;
 
+export type DepartmentId =
+  | 'grocery'
+  | 'frozen'
+  | 'hot_food'
+  | 'sushi'
+  | 'meat'
+  | 'seafood'
+  | 'fruit'
+  | 'vegetable'
+
+
 export type IngestResult = {
   inputPath: string;
   cutoutPath: string;
   layout: { size: string };
-  title: { en: string; zh: string };
+
+  // authoritative (can become user-entered later)
+  title: {
+    en: string;
+    zh?: string;
+    size?: string;
+    confidence: "high" | "low";
+    source?: "deepseek";
+  };
+
+  // preserved AI suggestion (never overwritten)
+  aiTitle?: {
+    en: string;
+    zh?: string;
+    size?: string;
+    confidence: "high" | "low";
+    source?: "deepseek";
+  };
+
   ocr: OCRResult;
   llmResult: any;
   dbMatches?: any;
   webMatches?: any;
+
+    // ---------- MATCHING RESULT (EDITOR VISIBILITY) ----------
+  discount?: any;
+
+  matchScore?: number;
+
+  matchConfidence?: "high" | "low" | "none";
+
 };
 
 export type IngestItem = {
@@ -24,4 +61,18 @@ export type IngestItem = {
   status: IngestStatus;
   result?: IngestResult;
   error?: string;
+
+  userEdited?: {
+    title?: boolean;
+    price?: boolean;
+    image?: boolean;
+    size?: boolean;
+  };
+
+  // used for "cancel replace"
+  titleReplaceBackup?: {
+    en: string;
+    zh?: string;
+    size?: string;
+  };
 };

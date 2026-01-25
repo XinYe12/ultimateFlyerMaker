@@ -2,7 +2,9 @@ import { runCutout } from "../cutoutClient.js";
 import { runOCR } from "./ocrService.js";
 import { runDeepSeek } from "./deepseekService.js";
 import sizeOf from "image-size";
+import { formatTitle } from "./formatTitle.js";
 import { decideSizeFromAspectRatio } from "../../../../shared/flyer/layout/sizeFromImage.js";
+import { validateResult } from "./validateResult.js";
 
 export async function ingestPhoto(inputPath) {
   // ---------- OCR FIRST ----------
@@ -15,6 +17,7 @@ export async function ingestPhoto(inputPath) {
 
   // ---------- DEEPSEEK ----------
   let llmResult = { items: [] };
+
   if (rec_texts.length > 0) {
     llmResult = await runDeepSeek({
       raw_ocr_text: rec_texts,
@@ -22,9 +25,8 @@ export async function ingestPhoto(inputPath) {
     });
   }
 
-  const bestItem = Array.isArray(llmResult?.items)
-    ? llmResult.items[0]
-    : null;
+const title = formatTitle(llmResult);
+
 
   // ---------- CUTOUT ----------
   const cutoutPath = await runCutout(inputPath);
@@ -44,10 +46,9 @@ export async function ingestPhoto(inputPath) {
     inputPath,
     cutoutPath,
     layout,
-    title: {
-      en: bestItem?.english_name || "",
-      zh: bestItem?.chinese_name || "",
-    },
+    title,
+      // preserve AI suggestion forever
+    aiTitle: title,
     ocr: ocrResult, // ✅ preserve full OCR array
     llmResult,
   };

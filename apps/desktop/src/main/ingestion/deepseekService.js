@@ -10,43 +10,42 @@ export async function runDeepSeek({ raw_ocr_text }) {
     throw new Error("DEEPSEEK_API_KEY missing");
   }
 
-  const prompt =
-`You are given discount text from a grocery store.
+  const prompt = `
+You are given OCR text extracted from a grocery product image.
 
-Each LINE represents ONE product.
+TASKS:
+1. Parse ALL meaningful product-like strings you see.
+2. Identify the ONE most likely real product title a human would use on a flyer.
 
-Return a JSON OBJECT with this exact shape:
+IMPORTANT:
+- Ignore SKU codes, batch numbers, random letters, OCR noise.
+- Prefer brand + product names.
+- Prefer natural language names.
+- The "best_title" MUST be one of the parsed items (or a cleaned version of one).
+
+Return a JSON OBJECT with EXACT shape:
 
 {
-  "items": [
-    {
+  "best_title": {
     "english_name": "string",
     "chinese_name": "string or null",
-    "size": "string or null",
-    "sale_price": "string",
-    "regular_price": "string or null",
-    "unit": "string or null",
-    "quantity": "number or null",
     "confidence": number
+  },
+  "items": [
+    {
+      "english_name": "string",
+      "chinese_name": "string or null",
+      "size": "string or null",
+      "sale_price": "string",
+      "regular_price": "string or null",
+      "unit": "string or null",
+      "quantity": "number or null",
+      "confidence": number
     }
-
   ]
 }
 
-MANDATORY RULES:
-- Parse ALL lines
-- One product per line
-- Do NOT merge items
-- Do NOT drop items
-- Size must be in English (e.g. "3-pack")
-- Prices must preserve literal text meaning
-- If a price implies multiple units, populate "unit" and "quantity"
-- If the text contains patterns like "X for Y", "X/Y", or "Xpcs for Y",
-  DO NOT normalize them into a single price.
-- Preserve the original pricing text verbatim in "sale_price".
-
-
-INPUT TEXT:
+INPUT OCR TEXT:
 """
 ${rawText}
 """
@@ -56,18 +55,18 @@ ${rawText}
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
     },
     body: JSON.stringify({
       model: "deepseek-chat",
       messages: [
-        { role: "system", content: "Return JSON only." },
-        { role: "user", content: prompt }
+        { role: "system", content: "Return JSON only. No explanations." },
+        { role: "user", content: prompt },
       ],
       response_format: { type: "json_object" },
       temperature: 0,
-      max_tokens: 2048
-    })
+      max_tokens: 2048,
+    }),
   });
 
   if (!res.ok) {
@@ -82,9 +81,9 @@ ${rawText}
 
   const parsed = JSON.parse(content);
 
-  if (!parsed || !Array.isArray(parsed.items)) {
-    throw new Error("DeepSeek output missing items[]");
+  if (!parsed || !parsed.best_title || !Array.isArray(parsed.items)) {
+    throw new Error("DeepSeek output missing best_title or items[]");
   }
 
-  return parsed.items;
+  return parsed;
 }

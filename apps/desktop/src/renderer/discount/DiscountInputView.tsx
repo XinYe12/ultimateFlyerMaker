@@ -4,7 +4,15 @@ import "./DiscountInputView.css";
 
 type InputSource = "text" | "xlsx" | "image" | null;
 
-export default function DiscountInputView() {
+type Props = {
+  onAuthoritativeTitle: (title: string) => void;
+  onDiscountsParsed: () => void;
+};
+
+export default function DiscountInputView({
+  onAuthoritativeTitle,
+  onDiscountsParsed,
+}: Props) {
   const [inputMode, setInputMode] = useState<"excel" | "text">("text");
   const [textInput, setTextInput] = useState("");
   const [files, setFiles] = useState<string[]>([]);
@@ -12,16 +20,12 @@ export default function DiscountInputView() {
   const [xlsxPath, setXlsxPath] = useState<string | null>(null);
   const [inputSource, setInputSource] = useState<InputSource>(null);
 
-  // ✅ single source of truth
   const [parsedItems, setParsedItems] = useState<any[]>([]);
-
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   /* ---------- EXPORT FROM STATE ONLY ---------- */
   useEffect(() => {
     if (parsedItems.length === 0) return;
-
-    console.log("🧨 EXPORTING FROM STATE:", parsedItems);
     window.ufm.exportDiscountImages(parsedItems);
   }, [parsedItems]);
 
@@ -44,8 +48,9 @@ export default function DiscountInputView() {
 
     if (name.endsWith(".xlsx")) {
       setInputSource("xlsx");
-      setXlsxPath(null);
-      setTextInput("");
+      const path = (file as any).path;
+      if (!path) throw new Error("XLSX has no path");
+      setXlsxPath(path);
       return;
     }
 
@@ -66,50 +71,27 @@ export default function DiscountInputView() {
     setBusy(true);
 
     try {
+      let items: any[] = [];
+
       if (effectiveSource === "xlsx") {
         if (!xlsxPath) throw new Error("XLSX path missing");
-        const items = await window.ufm.parseDiscountXlsx(xlsxPath);
-        setParsedItems(items);
-        return;
+        items = await window.ufm.parseDiscountXlsx(xlsxPath);
       }
 
       if (effectiveSource === "text") {
-        if (!textInput.trim()) {
-          throw new Error("Discount input is empty");
-        }
-
-        console.log("🧪 RAW INPUT:", textInput);
-        const items = await window.ufm.parseDiscountText(textInput);
-        console.log("🧠 PARSED ITEMS:", items);
-        setParsedItems(items);
+        items = await window.ufm.parseDiscountText(textInput);
       }
+
+      setParsedItems(items);
+
+      const title = items?.[0]?.title;
+      if (title) onAuthoritativeTitle(title);
+
+      onDiscountsParsed();
     } finally {
       setBusy(false);
     }
   };
-
-  function handleSelectedFile(file: File) {
-    setFiles([file.name]);
-    const ext = file.name.split(".").pop()?.toLowerCase();
-
-    if (ext === "xlsx") {
-      setInputSource("xlsx");
-      const path = (file as any).path;
-      if (!path) throw new Error("XLSX has no path");
-      setXlsxPath(path);
-      return;
-    }
-
-    if (ext === "txt" || ext === "csv" || ext === "tsv") {
-      setInputSource("text");
-      return;
-    }
-
-    if (file.type.startsWith("image/")) {
-      setInputSource("image");
-      return;
-    }
-  }
 
   return (
     <div style={{ marginTop: 40 }}>
@@ -119,18 +101,8 @@ export default function DiscountInputView() {
         <div className="section">
           <div
             className="file-drop"
-            onClick={async () => {
+            onClick={() => {
               if (busy) return;
-
-              if (inputSource === "xlsx") {
-                const path = await window.ufm.openXlsxDialog();
-                if (!path) return;
-                setInputSource("xlsx");
-                setXlsxPath(path);
-                setFiles([path.split("/").pop() || "file.xlsx"]);
-                return;
-              }
-
               fileInputRef.current?.click();
             }}
             onDragOver={(e) => e.preventDefault()}
@@ -148,7 +120,7 @@ export default function DiscountInputView() {
             ) : (
               <>
                 File selected
-                <span className="hint">Click Generate to continue</span>
+                <span className="hint">Click Submit to continue</span>
               </>
             )}
           </div>
@@ -158,10 +130,7 @@ export default function DiscountInputView() {
             type="file"
             hidden
             accept=".txt,.csv,.tsv,.xlsx,image/*"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleSelectedFile(file);
-            }}
+            onChange={(e) => handleFiles(e.target.files)}
           />
 
           {files.length > 0 && (
@@ -175,12 +144,6 @@ export default function DiscountInputView() {
         </div>
 
         <div className="divider" />
-
-        <div style={{ marginBottom: 8, fontSize: 12, fontWeight: 700 }}>
-          {inputMode === "excel"
-            ? "🟦 Excel table detected"
-            : "🟨 Free text detected"}
-        </div>
 
         <div className="section">
           <textarea

@@ -1,5 +1,3 @@
-// server/flyer-automation/layout/sizeFromImage.js
-
 /**
  * Decide flyer card size from image aspect ratio
  * aspectRatio = width / height
@@ -15,4 +13,17 @@ export function decideSizeFromAspectRatio(aspectRatio) {
 
   // Default
   return "SMALL";
+}
+
+/**
+ * Adapter used by EditorCanvas / layout code
+ * Accepts an image-like object with width/height
+ */
+export function sizeFromImage(image) {
+  if (!image || !image.width || !image.height) {
+    return "SMALL";
+  }
+
+  const aspectRatio = image.width / image.height;
+  return decideSizeFromAspectRatio(aspectRatio);
 }

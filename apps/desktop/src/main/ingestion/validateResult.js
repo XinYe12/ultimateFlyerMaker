@@ -1,14 +1,19 @@
 // apps/desktop/src/main/ingestion/validateResult.js
+// Validates FINAL ingest result before entering Editor State
 
 export function validateResult(result) {
   if (!result || typeof result !== "object") return false;
 
-  const hasAnyCoreField =
-    Boolean(result.english_name) ||
-    Boolean(result.chinese_name) ||
-    Boolean(result.sale_price);
+  // required structural fields
+  if (!result.inputPath) return false;
+  if (!result.cutoutPath) return false;
+  if (!result.layout || !result.layout.size) return false;
 
-  if (!hasAnyCoreField) return false;
+  // title must exist (can be empty string, but must be present)
+  if (!result.title || typeof result.title.en !== "string") return false;
+
+  // OCR must be array (can be empty)
+  if (!Array.isArray(result.ocr)) return false;
 
   return true;
 }

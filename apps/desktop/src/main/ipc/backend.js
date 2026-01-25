@@ -21,11 +21,30 @@ export function registerBackendIpc() {
 
 
   // ---------- MATCH DISCOUNTS TO SLOTS ----------
-  ipcMain.handle(
-    "ufm:matchDiscountToSlots",
-    async (_event, args) => {
-      const { images, discounts, opts } = args || {};
-      return matchDiscountToSlots(images, discounts, opts);
-    }
-  );
+ipcMain.handle(
+  "match-discount-to-slots",
+  async (_event, payload) => {
+    console.log("🧩 BACKEND MATCHING START");
+
+    const result = matchDiscountToSlots(payload);
+
+    result.forEach((r, i) => {
+      console.log(
+        `🧠 IMAGE ${i + 1}:`,
+        r.discount
+          ? {
+              name: r.discount.en || r.discount.english_name,
+              score: r.matchScore,
+              confidence: r.matchConfidence,
+            }
+          : "NO MATCH"
+      );
+    });
+
+    console.log("🧩 BACKEND MATCHING END");
+
+    return result;
+  }
+);
+
 }

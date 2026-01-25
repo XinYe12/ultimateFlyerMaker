@@ -1,187 +1,197 @@
 // apps/desktop/src/renderer/App.tsx
 
 import { useState } from "react";
+import React from "react";
+
 import ImageDropArea from "./components/ImageDropArea";
-import IngestResultView from "./IngestResultView";
 import DiscountInputView from "./discount/DiscountInputView";
+import DepartmentSelector from "./components/DepartmentSelector";
+
 import { useIngestQueue } from "./useIngestQueue";
-import { buildFlyerItems } from "./buildFlyerItems";
-import { placeItems } from "../../../shared/flyer/layout/placeItems";
+import { matchDiscountsInEditor } from "./services/matchDiscounts";
+import { glueDiscountItems } from "./editor/glueDiscountItems";
 import { buildCanvaPayload } from "../../../shared/flyer/export/buildCanvaPayload";
-import { IngestItem } from "./types";
+
+import EditorCanvas from "./editor/EditorCanvas";
+import { loadDepartmentDraft } from "./editor/draftStorage";
+
+/* ---------------- ERROR BOUNDARY ---------------- */
+
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error("RENDER CRASH:", error);
+  }
+
+  render() {
+    const { error } = this.state;
+
+    if (error) {
+      return (
+        <div style={{ padding: 32, background: "#111", color: "red" }}>
+          <h1>RENDER CRASH</h1>
+          <pre>{error.stack ?? error.message}</pre>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 type ElectronFile = File & { path: string };
 
 export default function App() {
-  const { queue, enqueue } = useIngestQueue();
+  // ---------------- EDITOR STATE ----------------
+  const [department, setDepartment] = useState("grocery");
+  const { queue: editorQueue, enqueue, updateItem } = useIngestQueue();
 
-  const [flyerItems, setFlyerItems] = useState<any[]>([]);
-  const [placements, setPlacements] = useState<any[]>([]);
+  // ---------------- CANVA EXPORT STATE ----------------
   const [canvaPayload, setCanvaPayload] = useState<any | null>(null);
-  const [discounts, setDiscounts] = useState<any[]>([]);
 
-
+  // ---------------- IMAGE INGEST ----------------
   const handleDrop = (files: ElectronFile[]) => {
     const imagePaths = files
-      .filter(f => {
-        const name = f.path.toLowerCase();
-        return (
-          name.endsWith(".jpg") ||
-          name.endsWith(".jpeg") ||
-          name.endsWith(".png")
-        );
-      })
+      .filter(f => /\.(jpg|jpeg|png)$/i.test(f.path))
       .map(f => f.path);
 
-    if (imagePaths.length > 0) {
-      enqueue(imagePaths);
-    }
+    if (!imagePaths.length) return;
+
+    enqueue(imagePaths);
+    setCanvaPayload(null);
   };
 
-  const buildFlyer = async () => {
-    const readyImages = queue
+  // ---------------- DISCOUNT → AUTHORITATIVE TITLE ----------------
+  const handleAuthoritativeTitle = (title: string) => {
+    editorQueue.forEach(item => {
+      if (item.status !== "done" || !item.result) return;
+
+      updateItem(item.id, {
+        result: {
+          ...item.result,
+          title: {
+            ...item.result.title,
+            en: title,
+            confidence: "high",
+          },
+        },
+        userEdited: { ...item.userEdited, title: true },
+        titleReplaceBackup: undefined,
+      });
+    });
+  };
+
+  // ---------------- RUN MATCHING (EDITOR) ----------------
+  const runEditorMatching = async () => {
+    const images = editorQueue
       .filter(q => q.status === "done" && q.result)
       .map(q => q.result);
 
-    if (!readyImages.length) return;
+    if (!images.length) return;
 
-    // 🔑 MATCH DISCOUNTS → SLOTS (AUTHORITATIVE)
-    const discounts = await window.ufm.getDiscounts();
-    console.log("[App] discounts from main =", discounts);
+    const matched = await matchDiscountsInEditor(images);
 
-    const matchedImages = await window.ufm.matchDiscountToSlots({
-      images: readyImages,
-      discounts
+    matched.forEach((m: any, idx: number) => {
+      const item = editorQueue[idx];
+      if (!item || !item.result) return;
+
+      updateItem(item.id, {
+        result: {
+          ...item.result,
+          discount: m.discount,
+          matchScore: m.matchScore,
+          matchConfidence: m.matchConfidence,
+        },
+      });
     });
+  };
 
+  // ---------------- BUILD FLYER (EXPORT ONLY) ----------------
+  const buildFlyer = async () => {
+    const gluedItems = glueDiscountItems(editorQueue);
+    if (!gluedItems.length) return;
 
+    // NOTE:
+    // Layout is now handled INSIDE EditorCanvas via layoutFlyer.
+    // For export, we rely on EditorCanvas-generated placements later.
+    // For now, Canva payload is content-only.
 
-    // 1️⃣ build flyer items
-    const items = buildFlyerItems(matchedImages);
-    setFlyerItems(items);
-
-    // 2️⃣ place items
-    const grid = placeItems(items, {
-      columns: 4,
-      maxItems: 16
-    });
-    setPlacements(grid);
-
-    // 3️⃣ build canva payload
     const payload = buildCanvaPayload({
-      items,
-      placements: grid
+      items: gluedItems,
+      placements: [], // TEMP: will be injected from layout engine later
     });
 
     setCanvaPayload(payload);
   };
-// pull parsed discounts from main (authoritative)
 
-
-  const itemMap = new Map(flyerItems.map(i => [i.id, i]));
-
+  // ---------------- RENDER ----------------
   return (
-    <div
-      style={{
-        height: "100vh",
-        padding: 32,
-        boxSizing: "border-box",
-        background: "#f5f5f5",
-        fontFamily: "system-ui",
-        overflow: "auto"
-      }}
-    >
-      <h1>Ultimate Flyer Maker — Ingestion</h1>
+    <ErrorBoundary>
+      <div
+        style={{
+          height: "100vh",
+          padding: 32,
+          boxSizing: "border-box",
+          background: "#f5f5f5",
+          fontFamily: "system-ui",
+          overflow: "auto",
+        }}
+      >
+        <h1>Ultimate Flyer Maker</h1>
 
-      <DiscountInputView />
+        <DepartmentSelector
+          value={department}
+          onChange={setDepartment}
+        />
 
-      <ImageDropArea busy={false} onDrop={handleDrop} />
+        <DiscountInputView
+          onAuthoritativeTitle={handleAuthoritativeTitle}
+          onDiscountsParsed={runEditorMatching}
+        />
 
-      {queue.length > 0 && (
-        <div style={{ marginTop: 32 }}>
-          <h2>Ingested Images ({queue.length})</h2>
+        <ImageDropArea busy={false} onDrop={handleDrop} />
 
-          {queue.map((item: IngestItem) => (
-            <IngestResultView key={item.id} item={item} />
-          ))}
-        </div>
-      )}
-
-      <div style={{ marginTop: 24 }}>
-        <button
-          onClick={buildFlyer}
-          disabled={!queue.some(q => q.status === "done")}
-        >
-          Build Flyer
-        </button>
-      </div>
-
-      {placements.length > 0 && (
-        <div style={{ marginTop: 32 }}>
-          <h2>Flyer Preview (Debug)</h2>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(4, 1fr)",
-              gap: 12,
-              background: "#ddd",
-              padding: 12
-            }}
+        <div style={{ marginTop: 24 }}>
+          <button
+            onClick={buildFlyer}
+            disabled={!editorQueue.some(q => q.status === "done")}
           >
-            {placements.map((p: any) => {
-              const item = itemMap.get(p.itemId);
+            Build Flyer (Preview)
+          </button>
+        </div>
 
-              return (
-                <div
-                  key={p.itemId}
-                  style={{
-                    background: "#fff",
-                    padding: 8,
-                    border:
-                      item?.matchConfidence === "low"
-                        ? "2px solid orange"
-                        : "1px solid #ccc",
-                    gridColumn: `span ${p.w || 1}`,
-                    gridRow: `span ${p.h || 1}`
-                  }}
-                >
-                  <div style={{ fontSize: 12, fontWeight: "bold" }}>
-                    {item?.meta?.en || "NO TITLE"}
-                  </div>
+        <EditorCanvas
+          editorQueue={glueDiscountItems(editorQueue)}
+          templateId="weekly_v1"
+          department={department}
+        />
 
-                  {item?.matchConfidence === "low" && (
-                    <div style={{ fontSize: 10, color: "orange", fontWeight: 600 }}>
-                      ⚠ Low confidence match
-                    </div>
-                  )}
-                  <div style={{ fontSize: 11, color: "#c00" }}>
-                    {item?.price?.display || ""}
-                  </div>
-                </div>
-              );
-            })}
+        {canvaPayload && (
+          <div style={{ marginTop: 32 }}>
+            <h2>Canva Payload</h2>
+            <pre
+              style={{
+                padding: 12,
+                background: "#111",
+                color: "#0ff",
+                maxHeight: 400,
+                overflow: "auto",
+                fontSize: 12,
+              }}
+            >
+              {JSON.stringify(canvaPayload, null, 2)}
+            </pre>
           </div>
-        </div>
-      )}
-
-      {canvaPayload && (
-        <div style={{ marginTop: 32 }}>
-          <h2>Canva Payload</h2>
-          <pre
-            style={{
-              padding: 12,
-              background: "#111",
-              color: "#0ff",
-              maxHeight: 400,
-              overflow: "auto",
-              fontSize: 12
-            }}
-          >
-            {JSON.stringify(canvaPayload, null, 2)}
-          </pre>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </ErrorBoundary>
   );
 }

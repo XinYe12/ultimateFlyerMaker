@@ -73,9 +73,10 @@ function buildRowKey(row) {
 }
 
 function buildSlotKey(slot) {
-  const meta = slot.meta ?? slot;
-  return `${norm(meta.en)} ${normZh(meta.zh)} ${normalizeSize(meta.size)}`.trim();
+  const ocrTexts = slot.ocr?.[0]?.rec_texts ?? [];
+  return norm(ocrTexts.join(" "));
 }
+
 
 function score(slot, row) {
   const sk = buildSlotKey(slot);
@@ -91,7 +92,10 @@ function score(slot, row) {
  * discountRows: parsed discounts
  * RETURNS: slots[] with `discount` attached
  */
-export function matchDiscountToSlots(slots, discountRows, opts = {}) {
+export function matchDiscountToSlots(
+  { images: slots, discounts: discountRows },
+  opts = {}
+) {
   const threshold =
     typeof opts.threshold === "number" ? opts.threshold : 0.35;
 
@@ -107,7 +111,6 @@ export function matchDiscountToSlots(slots, discountRows, opts = {}) {
 
     for (const row of rows) {
       if (used.has(row.id)) continue;
-      if (!sizeCompatible(slot.layout?.size, row.size)) continue;
 
       const s = score(slot, row);
       if (!best || s > best.score) {
