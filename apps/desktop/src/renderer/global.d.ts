@@ -25,3 +25,9 @@ declare global {
     };
   }
 }
+
+declare module '../../../../shared/flyer/layout/sizeFromImage' {
+  export function sizeFromImage(
+    imagePath: string
+  ): { width: number; height: number }
+}

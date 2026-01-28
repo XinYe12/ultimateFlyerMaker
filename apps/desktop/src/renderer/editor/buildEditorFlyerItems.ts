@@ -1,23 +1,24 @@
-import { sizeFromImage } from "@/shared/flyer/layout/sizeFromImage";
-import { EditorItem } from "./glueDiscountItems";
+import { sizeFromImage } from '../../../../shared/flyer/layout/sizeFromImage'
+import type { IngestItem } from '../types'
 
-export function buildEditorFlyerItems(items: EditorItem[]) {
-  return items.map((item) => {
-    const size = sizeFromImage(item.image);
+export function buildEditorFlyerItems(items: IngestItem[]) {
+  return items
+    .map((item) => {
+      const image = item.result?.cutoutPath
+      if (!image) return null
 
-    return {
-      id: item.id,
+      const size = sizeFromImage(image)
 
-      // layout-required
-      width: size.width,
-      height: size.height,
-
-      // editor data
-      image: item.image,
-      title: item.title,
-      price: item.price,
-      discount: item.discount,
-      matchConfidence: item.matchConfidence,
-    };
-  });
+      return {
+        id: item.id,
+        width: size.width,
+        height: size.height,
+        image,
+        title: item.result?.title,
+        price: item.result?.discount,
+        discount: item.result?.discount,
+        matchConfidence: item.result?.title?.confidence,
+      }
+    })
+    .filter(Boolean)
 }
