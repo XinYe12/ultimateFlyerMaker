@@ -11,16 +11,20 @@ const DEPARTMENT_LABELS: Record<string, string> = {
   seafood: "Seafood",
   fruit: "Fruit",
   vegetable: "Vegetable",
+  hot_sale: "Hot Sale",
+  produce: "Produce",
 };
 
 export default function DepartmentSelector({
   value,
   onChange,
+  departments: departmentsProp,
 }: {
   value: string;
   onChange: (id: string) => void;
+  departments?: string[];
 }) {
-  const departments = Object.keys(DEPARTMENT_LABELS);
+  const departments = departmentsProp ?? Object.keys(DEPARTMENT_LABELS);
 
   return (
     <div

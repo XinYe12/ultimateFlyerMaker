@@ -1,5 +1,28 @@
 import { FlyerPlacement } from "../models/FlyerPlacement"
 
+export function layoutFlyerSlots({
+  items,
+  pageId,
+  regionId,
+  slots,
+}: {
+  items: { id: string }[]
+  pageId: string
+  regionId: string
+  slots: { x: number; y: number; width: number; height: number }[]
+}): FlyerPlacement[] {
+  return items.slice(0, slots.length).map((item, i) => ({
+    itemId: item.id,
+    pageId,
+    regionId,
+    cardSize: "SMALL" as const,
+    x: slots[i].x,
+    y: slots[i].y,
+    width: slots[i].width,
+    height: slots[i].height,
+  }))
+}
+
 type LayoutItem = {
   id: string
 }

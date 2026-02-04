@@ -1,0 +1,104 @@
+{
+  "templateId": "weekly_v2",
+  "pages": [
+    {
+      "pageId": "p1",
+      "imagePath": "/assets/flyer_templates/weekly_v2/p1.png",
+      "departments": {
+        "hot_sale": {
+          "slots": [
+            { "x": 0, "y": 674, "width": 819, "height": 764 },
+            { "x": 825, "y": 674, "width": 825, "height": 372 },
+            { "x": 825, "y": 1051, "width": 825, "height": 387 },
+            { "x": 0, "y": 1443, "width": 819, "height": 328 },
+            { "x": 0, "y": 1776, "width": 819, "height": 362 },
+            { "x": 0, "y": 2143, "width": 819, "height": 373 }
+          ]
+        },
+        "seafood": {
+          "slots": [
+            { "x": 825, "y": 1513, "width": 825, "height": 1003 }
+          ]
+        }
+      }
+    },
+    {
+      "pageId": "p2",
+      "imagePath": "/assets/flyer_templates/weekly_v2/p2.png",
+      "departments": {
+        "produce": {
+          "slots": [
+            { "x": 0, "y": 677, "width": 546, "height": 457 },
+            { "x": 552, "y": 677, "width": 546, "height": 457 },
+            { "x": 1104, "y": 677, "width": 546, "height": 457 },
+            { "x": 0, "y": 1139, "width": 823, "height": 463 },
+            { "x": 829, "y": 1139, "width": 821, "height": 463 },
+            { "x": 0, "y": 1607, "width": 412, "height": 455 },
+            { "x": 418, "y": 1607, "width": 405, "height": 455 },
+            { "x": 829, "y": 1607, "width": 403, "height": 455 },
+            { "x": 1238, "y": 1607, "width": 412, "height": 455 },
+            { "x": 0, "y": 2067, "width": 412, "height": 437 },
+            { "x": 418, "y": 2067, "width": 405, "height": 437 },
+            { "x": 829, "y": 2067, "width": 403, "height": 437 },
+            { "x": 1238, "y": 2067, "width": 412, "height": 437 }
+          ]
+        }
+      }
+    },
+    {
+      "pageId": "p3",
+      "imagePath": "/assets/flyer_templates/weekly_v2/p3.png",
+      "departments": {
+        "grocery": {
+          "slots": [
+            { "x": 0, "y": 270, "width": 536, "height": 575 },
+            { "x": 541, "y": 270, "width": 549, "height": 575 },
+            { "x": 1095, "y": 270, "width": 555, "height": 575 },
+            { "x": 0, "y": 849, "width": 536, "height": 486 },
+            { "x": 541, "y": 849, "width": 549, "height": 486 },
+            { "x": 1095, "y": 849, "width": 555, "height": 486 },
+            { "x": 0, "y": 1340, "width": 805, "height": 406 },
+            { "x": 811, "y": 1340, "width": 839, "height": 406 },
+            { "x": 0, "y": 1750, "width": 541, "height": 373 },
+            { "x": 546, "y": 1750, "width": 547, "height": 373 },
+            { "x": 1098, "y": 1750, "width": 552, "height": 373 },
+            { "x": 0, "y": 2127, "width": 541, "height": 387 },
+            { "x": 546, "y": 2127, "width": 547, "height": 387 },
+            { "x": 1098, "y": 2127, "width": 552, "height": 387 }
+          ]
+        }
+      }
+    },
+    {
+      "pageId": "p4",
+      "imagePath": "/assets/flyer_templates/weekly_v2/p4.png",
+      "departments": {
+        "meat": {
+          "slots": [
+            { "x": 0, "y": 322, "width": 406, "height": 411 },
+            { "x": 412, "y": 322, "width": 399, "height": 411 },
+            { "x": 816, "y": 322, "width": 409, "height": 411 },
+            { "x": 1231, "y": 322, "width": 419, "height": 411 },
+            { "x": 0, "y": 738, "width": 406, "height": 467 },
+            { "x": 412, "y": 738, "width": 813, "height": 467 },
+            { "x": 1231, "y": 738, "width": 419, "height": 467 }
+          ]
+        },
+        "frozen": {
+          "slots": [
+            { "x": 0, "y": 1265, "width": 405, "height": 411 },
+            { "x": 410, "y": 1265, "width": 402, "height": 411 },
+            { "x": 817, "y": 1265, "width": 412, "height": 411 },
+            { "x": 1235, "y": 1265, "width": 415, "height": 411 },
+            { "x": 0, "y": 1681, "width": 515, "height": 400 },
+            { "x": 520, "y": 1681, "width": 582, "height": 400 },
+            { "x": 1107, "y": 1681, "width": 543, "height": 400 },
+            { "x": 0, "y": 2086, "width": 515, "height": 424 },
+            { "x": 520, "y": 2086, "width": 582, "height": 424 },
+            { "x": 1107, "y": 2086, "width": 543, "height": 424 }
+          ]
+        }
+      }
+    }
+  ]
+}

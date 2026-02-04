@@ -16,12 +16,17 @@ export type DepartmentId =
   | "meat"
   | "seafood"
   | "fruit"
-  | "vegetable";
+  | "vegetable"
+  | "hot_sale"
+  | "produce";
 
 export type IngestResult = {
   inputPath: string;
   cutoutPath: string;
   layout: { size: string };
+  titleImagePath?: string;
+  priceImagePath?: string;
+
 
   title: {
     en: string;

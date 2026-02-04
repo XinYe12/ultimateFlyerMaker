@@ -1,6 +1,6 @@
 // apps/desktop/src/renderer/App.tsx
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import React from "react";
 
 import ImageDropArea from "./components/ImageDropArea";
@@ -14,6 +14,7 @@ import { buildCanvaPayload } from "../../../shared/flyer/export/buildCanvaPayloa
 import { IngestItem } from "./types";
 import EditorCanvas from "./editor/EditorCanvas";
 import { loadDepartmentDraft } from "./editor/draftStorage";
+import { loadFlyerTemplateConfig } from "./editor/loadFlyerTemplateConfig";
 
 /* ---------------- ERROR BOUNDARY ---------------- */
 
@@ -51,8 +52,26 @@ type ElectronFile = File & { path: string };
 
 export default function App() {
   // ---------------- EDITOR STATE ----------------
+  const [templateId, setTemplateId] = useState("weekly_v1");
   const [department, setDepartment] = useState("grocery");
+  const [availableDepartments, setAvailableDepartments] = useState<string[]>(["grocery"]);
   const { queue: editorQueue, enqueue, updateItem } = useIngestQueue();
+  const [discountLabels, setDiscountLabels] = useState<{ titleImagePath?: string; priceImagePath?: string }[]>([]);
+
+  // load template config → extract available departments
+  useEffect(() => {
+    loadFlyerTemplateConfig(templateId).then(config => {
+      const depts = new Set<string>();
+      config.pages.forEach(page => {
+        Object.keys(page.departments).forEach(d => depts.add(d));
+      });
+      const deptList = Array.from(depts);
+      setAvailableDepartments(deptList);
+      if (!depts.has(department)) {
+        setDepartment(deptList[0] ?? "grocery");
+      }
+    });
+  }, [templateId]);
 
   // ---------------- CANVA EXPORT STATE ----------------
   const [canvaPayload, setCanvaPayload] = useState<any | null>(null);
@@ -90,30 +109,21 @@ export default function App() {
   };
 
   // ---------------- RUN MATCHING (EDITOR) ----------------
-  const runEditorMatching = async () => {
-    const ingestItems: IngestItem[] = editorQueue.filter(
-      (i): i is IngestItem => i && typeof i === "object" && "id" in i
-    );
+// ---------------- RUN MATCHING (EDITOR) ----------------
+const runEditorMatching = async () => {
+  // 1️⃣ ask backend to export discount images (order = slot order)
+  const imageResults = await window.ufm.exportDiscountImages(
+    await window.ufm.getDiscounts()
+  );
 
-    if (!ingestItems.length) return;
-
-    const matched = await matchDiscountsInEditor(ingestItems);
-
-
-    matched.forEach((m: any, idx: number) => {
-      const item = editorQueue[idx];
-      if (!item || !item.result) return;
-
-      updateItem(item.id, {
-        result: {
-          ...item.result,
-          discount: m.discount,
-          matchScore: m.matchScore,
-          matchConfidence: m.matchConfidence,
-        },
-      });
-    });
-  };
+  // 2️⃣ collect title + price image paths, in order
+  setDiscountLabels(
+    imageResults.map((r: any) => ({
+      titleImagePath: r.titleImagePath,
+      priceImagePath: r.priceImagePath,
+    }))
+  );
+};
 
   // ---------------- BUILD FLYER (EXPORT ONLY) ----------------
   const buildFlyer = async () => {
@@ -154,9 +164,31 @@ export default function App() {
       >
         <h1>Ultimate Flyer Maker</h1>
 
+        {/* template selector */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+          {["weekly_v1", "weekly_v2"].map(id => (
+            <button
+              key={id}
+              onClick={() => setTemplateId(id)}
+              style={{
+                padding: "6px 14px",
+                border: "none",
+                borderRadius: 6,
+                background: templateId === id ? "#4C6EF5" : "#E9ECEF",
+                color: templateId === id ? "#fff" : "#333",
+                fontWeight: templateId === id ? 600 : 500,
+                cursor: "pointer",
+              }}
+            >
+              {id}
+            </button>
+          ))}
+        </div>
+
         <DepartmentSelector
           value={department}
           onChange={setDepartment}
+          departments={availableDepartments}
         />
 
         <DiscountInputView
@@ -174,13 +206,12 @@ export default function App() {
             Build Flyer (Preview)
           </button>
         </div>
-
-        <EditorCanvas
-          editorQueue={editorQueue}
-          templateId="weekly_v1"
-          department={department}
-        />
-
+          <EditorCanvas
+            editorQueue={editorQueue}
+            templateId={templateId}
+            department={department}
+            discountLabels={discountLabels}
+          />
         {canvaPayload && (
           <div style={{ marginTop: 32 }}>
             <h2>Canva Payload</h2>

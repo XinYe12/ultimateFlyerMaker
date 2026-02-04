@@ -15,7 +15,6 @@ export function registerBackendIpc() {
   });
 
   ipcMain.handle("ufm:getDiscounts", () => {
-    
     return getLastParsedDiscounts();
   });
 

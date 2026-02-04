@@ -1,25 +1,34 @@
 // FILE: apps/desktop/src/renderer/editor/EditorCanvas.tsx
 // ROLE: render ONLY based on template config (authoritative)
 
-import { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import {
   loadFlyerTemplateConfig,
   findPageForDepartment,
 } from "./loadFlyerTemplateConfig";
 import RenderFlyerPlacements from "./RenderFlyerPlacements";
-import { layoutFlyer } from "../../../../shared/flyer/layout/layoutFlyer";
+import { layoutFlyer, layoutFlyerSlots } from "../../../../shared/flyer/layout/layoutFlyer";
+import { isSlottedDepartment } from "./loadFlyerTemplateConfig";
 import { saveDepartmentDraft } from "./draftStorage";
 
 const PREVIEW_SCALE = 0.5;
+
+function toImgSrc(p?: string): string | null {
+  if (!p) return null;
+  if (p.startsWith("http") || p.startsWith("file://")) return p;
+  return `file://${p}`;
+}
 
 export default function EditorCanvas({
   editorQueue,
   templateId,
   department,
+  discountLabels,
 }: {
   editorQueue: any[];
   templateId: string;
   department: string;
+  discountLabels?: { titleImagePath?: string; priceImagePath?: string }[];
 }) {
   const [config, setConfig] = useState<any | null>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
@@ -47,8 +56,17 @@ export default function EditorCanvas({
   const placements = useMemo(() => {
     if (!page || !region || items.length === 0) return [];
 
+    if (isSlottedDepartment(region)) {
+      return layoutFlyerSlots({
+        items,
+        pageId: page.pageId,
+        regionId: department,
+        slots: region.slots,
+      });
+    }
+
     return layoutFlyer({
-       items,
+      items,
       pageId: page.pageId,
       region: {
         id: department,
@@ -109,8 +127,23 @@ export default function EditorCanvas({
             }}
           />
 
-          {/* department region (authoritative pixels) */}
-          {imageSize && (
+          {/* department region / slot outlines */}
+          {imageSize && isSlottedDepartment(region) && region.slots.map((slot, i) => (
+            <div
+              key={`slot-${i}`}
+              style={{
+                position: "absolute",
+                left: slot.x,
+                top: slot.y,
+                width: slot.width,
+                height: slot.height,
+                border: "2px dashed rgba(255,0,0,0.4)",
+                background: "rgba(255,0,0,0.03)",
+                pointerEvents: "none",
+              }}
+            />
+          ))}
+          {imageSize && !isSlottedDepartment(region) && (
             <div
               style={{
                 position: "absolute",
@@ -125,14 +158,50 @@ export default function EditorCanvas({
             />
           )}
 
-          {/* items */}
-          {placements.length > 0 && (
-            
-            <RenderFlyerPlacements
-              items={items}
-              placements={placements}
-            />
-          )}
+{/* items */}
+{placements.length > 0 && (
+  <RenderFlyerPlacements
+    items={items}
+    placements={placements}
+  />
+)}
+
+{/* title + price labels — one pair per placement */}
+{imageSize && placements.map((p, i) => {
+  const label = discountLabels?.[i];
+  const titleSrc = toImgSrc(label?.titleImagePath);
+  const priceSrc = toImgSrc(label?.priceImagePath);
+  return (
+    <React.Fragment key={`label-${i}`}>
+      {titleSrc && (
+        <img
+          src={titleSrc}
+          style={{
+            position: "absolute",
+            left: p.x,
+            top: p.y,
+            width: p.width * 0.7,
+            height: "auto",
+            pointerEvents: "none",
+          }}
+        />
+      )}
+      {priceSrc && (
+        <img
+          src={priceSrc}
+          style={{
+            position: "absolute",
+            left: p.x + p.width * 0.45,
+            top: p.y + p.height * 0.6,
+            width: p.width * 0.5,
+            height: "auto",
+            pointerEvents: "none",
+          }}
+        />
+      )}
+    </React.Fragment>
+  );
+})}
         </div>
       </div>
     </div>
