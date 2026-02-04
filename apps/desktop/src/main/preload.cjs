@@ -76,5 +76,31 @@ contextBridge.exposeInMainWorld("ufm", {
   matchDiscountToSlots: (payload) =>
   ipcRenderer.invoke("match-discount-to-slots", payload),
 
-  
+  // ---------- JOB QUEUE ----------
+  startJob: (job) => {
+    console.log("PRELOAD startJob received:", job?.id);
+    return ipcRenderer.invoke("ufm:startJob", job);
+  },
+
+  getJobQueueStatus: () => {
+    return ipcRenderer.invoke("ufm:getJobQueueStatus");
+  },
+
+  onJobProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:jobProgress", handler);
+    return () => ipcRenderer.removeListener("ufm:jobProgress", handler);
+  },
+
+  onJobComplete: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:jobComplete", handler);
+    return () => ipcRenderer.removeListener("ufm:jobComplete", handler);
+  },
+
+  onJobError: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:jobError", handler);
+    return () => ipcRenderer.removeListener("ufm:jobError", handler);
+  },
 });

@@ -130,3 +130,47 @@ export type DiscountItem = {
     reasons: string[];
   };
 };
+
+// =======================
+// JOB QUEUE TYPES
+// =======================
+
+export type JobStatus = "drafting" | "queued" | "processing" | "completed" | "failed";
+
+export type ImageTask = {
+  id: string;
+  path: string;
+  status: "pending" | "processing" | "done" | "error";
+  result?: IngestResult;
+  error?: string;
+};
+
+export type DiscountInput = {
+  type: "text" | "xlsx";
+  source: string;
+  parsedItems?: any[];
+  status: "pending" | "parsing" | "done" | "error";
+};
+
+export type FlyerJob = {
+  id: string;
+  name: string;
+  department: DepartmentId;
+  templateId: string;
+  images: ImageTask[];
+  discount: DiscountInput | null;
+  status: JobStatus;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  progress: {
+    totalImages: number;
+    processedImages: number;
+    currentStep: string;
+  };
+  result?: {
+    processedImages: ImageTask[];
+    discountLabels: { titleImagePath?: string; priceImagePath?: string }[];
+  };
+  error?: string;
+};

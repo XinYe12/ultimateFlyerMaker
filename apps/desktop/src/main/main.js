@@ -13,6 +13,7 @@ import { parseDiscountText } from "./ipc/parseDiscountText.js";
 import { exportDiscountImages } from "./ipc/exportDiscountImages.js";
 import { parseDiscountXlsx } from "./ipc/parseDiscountXlsx.js";
 import { ingestImages } from "./ipc/ingestImages.js";
+import { getJobProcessor } from "./jobs/JobProcessor.js";
 
 import { startBackend, stopBackend } from "./startBackend.js";
 import { waitForBackend } from "./waitForBackend.js";
@@ -96,6 +97,23 @@ ipcMain.handle("ufm:exportDiscountImages", (_event, items) => {
 
 ipcMain.handle("ingestImages", ingestImages);
 
+/* ---------- IPC: job queue ---------- */
+const jobProcessor = getJobProcessor();
+
+ipcMain.handle("ufm:startJob", async (event, job) => {
+  console.log("[main] Starting job:", job.id, job.name);
+  jobProcessor.enqueue(job);
+  return { queued: true, jobId: job.id };
+});
+
+ipcMain.handle("ufm:getJobQueueStatus", async () => {
+  return {
+    queueLength: jobProcessor.getQueueLength(),
+    isProcessing: jobProcessor.isProcessing,
+    currentJobId: jobProcessor.currentJobId,
+  };
+});
+
 /* ---------- App bootstrap ---------- */
 app.whenReady().then(async () => {
   try {
@@ -115,6 +133,17 @@ app.whenReady().then(async () => {
 
     // 5️⃣ Create window
     createWindow();
+
+    // 6️⃣ Set up job processor event forwarding to renderer
+    jobProcessor.on("progress", (jobId, progress) => {
+      mainWindow?.webContents.send("ufm:jobProgress", { jobId, progress });
+    });
+    jobProcessor.on("complete", (jobId, result) => {
+      mainWindow?.webContents.send("ufm:jobComplete", { jobId, result });
+    });
+    jobProcessor.on("error", (jobId, error) => {
+      mainWindow?.webContents.send("ufm:jobError", { jobId, error: error?.message || String(error) });
+    });
   } catch (err) {
     console.error("❌ App startup failed:", err);
     dialog.showErrorBox(

@@ -91,6 +91,7 @@ export default function EditorCanvas({
   }
   console.log("EditorCanvas items:", items);
   console.log("EditorCanvas placements:", placements);
+  console.log("EditorCanvas discountLabels:", discountLabels);
 
   return (
     <div

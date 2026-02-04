@@ -101,6 +101,11 @@ export function useIngestQueue() {
     setQueue([]);
   }
 
+  // ---------- LOAD PRE-PROCESSED ITEMS ----------
+  function loadItems(items: IngestItem[]) {
+    setQueue(items);
+  }
+
   return {
     queue,          // editor state
     enqueue,
@@ -108,5 +113,6 @@ export function useIngestQueue() {
     retry,
     remove,
     clear,
+    loadItems,
   };
 }
