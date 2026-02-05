@@ -7,21 +7,39 @@ import XLSX from "xlsx";
 
 /* -------------------- helpers -------------------- */
 
+const WEIGHT_GRAM_MIN = 50;
+const WEIGHT_GRAM_MAX = 9999;
+
+function isLikelyWeightGrams(num) {
+  return Number.isFinite(num) && num >= WEIGHT_GRAM_MIN && num <= WEIGHT_GRAM_MAX;
+}
+
 function normalizeOptionalString(value) {
   if (value === undefined || value === null) return "";
   return String(value).trim();
 }
 
+/** Extract numeric price; for "2/4.99" use 4.99 not 24.99. */
+function extractPriceForDisplay(salePrice, isMultiBuy) {
+  const raw = String(salePrice ?? "").trim();
+  if (!raw) return "";
+  if (isMultiBuy && raw.includes("/")) {
+    const afterSlash = raw.split("/").pop().replace(/[^0-9.]/g, "");
+    if (afterSlash) return afterSlash;
+  }
+  return raw.replace(/[^0-9.]/g, "");
+}
+
+/** Weights (924, 650g) go to size; only real multi-buy counts use "N FOR $price". */
 function buildPriceDisplay(item) {
-  // MULTI BUY
-  if (item.quantity && item.salePrice) {
-    const price = String(item.salePrice).replace(/[^0-9.]/g, "");
+  const isMultiBuy = !!item.quantity;
+  const price = extractPriceForDisplay(item.salePrice, isMultiBuy);
+
+  if (item.quantity && price) {
     return `${item.quantity} FOR $${price}`;
   }
 
-  // SINGLE
-  if (item.salePrice) {
-    const price = String(item.salePrice).replace(/[^0-9.]/g, "");
+  if (price) {
     const unit = item.unit ? `/${item.unit}` : "";
     return `$${price}${unit}`;
   }
@@ -91,31 +109,54 @@ export async function parseDiscountXlsx(_event, filePath) {
     image_path: null
   });
 
-  const items = Array.isArray(result) ? result : [result];
+  const items = Array.isArray(result?.items) ? result.items : Array.isArray(result) ? result : [];
 
-  return items.map((item) => ({
-    // ---------- TITLES ----------
-    en: normalizeOptionalString(item.english_name),
-    zh: normalizeOptionalString(item.chinese_name),
+  return items.map((item) => {
+    let quantity = item.quantity ?? null;
+    let unit = (item.unit ?? "").toString().trim().toLowerCase();
+    let size = (item.size ?? "").toString().trim();
 
-    // ---------- SIZE ----------
-    size: item.size ?? "",
+    const qNum = quantity != null ? (typeof quantity === "number" ? quantity : parseInt(String(quantity), 10)) : NaN;
 
-    // ---------- RAW PRICES ----------
-    salePrice: item.sale_price ?? "",
-    regularPrice: item.regular_price ?? "",
-
-    // ---------- MULTI / UNIT ----------
-    unit: item.unit ?? "",
-    quantity: item.quantity ?? null,
-
-    // ---------- DISPLAY (REQUIRED) ----------
-    price: {
-      display: buildPriceDisplay({
-        salePrice: item.sale_price,
-        unit: item.unit,
-        quantity: item.quantity
-      })
+    if (unit === "g" || unit === "gram" || unit === "grams") {
+      if (Number.isFinite(qNum) && qNum > 0) {
+        size = size ? `${size} ${qNum}g` : `${qNum}g`;
+      }
+      quantity = null;
+      unit = "";
+    } else if (Number.isFinite(qNum) && isLikelyWeightGrams(qNum)) {
+      size = size ? `${size} ${qNum}g` : `${qNum}g`;
+      quantity = null;
+      unit = "";
+    } else if (unit) {
+      const m = unit.match(/^(\d+)\s*for$|^(\d+)for$/);
+      if (m) {
+        const q = parseInt(m[1] || m[2], 10);
+        if (Number.isFinite(q) && q > 0 && !isLikelyWeightGrams(q)) {
+          quantity = String(q);
+          unit = "pcs";
+        } else {
+          quantity = null;
+          unit = "";
+        }
+      }
     }
-  }));
+
+    return {
+      en: normalizeOptionalString(item.english_name),
+      zh: normalizeOptionalString(item.chinese_name),
+      size: size.trim(),
+      salePrice: item.sale_price ?? "",
+      regularPrice: item.regular_price ?? "",
+      unit,
+      quantity,
+      price: {
+        display: buildPriceDisplay({
+          salePrice: item.sale_price,
+          unit,
+          quantity,
+        }),
+      },
+    };
+  });
 }

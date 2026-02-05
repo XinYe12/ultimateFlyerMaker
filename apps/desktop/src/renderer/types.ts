@@ -170,7 +170,7 @@ export type FlyerJob = {
   };
   result?: {
     processedImages: ImageTask[];
-    discountLabels: { titleImagePath?: string; priceImagePath?: string }[];
+    discountLabels: { id?: string; titleImagePath?: string; priceImagePath?: string }[];
   };
   error?: string;
 };

@@ -28,7 +28,7 @@ export default function EditorCanvas({
   editorQueue: any[];
   templateId: string;
   department: string;
-  discountLabels?: { titleImagePath?: string; priceImagePath?: string }[];
+  discountLabels?: { id?: string; titleImagePath?: string; priceImagePath?: string }[];
 }) {
   const [config, setConfig] = useState<any | null>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
@@ -167,42 +167,51 @@ export default function EditorCanvas({
   />
 )}
 
-{/* title + price labels — one pair per placement */}
-{imageSize && placements.map((p, i) => {
-  const label = discountLabels?.[i];
-  const titleSrc = toImgSrc(label?.titleImagePath);
-  const priceSrc = toImgSrc(label?.priceImagePath);
-  return (
-    <React.Fragment key={`label-${i}`}>
-      {titleSrc && (
-        <img
-          src={titleSrc}
-          style={{
-            position: "absolute",
-            left: p.x,
-            top: p.y,
-            width: p.width * 0.7,
-            height: "auto",
-            pointerEvents: "none",
-          }}
-        />
-      )}
-      {priceSrc && (
-        <img
-          src={priceSrc}
-          style={{
-            position: "absolute",
-            left: p.x + p.width * 0.45,
-            top: p.y + p.height * 0.6,
-            width: p.width * 0.5,
-            height: "auto",
-            pointerEvents: "none",
-          }}
-        />
-      )}
-    </React.Fragment>
-  );
-})}
+{/* title + price labels — one per placement, matched by itemId so order is correct */}
+{imageSize && (() => {
+  const labelByItemId = Array.isArray(discountLabels)
+    ? new Map(
+        discountLabels
+          .filter((l) => l && l.id != null)
+          .map((l) => [l.id!, l])
+      )
+    : new Map();
+  return placements.map((p) => {
+    const label = labelByItemId.get(p.itemId) ?? discountLabels?.[placements.indexOf(p)];
+    const titleSrc = toImgSrc(label?.titleImagePath);
+    const priceSrc = toImgSrc(label?.priceImagePath);
+    return (
+      <React.Fragment key={`label-${p.itemId}`}>
+        {titleSrc && (
+          <img
+            src={titleSrc}
+            style={{
+              position: "absolute",
+              left: p.x,
+              top: p.y,
+              width: p.width * 0.7,
+              height: "auto",
+              pointerEvents: "none",
+            }}
+          />
+        )}
+        {priceSrc && (
+          <img
+            src={priceSrc}
+            style={{
+              position: "absolute",
+              left: p.x + p.width * 0.45,
+              top: p.y + p.height * 0.6,
+              width: p.width * 0.5,
+              height: "auto",
+              pointerEvents: "none",
+            }}
+          />
+        )}
+      </React.Fragment>
+    );
+  });
+})()}
         </div>
       </div>
     </div>

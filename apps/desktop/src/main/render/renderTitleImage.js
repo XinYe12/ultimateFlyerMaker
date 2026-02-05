@@ -101,4 +101,7 @@ export function renderTitleImage({ en = "", zh = "", size = "", outputPath }) {
   }
 
   fs.writeFileSync(outputPath, canvas.toBuffer("image/png"));
+
+  // Return the file path so callers can store it
+  return outputPath;
 }

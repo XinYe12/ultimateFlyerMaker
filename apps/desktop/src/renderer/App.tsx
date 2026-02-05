@@ -55,7 +55,7 @@ export default function App() {
   const [department, setDepartment] = useState("grocery");
   const [availableDepartments, setAvailableDepartments] = useState<string[]>(["grocery"]);
   const { queue: editorQueue, loadItems } = useIngestQueue();
-  const [discountLabels, setDiscountLabels] = useState<{ titleImagePath?: string; priceImagePath?: string }[]>([]);
+  const [discountLabels, setDiscountLabels] = useState<{ id?: string; titleImagePath?: string; priceImagePath?: string }[]>([]);
 
   // load template config → extract available departments
   useEffect(() => {

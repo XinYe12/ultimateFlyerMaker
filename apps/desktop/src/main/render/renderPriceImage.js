@@ -21,7 +21,7 @@ export function renderPriceImage({
   afterPrice,
   beforePrice,
   priceUnit = "",
-  outputPath
+  outputPath,
 }) {
   // ---------- PRICE CLASSIFICATION ----------
   let parsed = classifyPrice(afterPrice);
@@ -77,32 +77,36 @@ export function renderPriceImage({
   drawOutlinedText(ctx, intPart, x, baseY, "240px Anton", 24);
   const bigWidth = ctx.measureText(intPart).width;
 
-  // decimals
+  let unitX = x + bigWidth + 14;
   if (decimalPart) {
+    // draw decimals just above the main price
+    const decimalX = x + bigWidth + 6;
     drawOutlinedText(
       ctx,
       decimalPart,
-      x + bigWidth + 6,
+      decimalX,
       baseY - 110,
       "110px Anton",
       28
     );
+    // place unit just a bit to the right of the decimals,
+    // so it visually reads as `$12.99/EA` instead of being far away
+    unitX = decimalX + 40;
   }
 
   // ---------- UNIT ----------
-  // ONLY render unit for SINGLE prices
-// ---------- UNIT ----------
-// NEVER render ORDER next to the main price (prevents overlap)
-if (renderType === "SINGLE" && unit) {
-  drawOutlinedText(
-    ctx,
-    unit,
-    x + bigWidth + 14,
-    baseY,
-    "100px Anton",
-    28
-  );
-}
+  // ONLY render unit for SINGLE prices (e.g. /EA, /LB)
+  if (renderType === "SINGLE" && unit) {
+    const unitLabel = `/${unit}`;
+    drawOutlinedText(
+      ctx,
+      unitLabel,
+      unitX,
+      baseY,
+      "100px Anton",
+      28
+    );
+  }
 
 
   // ---------- REG PRICE ----------
@@ -114,22 +118,23 @@ if (renderType === "SINGLE" && unit) {
         ? baseY + 110
         : baseY + 70;
 
-      const regText =
-        unit && typeof beforePrice === "string"
-          ? beforePrice.replace(/\/\s*(order|ea|lb|case|box|pack|pkg)/i, "")
-          : beforePrice;
+    const regText =
+      unit && typeof beforePrice === "string"
+        ? beforePrice.replace(/\/\s*(order|ea|lb|case|box|pack|pkg)/i, "")
+        : beforePrice;
 
-      drawOutlinedText(
-        ctx,
-        `REG: ${regText}`,
-        80,
-        regY,
-        "76px Anton",
-        18
-      );
-
+    drawOutlinedText(
+      ctx,
+      `REG: ${regText}`,
+      80,
+      regY,
+      "76px Anton",
+      18
+    );
   }
 
-
   fs.writeFileSync(outputPath, canvas.toBuffer("image/png"));
+
+  // Return the file path so callers can store it
+  return outputPath;
 }

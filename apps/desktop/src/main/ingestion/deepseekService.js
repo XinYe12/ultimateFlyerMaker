@@ -23,6 +23,10 @@ IMPORTANT:
 - Prefer natural language names.
 - The "best_title" MUST be one of the parsed items (or a cleaned version of one).
 
+SIZE vs QUANTITY:
+- Put product weight/size in "size": e.g. "924g", "650g", "360g", "1kg", "500ml". Numbers that are clearly weights go in size, not quantity.
+- Use "quantity" ONLY for multi-buy counts: e.g. "2 for $5" → quantity 2, "3 for $10" → quantity 3. Never put gram weights (like 924, 650) in quantity.
+
 Return a JSON OBJECT with EXACT shape:
 
 {
