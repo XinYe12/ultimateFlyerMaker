@@ -17,3 +17,120 @@
   flex-direction: column;
   gap: 12px;
 }
+
+/* ========== UFM LABEL STYLES ========== */
+
+/* Register project fonts for the renderer
+ * NOTE: paths are relative to this CSS file and point into apps/desktop/assets/fonts
+ */
+@font-face {
+  font-family: "UFM-MavenProBold";
+  /* from apps/desktop/src/renderer/styles → ../../../assets/fonts */
+  src: url("../../../assets/fonts/Maven Pro Bold.OTF") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "UFM-TradeWinds";
+  /* from apps/desktop/src/renderer/styles → ../../../assets/fonts */
+  src: url("../../../assets/fonts/TradeWinds.OTF") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Product titles - Maven Pro Bold */
+.ufm-title {
+  color: #000;
+  line-height: 1.1;
+  box-sizing: border-box;
+  /* Fixed gap from product card border */
+  margin: 8px;
+  padding: 0;
+  text-align: left;
+}
+
+.ufm-title-main {
+  font-family: "UFM-MavenProBold", sans-serif;
+  font-weight: 700;
+  font-size: 18px;
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+}
+
+.ufm-title-meta {
+  font-family: "UFM-MavenProBold", sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+  margin-top: 2px;
+  opacity: 0.9;
+}
+
+/* Product prices - Trade Winds */
+.ufm-price {
+  font-family: "UFM-TradeWinds";
+  color: #000;
+  line-height: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.ufm-price-qty {
+  font-size: 28px;
+  font-weight: 700;
+  margin-right: 4px;
+}
+
+.ufm-price-main {
+  /* Controls overall sale price size (big integer part) */
+  font-size: 200px;
+  font-weight: 700;
+  /* Text outline effect using multiple text-shadows */
+  text-shadow:
+    -2px -2px 0 #fff,
+    2px -2px 0 #fff,
+    -2px 2px 0 #fff,
+    2px 2px 0 #fff,
+    -3px 0 0 #fff,
+    3px 0 0 #fff,
+    0 -3px 0 #fff,
+    0 3px 0 #fff;
+}
+
+.ufm-price-decimal {
+  /* Decimal part sits near the top-right of the main number */
+  font-size: 100px;
+  font-weight: 700;
+  position: relative;
+  vertical-align: super;
+  top: -40px;
+  /* Smaller outline for decimal */
+  text-shadow:
+    -1px -1px 0 #fff,
+    1px -1px 0 #fff,
+    -1px 1px 0 #fff,
+    1px 1px 0 #fff,
+    -2px 0 0 #fff,
+    2px 0 0 #fff,
+    0 -2px 0 #fff,
+    0 2px 0 #fff;
+}
+
+.ufm-price-unit {
+  font-size: 24px;
+  font-weight: 700;
+  margin-left: 2px;
+  /* Smaller outline for unit */
+  text-shadow:
+    -1px -1px 0 #fff,
+    1px -1px 0 #fff,
+    -1px 1px 0 #fff,
+    1px 1px 0 #fff,
+    -2px 0 0 #fff,
+    2px 0 0 #fff,
+    0 -2px 0 #fff,
+    0 2px 0 #fff;
+}

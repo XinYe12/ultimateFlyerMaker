@@ -1,19 +1,48 @@
 import canvasPkg from "@napi-rs/canvas";
 import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { classifyPrice } from "../discount/priceClassifier.js";
 
-const { createCanvas } = canvasPkg;
+const { createCanvas, GlobalFonts } = canvasPkg;
+
+/* ---------- FONT: Trade Winds (bold display) for price labels ---------- */
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const FONT_DIR = path.resolve(__dirname, "../../../assets/fonts");
+
+let PRICE_FONT_FAMILY = "Anton";
+try {
+  GlobalFonts.registerFromPath(
+    path.join(FONT_DIR, "TradeWinds.OTF"),
+    "Trade Winds"
+  );
+  PRICE_FONT_FAMILY = "Trade Winds";
+} catch {
+  GlobalFonts.registerFromPath(
+    path.join(FONT_DIR, "Anton-Regular.ttf"),
+    "Anton"
+  );
+}
 
 function drawOutlinedText(ctx, text, x, y, font, strokeWidth) {
   ctx.font = font;
   ctx.textAlign = "left";
   ctx.lineJoin = "round";
 
-  ctx.strokeStyle = "#e60000";
+  // Price labels: black text with a white border AND a very slim black outline outside
+  // Outer slim black stroke
+  ctx.strokeStyle = "#000000";
+  ctx.lineWidth = Math.max(1, strokeWidth - 6);
+  ctx.strokeText(text, x, y);
+
+  // Inner white stroke
+  ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = strokeWidth;
   ctx.strokeText(text, x, y);
 
-  ctx.fillStyle = "#ffffff";
+  // Black fill
+  ctx.fillStyle = "#000000";
   ctx.fillText(text, x, y);
 }
 
@@ -28,16 +57,29 @@ export function renderPriceImage({
 
   // ---------- FALLBACK (CRITICAL) ----------
   if (!parsed && typeof afterPrice === "string") {
-    const m = afterPrice.match(/(\d+\.\d{2})/);
+    // Try to extract any price pattern
+    const m = afterPrice.match(/(\d+\.?\d*)/);
     if (m) {
+      let price = m[1];
+      // Ensure 2 decimal places
+      if (!price.includes('.')) {
+        price = price + '.00';
+      } else if (price.split('.')[1].length === 1) {
+        price = price + '0';
+      }
       parsed = {
         type: "SINGLE",
-        price: m[1],
+        price: price,
         unit: ""
       };
-    } else {
-      return;
     }
+  }
+
+  // If still no parsed price, write empty canvas and return
+  if (!parsed) {
+    const canvas = createCanvas(1000, 480);
+    fs.writeFileSync(outputPath, canvas.toBuffer("image/png"));
+    return outputPath;
   }
 
 
@@ -52,85 +94,81 @@ export function renderPriceImage({
   // 🔒 RENDER MODE (DO NOT MUTATE parsed)
   const renderType = parsed.type;
 
-  const canvas = createCanvas(1000, 420);
+  // Extra vertical headroom so tall digits + thick strokes are never clipped
+  const PAD_TOP = 200;  // Increased from 120 to ensure no clipping
+  const canvasH = 680;
+  const canvas = createCanvas(1000, canvasH);
   const ctx = canvas.getContext("2d");
 
-  const baseY = 260;
-  let x = 80;
+  const Pf = (size) => `${size}px "${PRICE_FONT_FAMILY}"`;
 
-  // ---------- MULTI BUY ----------
-  if (renderType === "MULTI") {
-    drawOutlinedText(ctx, parsed.qty, x, baseY, "150px Anton", 26);
-    x += ctx.measureText(parsed.qty).width + 16;
+  // ---------- LAYOUT CONSTANTS ----------
+  const MAIN  = 400;                      // big integer part
+  const DEC   = Math.round(MAIN * 2 / 3); // decimal size (slightly smaller)
+  const SMALL = 100;                      // qty/ and unit (/EA)
 
-    drawOutlinedText(ctx, "FOR", x, baseY, "120px Anton", 26);
-    x += ctx.measureText("FOR").width + 24;
-  }
+  // Baselines:
+  // - baseY: where the big integer (MAIN) sits
+  // - decY:  raise decimals toward the top-right of the MAIN glyph
+  const baseY = canvasH - PAD_TOP;        // main-number baseline
+  const decY  = baseY - MAIN * 0.6;       // decimals float near the top-right
+  // unit baseline = baseY
 
-  // ---------- PRICE ----------
+  // ---------- MEASURE TOTAL WIDTH FOR CENTERING ----------
   const [intPart, decimalPart = ""] = parsed.price.split(".");
 
-  // $
-  drawOutlinedText(ctx, "$", x - 36, baseY - 110, "90px Anton", 24);
+  let totalWidth = 0;
 
-  // BIG NUMBER
-  drawOutlinedText(ctx, intPart, x, baseY, "240px Anton", 24);
+  // Measure qty/ if MULTI
+  let qtyWidth = 0;
+  if (renderType === "MULTI") {
+    ctx.font = Pf(SMALL);
+    qtyWidth = ctx.measureText(`${parsed.qty}/`).width + 8;
+    totalWidth += qtyWidth;
+  }
+
+  // Measure main integer
+  ctx.font = Pf(MAIN);
   const bigWidth = ctx.measureText(intPart).width;
+  totalWidth += bigWidth;
 
-  let unitX = x + bigWidth + 14;
+  // Measure decimal
+  let decWidth = 0;
   if (decimalPart) {
-    // draw decimals just above the main price
-    const decimalX = x + bigWidth + 6;
-    drawOutlinedText(
-      ctx,
-      decimalPart,
-      decimalX,
-      baseY - 110,
-      "110px Anton",
-      28
-    );
-    // place unit just a bit to the right of the decimals,
-    // so it visually reads as `$12.99/EA` instead of being far away
-    unitX = decimalX + 40;
+    ctx.font = Pf(DEC);
+    decWidth = ctx.measureText(decimalPart).width;
+    totalWidth += 8 + decWidth;
   }
 
-  // ---------- UNIT ----------
-  // ONLY render unit for SINGLE prices (e.g. /EA, /LB)
+  // Measure unit
   if (renderType === "SINGLE" && unit) {
-    const unitLabel = `/${unit}`;
-    drawOutlinedText(
-      ctx,
-      unitLabel,
-      unitX,
-      baseY,
-      "100px Anton",
-      28
-    );
+    ctx.font = Pf(SMALL);
+    totalWidth += 8 + ctx.measureText(`/${unit}`).width;
   }
 
+  // Center the price, then shift left
+  let x = (1000 - totalWidth) / 2 - 100;
 
-  // ---------- REG PRICE ----------
-  if (beforePrice) {
-    // strip unit from REG if SALE already shows it
-    // ---------- REG PRICE Y POSITION ----------
-    const regY =
-      renderType === "MULTI"
-        ? baseY + 110
-        : baseY + 70;
+  // ---------- MULTI: "qty/" at bottom-left ----------
+  if (renderType === "MULTI") {
+    const qtySlash = `${parsed.qty}/`;
+    drawOutlinedText(ctx, qtySlash, x, baseY, Pf(SMALL), 14);
+    x += qtyWidth;
+  }
 
-    const regText =
-      unit && typeof beforePrice === "string"
-        ? beforePrice.replace(/\/\s*(order|ea|lb|case|box|pack|pkg)/i, "")
-        : beforePrice;
+  // ---------- MAIN INTEGER ----------
+  drawOutlinedText(ctx, intPart, x, baseY, Pf(MAIN), 24);
 
-    drawOutlinedText(
-      ctx,
-      `REG: ${regText}`,
-      80,
-      regY,
-      "76px Anton",
-      18
-    );
+  // ---------- RIGHT COLUMN: decimal (top) + unit (bottom) ----------
+  const rightX = x + bigWidth + 8;
+
+  if (decimalPart) {
+    drawOutlinedText(ctx, decimalPart, rightX, decY, Pf(DEC), 18);
+  }
+
+  // NEVER show unit for multi-buy; only for single prices
+  if (renderType === "SINGLE" && unit) {
+    drawOutlinedText(ctx, `/${unit}`, rightX, baseY, Pf(SMALL), 14);
   }
 
   fs.writeFileSync(outputPath, canvas.toBuffer("image/png"));

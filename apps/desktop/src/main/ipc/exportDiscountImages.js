@@ -1,8 +1,4 @@
-import path from "path";
-import fs from "fs";
-import { app } from "electron";
-import { renderTitleImage } from "../render/renderTitleImage.js";
-import { renderPriceImage } from "../render/renderPriceImage.js";
+// NOTE: PNG rendering removed - now returns structured text data only
 
 function pickTitleData(item) {
   const d = item?.result?.discount;
@@ -74,61 +70,50 @@ function pickPriceParts(item) {
 export async function exportDiscountImages(items) {
   if (!Array.isArray(items) || items.length === 0) return [];
 
-  const outputDir = path.join(app.getPath("desktop"), "UFM_Discount_Labels");
-  fs.mkdirSync(outputDir, { recursive: true });
-
   const results = [];
 
   for (const item of items) {
     if (!item || !item.id || !item.result) continue;
 
-    const base = item.id;
-    const titlePath = path.join(outputDir, `${base}_title.png`);
-    const pricePath = path.join(outputDir, `${base}_price.png`);
-
     // ---------- TITLE (USER DISCOUNT > MATCH > OCR > ZH FALLBACK) ----------
     const titleData = pickTitleData(item);
-    const titleText = titleData.en || titleData.zh; // at least one must be non-empty to proceed
+    const discount = item.result.discount || {};
 
-    let titleImagePath;
-    let priceImagePath;
+    // ---------- PRICE (USER DISCOUNT > MATCH > LLM FALLBACK) ----------
+    let { after, before, unit } = pickPriceParts(item);
 
-    try {
-      if (titleText) {
-        titleImagePath = renderTitleImage({
-          en: titleData.en,
-          zh: titleData.zh,
-          size: item.result.discount?.size ?? item.result.title?.size ?? item.result.llmResult?.items?.[0]?.size ?? "",
-          outputPath: titlePath,
-        });
+    // Extract quantity from multi-buy patterns like "2 FOR $4.99"
+    let quantity = null;
+    const multiBuyMatch = after.match(/^(\d+)\s+FOR\s+\$/i);
+    if (multiBuyMatch) {
+      quantity = parseInt(multiBuyMatch[1], 10);
+    }
 
-        // ---------- PRICE (USER DISCOUNT > MATCH > LLM FALLBACK) ----------
-        let { after, before, unit } = pickPriceParts(item);
-
-        // Single price with no unit → show /ea on the label
-        const isMultiBuy = /^\d+\s+FOR\s+\$/i.test(after) || /^\d+\s+for\s+\$?[\d.]+/i.test(after);
-        if (after && !unit && !isMultiBuy) {
-          unit = "ea";
-        }
-
-        if (after) {
-          priceImagePath = renderPriceImage({
-            afterPrice: after,
-            beforePrice: before,
-            priceUnit: unit,
-            outputPath: pricePath,
-          });
-        }
-      }
-    } catch (err) {
-      console.error(`[exportDiscountImages] Failed to render labels for ${item.id}:`, err);
+    // Single price with no unit → default to /ea
+    const isMultiBuy = /^\d+\s+FOR\s+\$/i.test(after);
+    if (after && !unit && !isMultiBuy) {
+      unit = "ea";
     }
 
     // Always push one result per item so discountLabels[i] aligns with placement i
     results.push({
       id: item.id,
-      titleImagePath,
-      priceImagePath,
+      title: {
+        en: titleData.en || "",
+        zh: titleData.zh || "",
+        size:
+          discount.size ??
+          item.result.title?.size ??
+          item.result.llmResult?.items?.[0]?.size ??
+          "",
+        regularPrice: discount.regularPrice ?? "",
+      },
+      price: {
+        display: after || "",
+        quantity: quantity,
+        unit: unit || "",
+        regular: before || "",
+      },
     });
   }
 

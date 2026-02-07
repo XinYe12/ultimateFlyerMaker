@@ -13,12 +13,6 @@ import { saveDepartmentDraft } from "./draftStorage";
 
 const PREVIEW_SCALE = 0.5;
 
-function toImgSrc(p?: string): string | null {
-  if (!p) return null;
-  if (p.startsWith("http") || p.startsWith("file://")) return p;
-  return `file://${p}`;
-}
-
 export default function EditorCanvas({
   editorQueue,
   templateId,
@@ -102,6 +96,7 @@ export default function EditorCanvas({
         style={{
           transform: `scale(${PREVIEW_SCALE})`,
           transformOrigin: "top center",
+          overflow: "visible",
         }}
       >
         <div
@@ -110,6 +105,7 @@ export default function EditorCanvas({
             width: imageSize?.width ?? 1600,
             height: imageSize?.height ?? 2400,
             background: "#fff",
+            overflow: "visible",
           }}
         >
           {/* template image */}
@@ -159,59 +155,14 @@ export default function EditorCanvas({
             />
           )}
 
-{/* items */}
+{/* items + labels rendered together per card */}
 {placements.length > 0 && (
   <RenderFlyerPlacements
     items={items}
     placements={placements}
+    discountLabels={discountLabels}
   />
 )}
-
-{/* title + price labels — one per placement, matched by itemId so order is correct */}
-{imageSize && (() => {
-  const labelByItemId = Array.isArray(discountLabels)
-    ? new Map(
-        discountLabels
-          .filter((l) => l && l.id != null)
-          .map((l) => [l.id!, l])
-      )
-    : new Map();
-  return placements.map((p) => {
-    const label = labelByItemId.get(p.itemId) ?? discountLabels?.[placements.indexOf(p)];
-    const titleSrc = toImgSrc(label?.titleImagePath);
-    const priceSrc = toImgSrc(label?.priceImagePath);
-    return (
-      <React.Fragment key={`label-${p.itemId}`}>
-        {titleSrc && (
-          <img
-            src={titleSrc}
-            style={{
-              position: "absolute",
-              left: p.x,
-              top: p.y,
-              width: p.width * 0.7,
-              height: "auto",
-              pointerEvents: "none",
-            }}
-          />
-        )}
-        {priceSrc && (
-          <img
-            src={priceSrc}
-            style={{
-              position: "absolute",
-              left: p.x + p.width * 0.45,
-              top: p.y + p.height * 0.6,
-              width: p.width * 0.5,
-              height: "auto",
-              pointerEvents: "none",
-            }}
-          />
-        )}
-      </React.Fragment>
-    );
-  });
-})()}
         </div>
       </div>
     </div>

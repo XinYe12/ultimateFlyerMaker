@@ -10,30 +10,28 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const FONT_DIR = path.resolve(__dirname, "../../../assets/fonts");
 
-GlobalFonts.registerFromPath(
-  path.join(FONT_DIR, "BebasNeue-Regular.ttf"),
-  "Bebas"
-);
-GlobalFonts.registerFromPath(
-  path.join(FONT_DIR, "SourceHanSans-Heavy.otf"),
-  "SourceHan"
-);
-GlobalFonts.registerFromPath(
-  path.join(FONT_DIR, "Anton-Regular.ttf"),
-  "Anton"
-);
+// Product titles: Maven Pro Bold only (no Chinese)
+let TITLE_FONT_FAMILY = "Bebas";
+try {
+  GlobalFonts.registerFromPath(
+    path.join(FONT_DIR, "Maven Pro Bold.OTF"),
+    "Maven Pro"
+  );
+  TITLE_FONT_FAMILY = "Maven Pro";
+} catch {
+  GlobalFonts.registerFromPath(
+    path.join(FONT_DIR, "BebasNeue-Regular.ttf"),
+    "Bebas"
+  );
+}
 
 /* ---------- DRAW HELPERS ---------- */
-function drawOutlinedText(ctx, text, x, y, font, strokeWidth) {
+// Product titles: solid black text, NO border
+function drawTitleText(ctx, text, x, y, font) {
   ctx.font = font;
   ctx.textAlign = "left";
   ctx.lineJoin = "round";
-
-  ctx.strokeStyle = "#000000";
-  ctx.lineWidth = strokeWidth;
-  ctx.strokeText(text, x, y);
-
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = "#000000";
   ctx.fillText(text, x, y);
 }
 
@@ -63,41 +61,39 @@ function wrapEnglish(ctx, text, maxWidth, maxLines) {
 }
 
 /* ---------- MAIN ---------- */
-export function renderTitleImage({ en = "", zh = "", size = "", outputPath }) {
+// NOTE: `regularPrice` is optional and, when provided, is rendered on the same line as `size`
+export function renderTitleImage({ en = "", zh = "", size = "", regularPrice = "", outputPath }) {
   const width = 1000;
-  const height = 700;
+  const height = 300;
 
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext("2d");
 
-  const EN_FONT = "82px Bebas";
+  const EN_FONT = `75px "${TITLE_FONT_FAMILY}"`;
   ctx.font = EN_FONT;
 
-  const enLines = wrapEnglish(ctx, String(en).toUpperCase(), 820, 3);
+  const enLines = wrapEnglish(ctx, String(en).toUpperCase(), 920, 2);
 
-  const x = 80;
-  let y = 160;
+  const x = 40;
+  let y = 80;
 
-  const EN_LINE_HEIGHT = 72;
-  const CN_LINE_HEIGHT = 72;
-  const SIZE_LINE_HEIGHT = 72;
+  const LINE_HEIGHT = 68;
 
-  // ENGLISH
+  // English title (Maven Pro Bold only; no Chinese)
   enLines.forEach((line) => {
-    drawOutlinedText(ctx, line, x, y, EN_FONT, 12);
-    y += EN_LINE_HEIGHT;
+    drawTitleText(ctx, line, x, y, EN_FONT);
+    y += LINE_HEIGHT;
   });
 
-  // CHINESE (DO NOT STRIP NUMBERS)
-  if (zh) {
-    drawOutlinedText(ctx, String(zh), x, y, "70px SourceHan", 12);
-    y += CN_LINE_HEIGHT;
-  }
-
-  // SIZE (SHOW AS-IS, INCLUDING NUMBERS)
-  if (size) {
-    drawOutlinedText(ctx, String(size), x, y, "72px Anton", 12);
-    y += SIZE_LINE_HEIGHT;
+  // Size + regular price on ONE line, same style
+  if (size || regularPrice) {
+    let footer = "";
+    if (size) footer += String(size);
+    if (regularPrice) {
+      const regText = String(regularPrice).trim();
+      footer += footer ? `   REG: ${regText}` : `REG: ${regText}`;
+    }
+    drawTitleText(ctx, footer, x, y, `64px "${TITLE_FONT_FAMILY}"`);
   }
 
   fs.writeFileSync(outputPath, canvas.toBuffer("image/png"));

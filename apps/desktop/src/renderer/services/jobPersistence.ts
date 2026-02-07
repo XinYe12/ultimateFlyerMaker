@@ -12,15 +12,17 @@ export function loadJobs(): FlyerJob[] {
 
     const jobs = JSON.parse(raw) as FlyerJob[];
 
-    // Reset any jobs that were processing when the app closed
+    // If the app was closed while jobs were queued/processing,
+    // treat them as cancelled instead of silently resuming them.
     return jobs.map(job => {
-      if (job.status === "processing") {
+      if (job.status === "processing" || job.status === "queued") {
         return {
           ...job,
-          status: "queued" as const,
+          status: "failed" as const,
+          error: job.error || "Cancelled when app was closed",
           progress: {
             ...job.progress,
-            currentStep: "Resuming...",
+            currentStep: "Cancelled",
           },
         };
       }

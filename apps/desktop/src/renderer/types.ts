@@ -132,6 +132,26 @@ export type DiscountItem = {
 };
 
 // =======================
+// DISCOUNT LABEL (TEXT-BASED)
+// =======================
+
+export type DiscountLabel = {
+  id: string;
+  title: {
+    en: string;
+    zh: string;
+    size: string;
+    regularPrice: string;
+  };
+  price: {
+    display: string;
+    quantity?: number | null;
+    unit?: string;
+    regular?: string;
+  };
+};
+
+// =======================
 // JOB QUEUE TYPES
 // =======================
 
@@ -170,7 +190,7 @@ export type FlyerJob = {
   };
   result?: {
     processedImages: ImageTask[];
-    discountLabels: { id?: string; titleImagePath?: string; priceImagePath?: string }[];
+    discountLabels: DiscountLabel[];
   };
   error?: string;
 };
