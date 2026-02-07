@@ -5,6 +5,7 @@ import sizeOf from "image-size";
 import { formatTitle } from "./formatTitle.js";
 import { decideSizeFromAspectRatio } from "../../../../shared/flyer/layout/sizeFromImage.js";
 import { validateResult } from "./validateResult.js";
+import { addShadowToCutout } from "./addShadow.js";
 
 export async function ingestPhoto(inputPath) {
   // ---------- OCR FIRST ----------
@@ -29,7 +30,12 @@ const title = formatTitle(llmResult);
 
 
   // ---------- CUTOUT ----------
-  const cutoutPath = await runCutout(inputPath);
+  const baseCutoutPath = await runCutout(inputPath);
+  console.log("✂️ [ingestPhoto] Cutout complete:", baseCutoutPath);
+
+  // ---------- ADD SHADOW ----------
+  const cutoutPath = await addShadowToCutout(baseCutoutPath);
+  console.log("🎨 [ingestPhoto] Shadow applied, using:", cutoutPath);
 
   // ---------- LAYOUT ----------
   let layout = { size: "SMALL" };
