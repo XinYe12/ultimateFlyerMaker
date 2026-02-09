@@ -67,6 +67,9 @@ export type IngestItem = {
   result?: IngestResult;
   error?: string;
 
+  // Slot assignment for manual placement
+  slotIndex?: number;
+
   userEdited?: {
     title?: boolean;
     price?: boolean;

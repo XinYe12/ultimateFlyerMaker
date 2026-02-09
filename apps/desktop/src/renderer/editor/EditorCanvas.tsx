@@ -7,6 +7,7 @@ import {
   findPageForDepartment,
 } from "./loadFlyerTemplateConfig";
 import RenderFlyerPlacements from "./RenderFlyerPlacements";
+import SlotOverlays from "./SlotOverlays";
 import { layoutFlyer, layoutFlyerSlots } from "../../../../shared/flyer/layout/layoutFlyer";
 import { isSlottedDepartment } from "./loadFlyerTemplateConfig";
 import { saveDepartmentDraft } from "./draftStorage";
@@ -18,11 +19,21 @@ export default function EditorCanvas({
   templateId,
   department,
   discountLabels,
+  onEnqueue,
+  onRemove,
+  onReplaceImage,
+  onChooseDatabaseResults,
+  onEditTitle,
 }: {
   editorQueue: any[];
   templateId: string;
   department: string;
   discountLabels?: { id?: string; titleImagePath?: string; priceImagePath?: string }[];
+  onEnqueue?: (paths: string[], options?: { slotIndex?: number }) => Promise<void>;
+  onRemove?: (id: string) => void;
+  onReplaceImage?: (itemId: string) => Promise<void>;
+  onChooseDatabaseResults?: (itemId: string) => void;
+  onEditTitle?: (itemId: string) => void;
 }) {
   const [config, setConfig] = useState<any | null>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
@@ -86,6 +97,46 @@ export default function EditorCanvas({
   console.log("EditorCanvas items:", items);
   console.log("EditorCanvas placements:", placements);
   console.log("EditorCanvas discountLabels:", discountLabels);
+
+  // ---------- HANDLERS: Add/Replace Images ----------
+  const handleAddImage = async (slotIndex: number) => {
+    if (!onEnqueue) return;
+
+    try {
+      const filePath = await window.ufm.openImageDialog();
+      if (!filePath) return; // User canceled
+
+      await onEnqueue([filePath], { slotIndex });
+    } catch (err) {
+      console.error("Failed to add image:", err);
+    }
+  };
+
+  const handleReplaceImage = async (itemId: string) => {
+    // Use the new in-place replacement if provided
+    if (onReplaceImage) {
+      await onReplaceImage(itemId);
+      return;
+    }
+
+    // Fallback to old behavior (remove + enqueue) if no replacement handler provided
+    if (!onEnqueue || !onRemove) return;
+
+    try {
+      const filePath = await window.ufm.openImageDialog();
+      if (!filePath) return; // User canceled
+
+      // Find the slot index of the item being replaced
+      const itemToReplace = items.find((item: any) => item.id === itemId);
+      const slotIndex = itemToReplace?.slotIndex;
+
+      // Remove old item and add new one with same slot assignment
+      onRemove(itemId);
+      await onEnqueue([filePath], slotIndex !== undefined ? { slotIndex } : undefined);
+    } catch (err) {
+      console.error("Failed to replace image:", err);
+    }
+  };
 
   return (
     <div
@@ -160,7 +211,19 @@ export default function EditorCanvas({
   <RenderFlyerPlacements
     items={items}
     placements={placements}
-    discountLabels={discountLabels}
+    discountLabels={discountLabels as any}
+  />
+)}
+
+{/* interactive slot overlays (add/replace buttons) */}
+{imageSize && isSlottedDepartment(region) && onEnqueue && onRemove && (
+  <SlotOverlays
+    slots={region.slots}
+    placements={placements}
+    onAddImage={handleAddImage}
+    onReplaceImage={handleReplaceImage}
+    onChooseDatabaseResults={onChooseDatabaseResults}
+    onEditTitle={onEditTitle}
   />
 )}
         </div>

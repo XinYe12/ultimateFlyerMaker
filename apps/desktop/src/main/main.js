@@ -14,10 +14,12 @@ import { exportDiscountImages } from "./ipc/exportDiscountImages.js";
 import { parseDiscountXlsx } from "./ipc/parseDiscountXlsx.js";
 import { ingestImages } from "./ipc/ingestImages.js";
 import { getJobProcessor } from "./jobs/JobProcessor.js";
+import { searchByText } from "./ingestion/searchService.js";
+import os from "os";
 
 import { startBackend, stopBackend } from "./startBackend.js";
 import { waitForBackend } from "./waitForBackend.js";
-import { initFirebase } from "./firebase.js";
+import { initFirebase, admin } from "./firebase.js";
 import { registerBackendIpc } from "./ipc/backend.js";
 import { registerBackendProxyIpc } from "./ipc/backendProxy.js";
 import "./net/longFetch.js";
@@ -97,6 +99,74 @@ ipcMain.handle("ufm:exportDiscountImages", (_event, items) => {
 
 ipcMain.handle("ingestImages", ingestImages);
 
+/* ---------- IPC: DB search (Replace → Database Results) ---------- */
+ipcMain.handle("ufm:searchDatabaseByText", async (_, query) => {
+  try {
+    if (!query || !String(query).trim()) return [];
+    return await searchByText(String(query).trim(), 6, 0.15);
+  } catch (err) {
+    console.error("[searchDatabaseByText] error:", err);
+    return [];
+  }
+});
+
+ipcMain.handle("ufm:downloadAndIngestFromUrl", async (_, publicUrl) => {
+  if (!publicUrl || !String(publicUrl).trim()) {
+    throw new Error("Missing publicUrl");
+  }
+  const url = String(publicUrl).trim();
+  const ext = path.extname(new URL(url).pathname) || ".jpg";
+  const safeExt = /^\.(jpg|jpeg|png|gif|webp)$/i.test(ext) ? ext : ".jpg";
+  const tempPath = path.join(os.tmpdir(), `ufm-download-${Date.now()}${safeExt}`);
+
+  try {
+    const res = await fetch(url, { timeout: 15000 });
+    if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+    const ab = await res.arrayBuffer();
+    await fs.promises.writeFile(tempPath, Buffer.from(ab));
+    const result = await ingestPhoto(tempPath);
+    return { path: tempPath, result };
+  } catch (err) {
+    try {
+      await fs.promises.unlink(tempPath).catch(() => {});
+    } catch (_) {}
+    throw err;
+  }
+});
+
+/* ---------- IPC: Firestore connection test ---------- */
+ipcMain.handle("ufm:testFirestore", async () => {
+  try {
+    const db = admin.firestore();
+    const snap = await db.collection("product_vectors").limit(3).get();
+    const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // Strip embedding arrays to keep the response small
+    for (const doc of docs) {
+      if (doc.embedding) doc.embedding = `[${doc.embedding.length} floats]`;
+    }
+    return { ok: true, count: snap.size, totalDocs: snap.size, sample: docs };
+  } catch (err) {
+    console.error("[testFirestore] error:", err);
+    return { ok: false, error: err.message };
+  }
+});
+
+/* ---------- IPC: file picker dialog ---------- */
+ipcMain.handle("ufm:openImageDialog", async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ["openFile"],
+    filters: [
+      { name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp"] }
+    ]
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  return result.filePaths[0];
+});
+
 /* ---------- IPC: job queue ---------- */
 const jobProcessor = getJobProcessor();
 
@@ -125,6 +195,15 @@ app.whenReady().then(async () => {
 
     // 3️⃣ Init Firebase (idempotent)
     initFirebase();
+
+    // 3b. Verify Firestore connection (log only; do not block startup)
+    try {
+      const db = admin.firestore();
+      const snap = await db.collection("product_vectors").limit(1).get();
+      console.log("[firebase] ✅ Firestore connected. product_vectors sample size:", snap.size);
+    } catch (err) {
+      console.warn("[firebase] ⚠️ Firestore check failed (connection or permissions):", err.message);
+    }
 
     // 4️⃣ Register IPC (backend info)
     registerBackendIpc();

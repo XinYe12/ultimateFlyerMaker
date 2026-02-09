@@ -69,6 +69,37 @@ export default function RenderFlyerPlacements({
       .map((l) => [l.id, l])
   );
 
+  /** Build a label from item.result when no discount label exists (e.g. newly added image). */
+  function getLabelForItem(item: any, itemId: string): DiscountLabel | null {
+    const fromMap = labelMap.get(itemId);
+    if (fromMap) return fromMap;
+    const t = item?.result?.title;
+    const ai = item?.result?.aiTitle;
+    const en = t?.en ?? ai?.en ?? "";
+    const zh = t?.zh ?? ai?.zh ?? "";
+    const size = t?.size ?? ai?.size ?? "";
+    const regularPrice =
+      (item?.result?.title as any)?.regularPrice != null
+        ? String((item.result.title as any).regularPrice)
+        : (item?.result?.llmResult?.items?.[0] as any)?.regular_price != null
+          ? String((item.result.llmResult.items[0] as any).regular_price)
+          : "";
+    const saleFromDiscount = (item?.result?.discount as any)?.price ?? (item?.result?.discount as any)?.display;
+    const priceDisplay =
+      saleFromDiscount != null && String(saleFromDiscount).trim() !== ""
+        ? String(saleFromDiscount).trim().startsWith("$")
+          ? String(saleFromDiscount).trim()
+          : `$${String(saleFromDiscount).trim()}`
+        : (item?.result?.llmResult?.items?.[0] as any)?.sale_price != null
+          ? `$${String((item.result.llmResult?.items?.[0] as any)?.sale_price ?? "")}`
+          : "";
+    return {
+      id: itemId,
+      title: { en, zh, size, regularPrice },
+      price: { display: priceDisplay },
+    };
+  }
+
   return (
     <>
       {placements.map((p) => {
@@ -87,8 +118,8 @@ export default function RenderFlyerPlacements({
             ? rawSrc
             : `file://${rawSrc}`;
 
-        const label = labelMap.get(p.itemId);
-        const hasLabel = label && (label.title.en || label.title.zh || label.price.display);
+        const label = getLabelForItem(item, p.itemId);
+        const hasLabel = label != null;
 
         // ── no labels → original full-card image ──
         if (!hasLabel) {

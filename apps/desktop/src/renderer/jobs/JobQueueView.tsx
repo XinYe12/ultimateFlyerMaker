@@ -5,14 +5,16 @@ import { useState, useEffect } from "react";
 import { useJobQueue } from "../hooks/useJobQueue";
 import { FlyerJob, DepartmentId } from "../types";
 import { loadFlyerTemplateConfig } from "../editor/loadFlyerTemplateConfig";
-import JobCard from "./JobCard";
+import DepartmentOverview from "./DepartmentOverview";
 import JobCreationPanel from "./JobCreationPanel";
 
 type Props = {
   onViewFlyer: (job: FlyerJob) => void;
+  onOpenDraft?: (job: FlyerJob) => void;
+  jobQueueHook: ReturnType<typeof useJobQueue>;
 };
 
-export default function JobQueueView({ onViewFlyer }: Props) {
+export default function JobQueueView({ onViewFlyer, onOpenDraft, jobQueueHook }: Props) {
   const {
     jobs,
     createJob,
@@ -24,7 +26,7 @@ export default function JobQueueView({ onViewFlyer }: Props) {
     startJob,
     deleteJob,
     getJob,
-  } = useJobQueue();
+  } = jobQueueHook;
 
   const [draftingJobId, setDraftingJobId] = useState<string | null>(null);
   const [availableDepartments, setAvailableDepartments] = useState<string[]>(["grocery"]);
@@ -44,107 +46,140 @@ export default function JobQueueView({ onViewFlyer }: Props) {
   // Find current drafting job
   const draftingJob = draftingJobId ? getJob(draftingJobId) : null;
 
-  // If drafting job was queued, clear the drafting state
+  // If drafting job was queued or has images, clear the drafting state
   useEffect(() => {
-    if (draftingJob && draftingJob.status !== "drafting") {
-      setDraftingJobId(null);
+    if (draftingJob) {
+      // If job status changed from drafting, clear local state
+      if (draftingJob.status !== "drafting") {
+        setDraftingJobId(null);
+      }
+      // If job now has images, it's "in progress" - allow opening in editor
+      // But keep showing the panel until user manually opens editor
     }
   }, [draftingJob]);
 
-  // Separate jobs by status
-  const activeJobs = jobs.filter(j => j.status === "processing" || j.status === "queued");
-  const completedJobs = jobs.filter(j => j.status === "completed");
-  const failedJobs = jobs.filter(j => j.status === "failed");
+  const handleDepartmentClick = (department: DepartmentId) => {
+    // Find any job for this department (completed or drafting)
+    const completedJob = jobs.find(
+      j => j.department === department && j.status === "completed"
+    );
 
-  const handleCreateJob = (templateId: string, department: DepartmentId) => {
-    const jobId = createJob(templateId, department);
-    setDraftingJobId(jobId);
-    setCurrentTemplate(templateId);
+    const draftingJob = jobs.find(
+      j => j.department === department && j.status === "drafting"
+    );
+
+    const processingJob = jobs.find(
+      j => j.department === department && (j.status === "queued" || j.status === "processing")
+    );
+
+    // Prefer processing/drafting jobs over completed
+    const jobToOpen = processingJob || draftingJob || completedJob;
+
+    // If there's a job with images, open it in editor
+    if (jobToOpen && jobToOpen.images.length > 0) {
+      // Open in editor
+      onOpenDraft?.(jobToOpen);
+      return;
+    }
+
+    // NOT STARTED: show upload panel
+    if (draftingJob) {
+      // Draft exists but no images - show creation panel
+      setDraftingJobId(draftingJob.id);
+    } else {
+      // No draft exists - create new and show creation panel
+      const jobId = createJob(currentTemplate, department);
+      setDraftingJobId(jobId);
+    }
+  };
+
+  const handleOpenInEditor = () => {
+    if (draftingJob && draftingJob.images.length > 0) {
+      onOpenDraft?.(draftingJob);
+      setDraftingJobId(null); // Clear local state when opening in editor
+    }
   };
 
   const handleQueueJob = () => {
     if (draftingJobId) {
       startJob(draftingJobId);
+      setDraftingJobId(null);
     }
   };
 
   const handleSetTemplate = (templateId: string) => {
     setCurrentTemplate(templateId);
-    // Note: Template changes on drafting job need to be handled via job update
-    // For now, template is set at creation time
   };
+
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
-      <h2 style={{ marginBottom: 20 }}>Flyer Job Queue</h2>
+      {/* Department Overview */}
+      <DepartmentOverview
+        jobs={jobs}
+        availableDepartments={availableDepartments}
+        onDepartmentClick={handleDepartmentClick}
+      />
 
-      {/* Job Creation Panel */}
-      <div style={{ marginBottom: 24 }}>
-        <JobCreationPanel
-          job={draftingJob}
-          availableDepartments={availableDepartments}
-          onAddImages={paths => draftingJobId && addImagesToJob(draftingJobId, paths)}
-          onRemoveImage={imageId => draftingJobId && removeImageFromJob(draftingJobId, imageId)}
-          onSetDiscount={discount => draftingJobId && setJobDiscount(draftingJobId, discount)}
-          onSetName={name => draftingJobId && setJobName(draftingJobId, name)}
-          onSetDepartment={dept => draftingJobId && setJobDepartment(draftingJobId, dept)}
-          onSetTemplate={handleSetTemplate}
-          onQueueJob={handleQueueJob}
-          onCreate={handleCreateJob}
-        />
-      </div>
-
-      {/* Active Jobs */}
-      {activeJobs.length > 0 && (
-        <div style={{ marginBottom: 24 }}>
-          <h3 style={{ fontSize: 14, color: "#868E96", marginBottom: 12, textTransform: "uppercase" }}>
-            Active ({activeJobs.length})
-          </h3>
-          {activeJobs.map(job => (
-            <JobCard key={job.id} job={job} onDelete={deleteJob} />
-          ))}
-        </div>
-      )}
-
-      {/* Completed Jobs */}
-      {completedJobs.length > 0 && (
-        <div style={{ marginBottom: 24 }}>
-          <h3 style={{ fontSize: 14, color: "#868E96", marginBottom: 12, textTransform: "uppercase" }}>
-            Completed ({completedJobs.length})
-          </h3>
-          {completedJobs.map(job => (
-            <JobCard
-              key={job.id}
-              job={job}
-              onViewFlyer={onViewFlyer}
-              onDelete={deleteJob}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Failed Jobs */}
-      {failedJobs.length > 0 && (
-        <div style={{ marginBottom: 24 }}>
-          <h3 style={{ fontSize: 14, color: "#C92A2A", marginBottom: 12, textTransform: "uppercase" }}>
-            Failed ({failedJobs.length})
-          </h3>
-          {failedJobs.map(job => (
-            <JobCard key={job.id} job={job} onDelete={deleteJob} />
-          ))}
-        </div>
-      )}
-
-      {/* Empty state */}
-      {jobs.length === 0 && !draftingJob && (
-        <div
-          style={{
-            textAlign: "center",
-            padding: 40,
-            color: "#868E96",
-          }}
-        >
-          <p>No jobs yet. Create a new flyer job above to get started.</p>
+      {/* Job Creation Panel - shown when drafting */}
+      {draftingJob && (
+        <div style={{ marginTop: 24 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <h3 style={{ margin: 0, fontSize: 18, color: "#495057" }}>
+              Draft: {draftingJob.department.charAt(0).toUpperCase() + draftingJob.department.slice(1)}
+            </h3>
+            <div style={{ display: "flex", gap: 8 }}>
+              {draftingJob.images.length > 0 && (
+                <button
+                  onClick={handleOpenInEditor}
+                  style={{
+                    padding: "8px 16px",
+                    background: "#4C6EF5",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 6,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    fontSize: 13,
+                  }}
+                >
+                  Open in Editor
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  if (draftingJobId) {
+                    deleteJob(draftingJobId);
+                    setDraftingJobId(null);
+                  }
+                }}
+                style={{
+                  padding: "8px 16px",
+                  background: "#F1F3F5",
+                  color: "#495057",
+                  border: "none",
+                  borderRadius: 6,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  fontSize: 13,
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+          <JobCreationPanel
+            job={draftingJob}
+            availableDepartments={availableDepartments}
+            onAddImages={paths => draftingJobId && addImagesToJob(draftingJobId, paths)}
+            onRemoveImage={imageId => draftingJobId && removeImageFromJob(draftingJobId, imageId)}
+            onSetDiscount={discount => draftingJobId && setJobDiscount(draftingJobId, discount)}
+            onSetName={name => draftingJobId && setJobName(draftingJobId, name)}
+            onSetDepartment={dept => draftingJobId && setJobDepartment(draftingJobId, dept)}
+            onSetTemplate={handleSetTemplate}
+            onQueueJob={handleQueueJob}
+            onCreate={() => {}} // Not used when job exists
+          />
         </div>
       )}
     </div>

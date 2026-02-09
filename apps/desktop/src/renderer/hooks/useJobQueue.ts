@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
-import { FlyerJob, ImageTask, DiscountInput, DepartmentId, JobStatus } from "../types";
+import { FlyerJob, ImageTask, DiscountInput, DepartmentId, JobStatus, IngestItem } from "../types";
 import { loadJobs, saveJobs } from "../services/jobPersistence";
 
 declare global {
@@ -116,6 +116,16 @@ export function useJobQueue() {
   // Create a new drafting job
   const createJob = useCallback(
     (templateId: string, department: DepartmentId, name?: string): string => {
+      // Check if there's already a drafting job for this department
+      const existingDraft = jobs.find(
+        j => j.department === department && j.status === "drafting"
+      );
+
+      if (existingDraft) {
+        console.warn(`[useJobQueue] Draft already exists for department: ${department}`);
+        return existingDraft.id;
+      }
+
       const id = uuidv4();
       const job: FlyerJob = {
         id,
@@ -136,7 +146,7 @@ export function useJobQueue() {
       setJobs(prev => [job, ...prev]);
       return id;
     },
-    []
+    [jobs]
   );
 
   // Add images to a drafting job
@@ -267,6 +277,40 @@ export function useJobQueue() {
     setJobs(prev => prev.filter(j => j.id !== jobId));
   }, []);
 
+  // Sync current editor items + discount labels back to a drafting job (updates draft in job queue UI)
+  const syncJobFromEditorItems = useCallback(
+    (jobId: string, items: IngestItem[], discountLabels?: any[]) => {
+      const images: ImageTask[] = items.map((item) => ({
+        id: item.id,
+        path: item.path,
+        status: item.status === "done" ? "done" : item.status === "error" ? "error" : item.status === "running" ? "processing" : "pending",
+        result: item.result,
+        error: item.error,
+      }));
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.id === jobId
+            ? {
+                ...j,
+                images,
+                progress: {
+                  ...j.progress,
+                  totalImages: images.length,
+                  processedImages: images.filter((img) => img.status === "done").length,
+                  currentStep: j.progress.currentStep,
+                },
+                result: {
+                  processedImages: images,
+                  discountLabels: discountLabels ?? j.result?.discountLabels ?? [],
+                },
+              }
+            : j
+        )
+      );
+    },
+    []
+  );
+
   // Get a specific job
   const getJob = useCallback(
     (jobId: string): FlyerJob | undefined => {
@@ -286,5 +330,6 @@ export function useJobQueue() {
     startJob,
     deleteJob,
     getJob,
+    syncJobFromEditorItems,
   };
 }

@@ -55,6 +55,8 @@ ${rawText}
 """
 `;
 
+  const DEEPSEEK_TIMEOUT_MS = 30_000; // 30 seconds timeout
+
   const res = await fetch("https://api.deepseek.com/chat/completions", {
     method: "POST",
     headers: {
@@ -71,6 +73,7 @@ ${rawText}
       temperature: 0,
       max_tokens: 2048,
     }),
+    timeout: DEEPSEEK_TIMEOUT_MS,
   });
 
   if (!res.ok) {

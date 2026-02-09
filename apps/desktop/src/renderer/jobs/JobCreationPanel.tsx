@@ -158,6 +158,10 @@ export default function JobCreationPanel({
   };
 
   const canQueue = job.images.length > 0;
+  const isProcessing = job.status === "queued" || job.status === "processing";
+  const progressPercent = job.progress.totalImages > 0
+    ? Math.round((job.progress.processedImages / job.progress.totalImages) * 100)
+    : 0;
 
   return (
     <div
@@ -175,6 +179,7 @@ export default function JobCreationPanel({
           value={job.name}
           onChange={e => onSetName(e.target.value)}
           placeholder="Job name..."
+          disabled={isProcessing}
           style={{
             width: "100%",
             padding: "10px 12px",
@@ -182,6 +187,7 @@ export default function JobCreationPanel({
             borderRadius: 6,
             fontSize: 16,
             fontWeight: 600,
+            opacity: isProcessing ? 0.6 : 1,
           }}
         />
       </div>
@@ -363,23 +369,92 @@ export default function JobCreationPanel({
       </div>
 
       {/* Queue Button */}
-      <div style={{ marginTop: 20, textAlign: "right" }}>
-        <button
-          onClick={onQueueJob}
-          disabled={!canQueue}
-          style={{
-            padding: "12px 32px",
-            background: canQueue ? "#2F9E44" : "#ADB5BD",
-            color: "#fff",
-            border: "none",
-            borderRadius: 6,
-            fontWeight: 600,
-            cursor: canQueue ? "pointer" : "not-allowed",
-            fontSize: 14,
-          }}
-        >
-          Queue Job ({job.images.length} images)
-        </button>
+      <div style={{ marginTop: 20 }}>
+        <div style={{ textAlign: "right", marginBottom: 12 }}>
+          <button
+            onClick={onQueueJob}
+            disabled={!canQueue || isProcessing}
+            style={{
+              padding: "12px 32px",
+              background: (canQueue && !isProcessing) ? "#2F9E44" : "#ADB5BD",
+              color: "#fff",
+              border: "none",
+              borderRadius: 6,
+              fontWeight: 600,
+              cursor: (canQueue && !isProcessing) ? "pointer" : "not-allowed",
+              fontSize: 14,
+            }}
+          >
+            {isProcessing ? "Processing..." : `Queue Job (${job.images.length} images)`}
+          </button>
+        </div>
+
+        {/* Progress Bar */}
+        {isProcessing && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <span style={{ fontSize: 13, color: "#495057", fontWeight: 500 }}>
+                {job.progress.currentStep}
+              </span>
+              <span style={{ fontSize: 13, color: "#868E96" }}>
+                {job.progress.processedImages}/{job.progress.totalImages} images
+              </span>
+            </div>
+            <div
+              style={{
+                width: "100%",
+                height: 8,
+                background: "#E9ECEF",
+                borderRadius: 4,
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  width: `${progressPercent}%`,
+                  height: "100%",
+                  background: "linear-gradient(90deg, #4C6EF5 0%, #5F3DC4 100%)",
+                  transition: "width 0.3s ease",
+                }}
+              />
+            </div>
+            <div style={{ textAlign: "center", marginTop: 4, fontSize: 12, color: "#868E96" }}>
+              {progressPercent}%
+            </div>
+          </div>
+        )}
+
+        {/* Completion Message */}
+        {job.status === "completed" && (
+          <div
+            style={{
+              padding: "12px",
+              background: "#D3F9D8",
+              color: "#2F9E44",
+              borderRadius: 6,
+              fontSize: 14,
+              fontWeight: 500,
+              textAlign: "center",
+            }}
+          >
+            ✓ Job completed successfully!
+          </div>
+        )}
+
+        {/* Error Message */}
+        {job.status === "failed" && job.error && (
+          <div
+            style={{
+              padding: "12px",
+              background: "#FFE3E3",
+              color: "#C92A2A",
+              borderRadius: 6,
+              fontSize: 13,
+            }}
+          >
+            <strong>Error:</strong> {job.error}
+          </div>
+        )}
       </div>
     </div>
   );

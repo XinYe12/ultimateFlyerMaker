@@ -14,6 +14,18 @@ contextBridge.exposeInMainWorld("ufm", {
     return ipcRenderer.invoke("ufm:getDiscounts");
   },
 
+  testFirestore: () => {
+    return ipcRenderer.invoke("ufm:testFirestore");
+  },
+
+  searchDatabaseByText: (query) => {
+    return ipcRenderer.invoke("ufm:searchDatabaseByText", query);
+  },
+
+  downloadAndIngestFromUrl: (publicUrl) => {
+    return ipcRenderer.invoke("ufm:downloadAndIngestFromUrl", publicUrl);
+  },
+
   // ---------- TEXT ----------
   parseDiscountText: (rawText) => {
     console.log(
@@ -61,6 +73,12 @@ contextBridge.exposeInMainWorld("ufm", {
   openXlsxDialog: () => {
     console.log("🧩 PRELOAD openXlsxDialog called");
     return ipcRenderer.invoke("ufm:openXlsxDialog");
+  },
+
+  // ---------- IMAGE DIALOG ----------
+  openImageDialog: () => {
+    console.log("🧩 PRELOAD openImageDialog called");
+    return ipcRenderer.invoke("ufm:openImageDialog");
   },
 
   // ---------- MATCH DISCOUNTS ----------

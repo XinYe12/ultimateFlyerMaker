@@ -6,7 +6,7 @@ export function useIngestQueue() {
   const [queue, setQueue] = useState<IngestItem[]>([]);
 
   // ---------- INGEST ----------
-  async function enqueue(paths: string[]) {
+  async function enqueue(paths: string[], options?: { slotIndex?: number }) {
     for (const path of paths) {
       const id = uuidv4();
 
@@ -16,6 +16,7 @@ export function useIngestQueue() {
           id,
           path,
           status: "running",
+          slotIndex: options?.slotIndex,
         },
       ]);
 
