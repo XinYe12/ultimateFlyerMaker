@@ -1,0 +1,45 @@
+.app-root {
+  height: 100vh;
+  padding: 32px;
+  box-sizing: border-box;
+  background: #f5f5f5;
+  font-family: system-ui;
+  overflow: auto;
+}
+
+.app-header {
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #212529;
+}
+
+.app-quit-btn {
+  padding: 8px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #495057;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.app-quit-btn:hover {
+  color: #212529;
+  background: #f1f3f5;
+  border-color: #ced4da;
+}
+
+.app-quit-btn:active {
+  background: #e9ecef;
+}

@@ -26,6 +26,14 @@ contextBridge.exposeInMainWorld("ufm", {
     return ipcRenderer.invoke("ufm:downloadAndIngestFromUrl", publicUrl);
   },
 
+  googleImageSearch: (query) => {
+    return ipcRenderer.invoke("ufm:googleImageSearch", query);
+  },
+
+  openGoogleSearchWindow: (query) => {
+    return ipcRenderer.invoke("ufm:openGoogleSearchWindow", query);
+  },
+
   // ---------- TEXT ----------
   parseDiscountText: (rawText) => {
     console.log(
@@ -93,6 +101,13 @@ contextBridge.exposeInMainWorld("ufm", {
   },
   matchDiscountToSlots: (payload) =>
   ipcRenderer.invoke("match-discount-to-slots", payload),
+
+  // ---------- NATIVE FILE DRAG (for Google Lens) ----------
+  startDrag: (filePath) => ipcRenderer.send("ufm:startDrag", filePath),
+
+  // ---------- CRASH RECOVERY ----------
+  didCrashLastRun: () => ipcRenderer.invoke("ufm:didCrashLastRun"),
+  requestQuit: () => ipcRenderer.invoke("ufm:requestQuit"),
 
   // ---------- JOB QUEUE ----------
   startJob: (job) => {

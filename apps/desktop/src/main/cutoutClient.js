@@ -35,7 +35,12 @@ export async function runCutout(inputPath) {
   }
 
   if (!res || !res.ok) {
-    throw new Error(`Cutout failed`);
+    let detail = `status ${res?.status}`;
+    try {
+      const body = await res.json();
+      if (body?.error) detail = body.error;
+    } catch (_) {}
+    throw new Error(`Cutout failed: ${detail}`);
   }
 
   const { output_path } = await res.json();

@@ -107,6 +107,11 @@ export function useIngestQueue() {
     setQueue(items);
   }
 
+  // ---------- ADD SINGLE PRE-PROCESSED ITEM ----------
+  function addItem(item: IngestItem) {
+    setQueue(prev => [...prev, item]);
+  }
+
   return {
     queue,          // editor state
     enqueue,
@@ -115,5 +120,6 @@ export function useIngestQueue() {
     remove,
     clear,
     loadItems,
+    addItem,
   };
 }

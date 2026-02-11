@@ -20,31 +20,25 @@ declare global {
 }
 
 export function useJobQueue() {
-  const [jobs, setJobs] = useState<FlyerJob[]>([]);
-  const initialized = useRef(false);
+  // Load jobs from localStorage synchronously on mount; no crash dialog — we always resume
+  const [jobs, setJobs] = useState<FlyerJob[]>(() => loadJobs());
+  const resumeDone = useRef(false);
 
-  // Load jobs from localStorage on mount
+  // Resume any queued jobs once on mount
   useEffect(() => {
-    if (initialized.current) return;
-    initialized.current = true;
-
+    if (resumeDone.current) return;
+    resumeDone.current = true;
     const savedJobs = loadJobs();
-    if (savedJobs.length > 0) {
-      setJobs(savedJobs);
-
-      // Resume any queued jobs
-      const queuedJobs = savedJobs.filter(j => j.status === "queued");
-      queuedJobs.forEach(job => {
-        window.ufm.startJob(job).catch(err => {
-          console.error("[useJobQueue] Failed to resume job:", job.id, err);
-        });
+    const queuedJobs = savedJobs.filter(j => j.status === "queued");
+    queuedJobs.forEach(job => {
+      window.ufm.startJob(job).catch(err => {
+        console.error("[useJobQueue] Failed to resume job:", job.id, err);
       });
-    }
+    });
   }, []);
 
-  // Save jobs to localStorage on change
+  // Persist jobs whenever they change
   useEffect(() => {
-    if (!initialized.current) return;
     saveJobs(jobs);
   }, [jobs]);
 
@@ -286,6 +280,7 @@ export function useJobQueue() {
         status: item.status === "done" ? "done" : item.status === "error" ? "error" : item.status === "running" ? "processing" : "pending",
         result: item.result,
         error: item.error,
+        slotIndex: item.slotIndex,
       }));
       setJobs((prev) =>
         prev.map((j) =>

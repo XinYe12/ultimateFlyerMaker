@@ -141,13 +141,22 @@ export default function RenderFlyerPlacements({
               <div style={{ flex: 1, minHeight: 0 }} />
 
               {/* remaining 80%: product image */}
-              <div style={{ flex: 4, minHeight: 0, padding: "0 10px 10px 10px" }}>
+              <div style={{
+                flex: 4,
+                minHeight: 0,
+                padding: "0 10px 10px 10px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                overflow: "hidden",
+              }}>
                 <img
                   src={imgSrc}
                   style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "cover",
+                    maxWidth: "100%",
+                    maxHeight: "100%",
+                    width: "auto",
+                    height: "auto",
                     display: "block",
                   }}
                 />
@@ -181,13 +190,22 @@ export default function RenderFlyerPlacements({
               {/* bottom 80%: product left, labels right */}
               <div style={{ flex: 4, minHeight: 0, display: "flex", flexDirection: "row", overflow: "visible" }}>
                 {/* left 75%: product image */}
-                <div style={{ flex: 75, minWidth: 0, padding: "0 6px 10px 10px" }}>
+                <div style={{
+                  flex: 75,
+                  minWidth: 0,
+                  padding: "0 6px 10px 10px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  overflow: "hidden",
+                }}>
                   <img
                     src={imgSrc}
                     style={{
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "cover",
+                      maxWidth: "100%",
+                      maxHeight: "100%",
+                      width: "auto",
+                      height: "auto",
                       display: "block",
                     }}
                   />
@@ -261,13 +279,22 @@ export default function RenderFlyerPlacements({
             <div style={{ flex: 1, minHeight: 0 }} />
 
             {/* middle 60%: product image */}
-            <div style={{ flex: 3, minHeight: 0, padding: "0 10px" }}>
+            <div style={{
+              flex: 3,
+              minHeight: 0,
+              padding: "0 10px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              overflow: "hidden",
+            }}>
               <img
                 src={imgSrc}
                 style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "cover",
+                  maxWidth: "100%",
+                  maxHeight: "100%",
+                  width: "auto",
+                  height: "auto",
                   display: "block",
                 }}
               />

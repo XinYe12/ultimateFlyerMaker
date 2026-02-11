@@ -11,6 +11,14 @@ export type DbSearchResult = {
   score: number;
 };
 
+export type GoogleSearchResult = {
+  title: string;
+  url: string;
+  /** Proxied image URL for thumbnails; image search only */
+  thumbnail?: string;
+  description?: string;
+};
+
 declare global {
   interface Window {
     electron: {
@@ -30,13 +38,34 @@ declare global {
 
       searchDatabaseByText: (query: string) => Promise<DbSearchResult[]>;
       downloadAndIngestFromUrl: (publicUrl: string) => Promise<{ path: string; result: any }>;
+      googleImageSearch: (query: string) => Promise<GoogleSearchResult[]>;
+      openGoogleSearchWindow: (query: string) => Promise<void>;
 
       matchDiscountToSlots: (args: {
         images: any[];
         discounts: any[];
         opts?: any;
       }) => Promise<any[]>;
+
+      startDrag: (filePath: string) => void;
+
+      didCrashLastRun: () => Promise<boolean>;
+      requestQuit: () => Promise<void>;
     };
+  }
+}
+
+declare namespace JSX {
+  interface IntrinsicElements {
+    webview: React.DetailedHTMLProps<
+      React.HTMLAttributes<HTMLElement> & {
+        src?: string;
+        partition?: string;
+        allowpopups?: string;
+        useragent?: string;
+      },
+      HTMLElement
+    >;
   }
 }
 

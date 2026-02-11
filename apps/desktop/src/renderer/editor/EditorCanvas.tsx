@@ -8,9 +8,11 @@ import {
 } from "./loadFlyerTemplateConfig";
 import RenderFlyerPlacements from "./RenderFlyerPlacements";
 import SlotOverlays from "./SlotOverlays";
+import AddImageModal from "./AddImageModal";
 import { layoutFlyer, layoutFlyerSlots } from "../../../../shared/flyer/layout/layoutFlyer";
 import { isSlottedDepartment } from "./loadFlyerTemplateConfig";
 import { saveDepartmentDraft } from "./draftStorage";
+import { IngestItem } from "../types";
 
 const PREVIEW_SCALE = 0.5;
 
@@ -22,8 +24,11 @@ export default function EditorCanvas({
   onEnqueue,
   onRemove,
   onReplaceImage,
+  onRemoveItem,
   onChooseDatabaseResults,
+  onGoogleSearch,
   onEditTitle,
+  onAddItem,
 }: {
   editorQueue: any[];
   templateId: string;
@@ -32,11 +37,15 @@ export default function EditorCanvas({
   onEnqueue?: (paths: string[], options?: { slotIndex?: number }) => Promise<void>;
   onRemove?: (id: string) => void;
   onReplaceImage?: (itemId: string) => Promise<void>;
+  onRemoveItem?: (id: string) => void;
   onChooseDatabaseResults?: (itemId: string) => void;
+  onGoogleSearch?: (itemId: string) => void;
   onEditTitle?: (itemId: string) => void;
+  onAddItem?: (item: IngestItem) => void;
 }) {
   const [config, setConfig] = useState<any | null>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
+  const [addImageModalSlot, setAddImageModalSlot] = useState<number | null>(null);
 
   // load template config
   useEffect(() => {
@@ -99,17 +108,21 @@ export default function EditorCanvas({
   console.log("EditorCanvas discountLabels:", discountLabels);
 
   // ---------- HANDLERS: Add/Replace Images ----------
-  const handleAddImage = async (slotIndex: number) => {
+  const handleAddImage = (slotIndex: number) => {
+    setAddImageModalSlot(slotIndex);
+  };
+
+  const handleModalLocalFile = async (slotIndex: number, filePath: string) => {
     if (!onEnqueue) return;
-
     try {
-      const filePath = await window.ufm.openImageDialog();
-      if (!filePath) return; // User canceled
-
       await onEnqueue([filePath], { slotIndex });
     } catch (err) {
-      console.error("Failed to add image:", err);
+      console.error("Failed to enqueue image:", err);
     }
+  };
+
+  const handleModalItemReady = (item: IngestItem) => {
+    onAddItem?.(item);
   };
 
   const handleReplaceImage = async (itemId: string) => {
@@ -139,6 +152,15 @@ export default function EditorCanvas({
   };
 
   return (
+    <>
+    {addImageModalSlot !== null && (
+      <AddImageModal
+        slotIndex={addImageModalSlot}
+        onLocalFile={handleModalLocalFile}
+        onItemReady={handleModalItemReady}
+        onClose={() => setAddImageModalSlot(null)}
+      />
+    )}
     <div
       key={page.pageId} // hard reset per page
       style={{ marginTop: 24, display: "flex", justifyContent: "center" }}
@@ -222,12 +244,15 @@ export default function EditorCanvas({
     placements={placements}
     onAddImage={handleAddImage}
     onReplaceImage={handleReplaceImage}
+    onRemoveItem={onRemoveItem}
     onChooseDatabaseResults={onChooseDatabaseResults}
+    onGoogleSearch={onGoogleSearch}
     onEditTitle={onEditTitle}
   />
 )}
         </div>
       </div>
     </div>
+    </>
   );
 }

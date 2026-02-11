@@ -6,21 +6,54 @@ export function layoutFlyerSlots({
   regionId,
   slots,
 }: {
-  items: { id: string }[]
+  items: { id: string; slotIndex?: number }[]
   pageId: string
   regionId: string
   slots: { x: number; y: number; width: number; height: number }[]
 }): FlyerPlacement[] {
-  return items.slice(0, slots.length).map((item, i) => ({
-    itemId: item.id,
-    pageId,
-    regionId,
-    cardSize: "SMALL" as const,
-    x: slots[i].x,
-    y: slots[i].y,
-    width: slots[i].width,
-    height: slots[i].height,
-  }))
+  // Create a map to track which slots are filled
+  const slotAssignments: Map<number, { id: string; slotIndex?: number }> = new Map();
+
+  // First pass: assign items with explicit slotIndex
+  for (const item of items) {
+    if (item.slotIndex !== undefined && item.slotIndex >= 0 && item.slotIndex < slots.length) {
+      slotAssignments.set(item.slotIndex, item);
+    }
+  }
+
+  // Second pass: assign remaining items to empty slots in order
+  const unassignedItems = items.filter(item => item.slotIndex === undefined);
+  let nextEmptySlot = 0;
+
+  for (const item of unassignedItems) {
+    // Find next empty slot
+    while (nextEmptySlot < slots.length && slotAssignments.has(nextEmptySlot)) {
+      nextEmptySlot++;
+    }
+
+    if (nextEmptySlot < slots.length) {
+      slotAssignments.set(nextEmptySlot, item);
+      nextEmptySlot++;
+    }
+  }
+
+  // Generate placements from slot assignments
+  const placements: FlyerPlacement[] = [];
+  for (const [slotIndex, item] of slotAssignments.entries()) {
+    const slot = slots[slotIndex];
+    placements.push({
+      itemId: item.id,
+      pageId,
+      regionId,
+      cardSize: "SMALL" as const,
+      x: slot.x,
+      y: slot.y,
+      width: slot.width,
+      height: slot.height,
+    });
+  }
+
+  return placements;
 }
 
 type LayoutItem = {

@@ -55,15 +55,40 @@ def normalize_orientation(img: Image.Image) -> Image.Image:
 # ---------- CUTOUT ----------
 @app.post("/cutout")
 async def cutout(file: UploadFile = File(...)):
-    data = await file.read()
-    out = remove(data)
+    try:
+        data = await file.read()
+        print(f"[cutout] received {len(data)} bytes, filename={file.filename}, content_type={file.content_type}")
 
-    img = Image.open(io.BytesIO(out))
-    img = normalize_orientation(img)
+        # Validate we can open this as an image first
+        try:
+            src_img = Image.open(io.BytesIO(data))
+            print(f"[cutout] input image: format={src_img.format}, size={src_img.size}, mode={src_img.mode}")
+            # Convert animated / palette / CMYK images to RGBA for rembg compatibility
+            if src_img.mode not in ("RGB", "RGBA"):
+                src_img = src_img.convert("RGBA")
+                buf = io.BytesIO()
+                src_img.save(buf, format="PNG")
+                data = buf.getvalue()
+                print(f"[cutout] converted to RGBA PNG ({len(data)} bytes)")
+        except Exception as e:
+            print(f"[cutout] PIL cannot open input: {e}")
+            return JSONResponse(status_code=400, content={"error": f"Invalid image: {e}"})
 
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-        img.save(f.name, format="PNG")
-        return {"output_path": f.name}
+        out = remove(data)
+        print(f"[cutout] rembg produced {len(out)} bytes")
+
+        img = Image.open(io.BytesIO(out))
+        img = normalize_orientation(img)
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            img.save(f.name, format="PNG")
+            print(f"[cutout] saved to {f.name}")
+            return {"output_path": f.name}
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 # ---------- OCR ----------

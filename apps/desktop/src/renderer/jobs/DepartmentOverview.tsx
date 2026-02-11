@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef } from "react";
 import { FlyerJob, DepartmentId } from "../types";
 
-type DepartmentStatus = "not started" | "in progress" | "done" | "done, edited";
+type DepartmentStatus = "not started" | "uploading" | "in progress" | "done" | "done, edited";
 
 type DepartmentInfo = {
   status: DepartmentStatus;
@@ -160,9 +160,11 @@ function getDepartmentStatus(department: string, jobs: FlyerJob[]): DepartmentIn
     progressPercent = 0; // Not started processing yet
   }
 
-  // All jobs with work are "in progress" (editable drafts)
+  // UPLOADING = images are in the job but none processed yet (0%). IN PROGRESS = pipeline has started (progress > 0%).
+  const isUploading = progressPercent === 0 && jobToShow.images.length > 0;
+
   return {
-    status: "in progress",
+    status: isUploading ? "uploading" : "in progress",
     progressPercent: progressPercent,
     progressText: progressText,
   };
@@ -172,8 +174,10 @@ function getStatusColor(status: DepartmentStatus): { bg: string; text: string } 
   switch (status) {
     case "not started":
       return { bg: "#F1F3F5", text: "#868E96" };
+    case "uploading":
+      return { bg: "#E7F5FF", text: "#1971C2" }; // Light blue — batch upload in progress
     case "in progress":
-      return { bg: "#FFF3BF", text: "#E67700" };
+      return { bg: "#FFF3BF", text: "#E67700" }; // Amber — processing / pipeline running
     case "done":
       return { bg: "#D0EBFF", text: "#1971C2" };
     case "done, edited":

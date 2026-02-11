@@ -4,9 +4,12 @@
 import { useState, useEffect } from "react";
 import { useJobQueue } from "../hooks/useJobQueue";
 import { FlyerJob, DepartmentId } from "../types";
-import { loadFlyerTemplateConfig } from "../editor/loadFlyerTemplateConfig";
+import { loadFlyerTemplateConfig, FlyerTemplateConfig } from "../editor/loadFlyerTemplateConfig";
 import DepartmentOverview from "./DepartmentOverview";
 import JobCreationPanel from "./JobCreationPanel";
+import ExportWarningDialog from "../export/ExportWarningDialog";
+import ExportModal from "../export/ExportModal";
+import { checkExportReadiness, ExportReadinessCheck } from "../export/exportUtils";
 
 type Props = {
   onViewFlyer: (job: FlyerJob) => void;
@@ -31,10 +34,15 @@ export default function JobQueueView({ onViewFlyer, onOpenDraft, jobQueueHook }:
   const [draftingJobId, setDraftingJobId] = useState<string | null>(null);
   const [availableDepartments, setAvailableDepartments] = useState<string[]>(["grocery"]);
   const [currentTemplate, setCurrentTemplate] = useState("weekly_v2");
+  const [templateConfig, setTemplateConfig] = useState<FlyerTemplateConfig | null>(null);
+  const [showExportWarning, setShowExportWarning] = useState(false);
+  const [exportReadiness, setExportReadiness] = useState<ExportReadinessCheck | null>(null);
+  const [showExportModal, setShowExportModal] = useState(false);
 
   // Load template config to get available departments
   useEffect(() => {
     loadFlyerTemplateConfig(currentTemplate).then(config => {
+      setTemplateConfig(config);
       const depts = new Set<string>();
       config.pages.forEach(page => {
         Object.keys(page.departments).forEach(d => depts.add(d));
@@ -111,6 +119,36 @@ export default function JobQueueView({ onViewFlyer, onOpenDraft, jobQueueHook }:
     setCurrentTemplate(templateId);
   };
 
+  const handleExportClick = () => {
+    if (!templateConfig) return;
+
+    // Check export readiness
+    const readiness = checkExportReadiness(templateConfig, jobs);
+    setExportReadiness(readiness);
+
+    if (!readiness.canExport) {
+      alert("No departments are ready to export yet. Please complete at least one department first.");
+      return;
+    }
+
+    // Show warning dialog
+    setShowExportWarning(true);
+  };
+
+  const handleExportProceed = () => {
+    setShowExportWarning(false);
+    setShowExportModal(true);
+  };
+
+  const handleExportCancel = () => {
+    setShowExportWarning(false);
+    setExportReadiness(null);
+  };
+
+  const handleExportModalClose = () => {
+    setShowExportModal(false);
+    setExportReadiness(null);
+  };
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
@@ -120,6 +158,35 @@ export default function JobQueueView({ onViewFlyer, onOpenDraft, jobQueueHook }:
         availableDepartments={availableDepartments}
         onDepartmentClick={handleDepartmentClick}
       />
+
+      {/* Export Flyer Button */}
+      <div style={{ marginTop: 24, textAlign: "center" }}>
+        <button
+          onClick={handleExportClick}
+          style={{
+            padding: "14px 32px",
+            background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+            color: "#fff",
+            border: "none",
+            borderRadius: 10,
+            cursor: "pointer",
+            fontWeight: 700,
+            fontSize: 16,
+            boxShadow: "0 4px 12px rgba(102, 126, 234, 0.4)",
+            transition: "all 0.2s ease",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = "translateY(-2px)";
+            e.currentTarget.style.boxShadow = "0 6px 16px rgba(102, 126, 234, 0.5)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = "translateY(0)";
+            e.currentTarget.style.boxShadow = "0 4px 12px rgba(102, 126, 234, 0.4)";
+          }}
+        >
+          📄 Export Flyer to PDF
+        </button>
+      </div>
 
       {/* Job Creation Panel - shown when drafting */}
       {draftingJob && (
@@ -181,6 +248,24 @@ export default function JobQueueView({ onViewFlyer, onOpenDraft, jobQueueHook }:
             onCreate={() => {}} // Not used when job exists
           />
         </div>
+      )}
+
+      {/* Export Warning Dialog */}
+      {showExportWarning && exportReadiness && (
+        <ExportWarningDialog
+          readinessCheck={exportReadiness}
+          onProceed={handleExportProceed}
+          onCancel={handleExportCancel}
+        />
+      )}
+
+      {/* Export Modal */}
+      {showExportModal && templateConfig && (
+        <ExportModal
+          templateConfig={templateConfig}
+          jobs={jobs}
+          onClose={handleExportModalClose}
+        />
       )}
     </div>
   );

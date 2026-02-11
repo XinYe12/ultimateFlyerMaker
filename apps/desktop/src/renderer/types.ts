@@ -166,6 +166,7 @@ export type ImageTask = {
   status: "pending" | "processing" | "done" | "error";
   result?: IngestResult;
   error?: string;
+  slotIndex?: number;
 };
 
 export type DiscountInput = {

@@ -20,6 +20,8 @@
     "dotenv": "^17.2.3",
     "firebase-admin": "^13.6.0",
     "get-port": "^7.1.0",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.1.0",
     "node-fetch": "^3.3.2",
     "openai": "^6.15.0",
     "react": "^19.2.3",
