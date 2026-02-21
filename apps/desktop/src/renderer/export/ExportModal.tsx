@@ -5,7 +5,13 @@ import { useState, useEffect } from "react";
 import { FlyerJob } from "../types";
 import { FlyerTemplateConfig } from "../editor/loadFlyerTemplateConfig";
 import FlyerExportRenderer from "./FlyerExportRenderer";
-import { exportFlyerToPDF, generateExportFilename, ExportProgress } from "./exportService";
+import {
+  exportFlyerToPDF,
+  generateExportFilename,
+  ExportProgress,
+} from "./exportService";
+import Modal from "../components/ui/Modal";
+import Button from "../components/ui/Button";
 
 type Props = {
   templateConfig: FlyerTemplateConfig;
@@ -13,19 +19,16 @@ type Props = {
   onClose: () => void;
 };
 
-export default function ExportModal({ templateConfig, jobs, onClose }: Props) {
+export default function ExportModal({
+  templateConfig,
+  jobs,
+  onClose,
+}: Props) {
   const [renderReady, setRenderReady] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState<ExportProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-
-  // Start export once rendering is complete
-  useEffect(() => {
-    if (renderReady && !exporting && !success && !error) {
-      handleExport();
-    }
-  }, [renderReady]);
 
   const handleExport = async () => {
     setExporting(true);
@@ -48,43 +51,43 @@ export default function ExportModal({ templateConfig, jobs, onClose }: Props) {
     }
   };
 
+  // Start export once rendering is complete
+  useEffect(() => {
+    if (renderReady && !exporting && !success && !error) {
+      handleExport();
+    }
+  }, [renderReady]);
+
   const handleClose = () => {
     if (!exporting) {
       onClose();
     }
   };
 
+  const showCloseButton = success || error;
+  const canClose = !exporting;
+
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.8)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 10000,
-        overflow: "auto",
-      }}
-      onClick={handleClose}
-    >
-      <div
-        style={{
-          background: "#fff",
-          borderRadius: 12,
-          padding: 32,
-          maxWidth: 600,
-          width: "90%",
-          boxShadow: "0 12px 48px rgba(0,0,0,0.5)",
+    <>
+      <Modal
+        open={true}
+        onOpenChange={(open) => {
+          if (!open && canClose) handleClose();
         }}
-        onClick={(e) => e.stopPropagation()}
+        closeOnOverlayClick={canClose && showCloseButton}
+        contentStyle={{ maxWidth: 600 }}
       >
-        {/* Header */}
-        <h2 style={{ margin: "0 0 20px", fontSize: 22, fontWeight: 600 }}>
+        <h2
+          style={{
+            margin: "0 0 20px",
+            fontSize: "var(--text-xl)",
+            fontWeight: "var(--font-semibold)",
+            color: "var(--color-text)",
+          }}
+        >
           Export Flyer
         </h2>
 
-        {/* Progress/Status Display */}
         {!renderReady && !error && (
           <div style={{ textAlign: "center", padding: "40px 0" }}>
             <div
@@ -92,13 +95,18 @@ export default function ExportModal({ templateConfig, jobs, onClose }: Props) {
                 width: 48,
                 height: 48,
                 border: "4px solid #f3f3f3",
-                borderTop: "4px solid #4C6EF5",
+                borderTop: "4px solid var(--color-primary)",
                 borderRadius: "50%",
-                animation: "spin 1s linear infinite",
+                animation: "ufm-spin 1s linear infinite",
                 margin: "0 auto 16px",
               }}
             />
-            <p style={{ color: "#666", fontSize: 15 }}>
+            <p
+              style={{
+                color: "var(--color-text-muted)",
+                fontSize: 15,
+              }}
+            >
               Preparing flyer for export...
             </p>
           </div>
@@ -106,7 +114,6 @@ export default function ExportModal({ templateConfig, jobs, onClose }: Props) {
 
         {renderReady && exporting && progress && (
           <div style={{ padding: "20px 0" }}>
-            {/* Progress bar */}
             <div
               style={{
                 width: "100%",
@@ -120,19 +127,29 @@ export default function ExportModal({ templateConfig, jobs, onClose }: Props) {
               <div
                 style={{
                   height: "100%",
-                  background: "#4C6EF5",
+                  background: "var(--color-primary)",
                   width: `${(progress.currentPage / progress.totalPages) * 100}%`,
                   transition: "width 0.3s ease",
                 }}
               />
             </div>
 
-            {/* Progress text */}
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>
+              <div
+                style={{
+                  fontSize: "var(--text-lg)",
+                  fontWeight: "var(--font-semibold)",
+                  marginBottom: 8,
+                }}
+              >
                 {progress.message}
               </div>
-              <div style={{ fontSize: 14, color: "#666" }}>
+              <div
+                style={{
+                  fontSize: "var(--text-base)",
+                  color: "var(--color-text-muted)",
+                }}
+              >
                 Page {progress.currentPage} of {progress.totalPages}
               </div>
             </div>
@@ -153,12 +170,27 @@ export default function ExportModal({ templateConfig, jobs, onClose }: Props) {
                 margin: "0 auto 16px",
               }}
             >
-              <span style={{ fontSize: 32, color: "#2F9E44" }}>✓</span>
+              <span style={{ fontSize: 32, color: "var(--color-success)" }}>
+                ✓
+              </span>
             </div>
-            <h3 style={{ margin: "0 0 8px", fontSize: 20, fontWeight: 600 }}>
+            <h3
+              style={{
+                margin: "0 0 8px",
+                fontSize: 20,
+                fontWeight: "var(--font-semibold)",
+                color: "var(--color-text)",
+              }}
+            >
               Export Complete!
             </h3>
-            <p style={{ margin: 0, color: "#666", fontSize: 15 }}>
+            <p
+              style={{
+                margin: 0,
+                color: "var(--color-text-muted)",
+                fontSize: 15,
+              }}
+            >
               Your flyer has been saved successfully.
             </p>
           </div>
@@ -178,36 +210,46 @@ export default function ExportModal({ templateConfig, jobs, onClose }: Props) {
                 margin: "0 auto 16px",
               }}
             >
-              <span style={{ fontSize: 32, color: "#C92A2A" }}>✕</span>
+              <span style={{ fontSize: 32, color: "var(--color-error)" }}>
+                ✕
+              </span>
             </div>
-            <h3 style={{ margin: "0 0 8px", fontSize: 20, fontWeight: 600 }}>
+            <h3
+              style={{
+                margin: "0 0 8px",
+                fontSize: 20,
+                fontWeight: "var(--font-semibold)",
+                color: "var(--color-text)",
+              }}
+            >
               Export Failed
             </h3>
-            <p style={{ margin: 0, color: "#666", fontSize: 15 }}>{error}</p>
+            <p
+              style={{
+                margin: 0,
+                color: "var(--color-text-muted)",
+                fontSize: 15,
+              }}
+            >
+              {error}
+            </p>
           </div>
         )}
 
-        {/* Action Button */}
-        {(success || error) && (
-          <div style={{ display: "flex", justifyContent: "center", marginTop: 24 }}>
-            <button
-              onClick={handleClose}
-              style={{
-                padding: "10px 24px",
-                background: "#4C6EF5",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                cursor: "pointer",
-                fontWeight: 600,
-                fontSize: 14,
-              }}
-            >
+        {showCloseButton && (
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              marginTop: 24,
+            }}
+          >
+            <Button variant="primary" onClick={handleClose}>
               Close
-            </button>
+            </Button>
           </div>
         )}
-      </div>
+      </Modal>
 
       {/* Hidden renderer - renders flyer pages off-screen */}
       <div
@@ -215,7 +257,7 @@ export default function ExportModal({ templateConfig, jobs, onClose }: Props) {
           position: "fixed",
           left: "-9999px",
           top: 0,
-          width: "1650px", // Fixed width matching flyer template size
+          width: "1650px",
         }}
       >
         <FlyerExportRenderer
@@ -225,13 +267,12 @@ export default function ExportModal({ templateConfig, jobs, onClose }: Props) {
         />
       </div>
 
-      {/* CSS for spinner animation */}
       <style>{`
-        @keyframes spin {
+        @keyframes ufm-spin {
           0% { transform: rotate(0deg); }
           100% { transform: rotate(360deg); }
         }
       `}</style>
-    </div>
+    </>
   );
 }

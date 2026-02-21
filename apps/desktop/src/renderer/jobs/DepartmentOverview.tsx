@@ -1,13 +1,15 @@
 // apps/desktop/src/renderer/jobs/DepartmentOverview.tsx
-// Department overview with weekly cycle and status buttons
+// Department overview with weekly cycle and 3D status cards
 
-import { useState, useEffect, useRef } from "react";
+import React from "react";
 import { FlyerJob, DepartmentId } from "../types";
+import DepartmentCard from "./DepartmentCard";
 
 type DepartmentStatus = "not started" | "uploading" | "in progress" | "done" | "done, edited";
 
 type DepartmentInfo = {
   status: DepartmentStatus;
+  statusLabel: string;
   editedAt?: number;
   progressPercent: number;
   progressText: string;
@@ -31,49 +33,6 @@ const DEPARTMENT_LABELS: Record<string, string> = {
   hot_sale: "Hot Sale",
   produce: "Produce",
 };
-
-// Custom hook to animate progress percentage
-function useAnimatedProgress(targetPercent: number, duration: number = 800): number {
-  const [displayPercent, setDisplayPercent] = useState(targetPercent);
-  const animationRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    // Cancel any ongoing animation
-    if (animationRef.current !== null) {
-      cancelAnimationFrame(animationRef.current);
-    }
-
-    const startPercent = displayPercent;
-    const startTime = performance.now();
-
-    const animate = (currentTime: number) => {
-      const elapsed = currentTime - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-
-      // Easing function (easeOutCubic for smooth deceleration)
-      const eased = 1 - Math.pow(1 - progress, 3);
-      const currentValue = startPercent + (targetPercent - startPercent) * eased;
-
-      setDisplayPercent(Math.round(currentValue));
-
-      if (progress < 1) {
-        animationRef.current = requestAnimationFrame(animate);
-      } else {
-        animationRef.current = null;
-      }
-    };
-
-    animationRef.current = requestAnimationFrame(animate);
-
-    return () => {
-      if (animationRef.current !== null) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [targetPercent]);
-
-  return displayPercent;
-}
 
 function getWeekCycle(): string {
   const today = new Date();
@@ -107,8 +66,9 @@ function getDepartmentStatus(department: string, jobs: FlyerJob[]): DepartmentIn
   if (deptJobs.length === 0) {
     return {
       status: "not started",
+      statusLabel: "Not started",
       progressPercent: 0,
-      progressText: "0%",
+      progressText: "",
     };
   }
 
@@ -124,19 +84,22 @@ function getDepartmentStatus(department: string, jobs: FlyerJob[]): DepartmentIn
   if (!jobToShow) {
     return {
       status: "not started",
+      statusLabel: "Not started",
       progressPercent: 0,
-      progressText: "0%",
+      progressText: "",
     };
   }
 
-  // Check if the job has actual work done (images added)
-  const hasWork = jobToShow.images.length > 0;
+  // Check if the job has actual work done (images added or discount-only processed)
+  const hasWork =
+    jobToShow.images.length > 0 || (jobToShow.result?.processedImages?.length ?? 0) > 0;
 
   if (!hasWork) {
     return {
       status: "not started",
+      statusLabel: "Not started",
       progressPercent: 0,
-      progressText: "0%",
+      progressText: "",
     };
   }
 
@@ -153,170 +116,37 @@ function getDepartmentStatus(department: string, jobs: FlyerJob[]): DepartmentIn
   } else if (jobToShow.status === "completed") {
     // Completed job - show as ready to edit (100% processed)
     progressPercent = 100;
-    progressText = `${jobToShow.images.length} imgs`;
-  } else if (jobToShow.status === "drafting" && jobToShow.images.length > 0) {
-    // Draft has images but not queued yet - show image count
-    progressText = `${jobToShow.images.length} imgs`;
+    const itemCount =
+      jobToShow.images.length || (jobToShow.result?.processedImages?.length ?? 0);
+    progressText = `${itemCount} imgs`;
+  } else if (jobToShow.status === "drafting" && hasWork) {
+    // Draft has images/discount but not queued yet - show count
+    const draftCount =
+      jobToShow.images.length || (jobToShow.result?.processedImages?.length ?? 0);
+    progressText = `${draftCount} imgs`;
     progressPercent = 0; // Not started processing yet
   }
 
-  // UPLOADING = images are in the job but none processed yet (0%). IN PROGRESS = pipeline has started (progress > 0%).
-  const isUploading = progressPercent === 0 && jobToShow.images.length > 0;
+  // Determine status: completed/ready to edit -> in progress (yellow); processing -> in progress; images added but not queued -> uploading
+  let status: DepartmentStatus = "in progress";
+  let statusLabel = "Processing…";
+  if (jobToShow.status === "completed") {
+    status = "in progress"; // Ready to edit = in progress, use yellow
+    statusLabel = "Ready to edit";
+  } else if (jobToShow.status === "queued" || jobToShow.status === "processing") {
+    status = "in progress";
+    statusLabel = "Processing…";
+  } else if (jobToShow.status === "drafting" && hasWork) {
+    status = "uploading";
+    statusLabel = "Ready to process";
+  }
 
   return {
-    status: isUploading ? "uploading" : "in progress",
+    status,
+    statusLabel,
     progressPercent: progressPercent,
     progressText: progressText,
   };
-}
-
-function getStatusColor(status: DepartmentStatus): { bg: string; text: string } {
-  switch (status) {
-    case "not started":
-      return { bg: "#F1F3F5", text: "#868E96" };
-    case "uploading":
-      return { bg: "#E7F5FF", text: "#1971C2" }; // Light blue — batch upload in progress
-    case "in progress":
-      return { bg: "#FFF3BF", text: "#E67700" }; // Amber — processing / pipeline running
-    case "done":
-      return { bg: "#D0EBFF", text: "#1971C2" };
-    case "done, edited":
-      return { bg: "#D3F9D8", text: "#2F9E44" }; // Green to show active editing
-  }
-}
-
-function formatTimestamp(timestamp: number): string {
-  const date = new Date(timestamp);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-
-  if (diffMins < 1) return "just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-// Component for individual department button with animated progress
-function DepartmentButton({
-  department,
-  deptInfo,
-  label,
-  onDepartmentClick,
-}: {
-  department: string;
-  deptInfo: DepartmentInfo;
-  label: string;
-  onDepartmentClick: (dept: DepartmentId) => void;
-}) {
-  const animatedPercent = useAnimatedProgress(deptInfo.progressPercent);
-  const colors = getStatusColor(deptInfo.status);
-
-  // Format progress text with animated percentage
-  let displayText = deptInfo.progressText;
-  if (deptInfo.progressText.includes('%')) {
-    displayText = `${animatedPercent}%`;
-  }
-
-  return (
-    <button
-      onClick={() => onDepartmentClick(department as DepartmentId)}
-      style={{
-        background: colors.bg,
-        color: colors.text,
-        border: "none",
-        borderRadius: 12,
-        padding: "24px 20px",
-        cursor: "pointer",
-        transition: "all 0.2s ease",
-        fontWeight: 500,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        aspectRatio: "1 / 1",
-        position: "relative",
-        minHeight: "180px",
-      }}
-      onMouseEnter={e => {
-        e.currentTarget.style.transform = "translateY(-4px)";
-        e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.15)";
-      }}
-      onMouseLeave={e => {
-        e.currentTarget.style.transform = "translateY(0)";
-        e.currentTarget.style.boxShadow = "none";
-      }}
-    >
-      {/* Department Name */}
-      <div style={{
-        fontSize: 18,
-        fontWeight: 700,
-        marginBottom: 16,
-        textAlign: "center",
-      }}>
-        {label}
-      </div>
-
-      {/* Progress Circle or Percentage */}
-      <div style={{
-        fontSize: 36,
-        fontWeight: 800,
-        marginBottom: 12,
-        lineHeight: 1,
-      }}>
-        {displayText}
-      </div>
-
-      {/* Status Text */}
-      <div style={{
-        fontSize: 11,
-        textTransform: "uppercase",
-        opacity: 0.85,
-        fontWeight: 600,
-        textAlign: "center",
-      }}>
-        {deptInfo.status}
-      </div>
-
-      {/* Edited Timestamp */}
-      {deptInfo.editedAt && (
-        <div style={{
-          fontSize: 10,
-          marginTop: 6,
-          opacity: 0.7,
-          textTransform: "none",
-        }}>
-          {formatTimestamp(deptInfo.editedAt)}
-        </div>
-      )}
-
-      {/* Progress Bar at Bottom */}
-      {animatedPercent > 0 && animatedPercent < 100 && (
-        <div style={{
-          position: "absolute",
-          bottom: 0,
-          left: 0,
-          right: 0,
-          height: "4px",
-          background: "rgba(0,0,0,0.1)",
-          borderBottomLeftRadius: 12,
-          borderBottomRightRadius: 12,
-          overflow: "hidden",
-        }}>
-          <div style={{
-            height: "100%",
-            width: `${animatedPercent}%`,
-            background: colors.text,
-            transition: "width 0.1s linear",
-          }} />
-        </div>
-      )}
-    </button>
-  );
 }
 
 export default function DepartmentOverview({ jobs, availableDepartments, onDepartmentClick }: Props) {
@@ -342,11 +172,11 @@ export default function DepartmentOverview({ jobs, availableDepartments, onDepar
         </p>
       </div>
 
-      {/* Department Buttons */}
+      {/* Department Cards */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))",
           gap: 16,
         }}
       >
@@ -355,12 +185,14 @@ export default function DepartmentOverview({ jobs, availableDepartments, onDepar
           const label = DEPARTMENT_LABELS[dept] || dept;
 
           return (
-            <DepartmentButton
+            <DepartmentCard
               key={dept}
               department={dept}
-              deptInfo={deptInfo}
               label={label}
-              onDepartmentClick={onDepartmentClick || (() => {})}
+              progressText={deptInfo.progressText}
+              statusLabel={deptInfo.statusLabel}
+              status={deptInfo.status}
+              onClick={() => (onDepartmentClick || (() => {}))(dept as DepartmentId)}
             />
           );
         })}

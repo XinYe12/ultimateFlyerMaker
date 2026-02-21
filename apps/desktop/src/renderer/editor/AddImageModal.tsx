@@ -3,6 +3,8 @@
 // Tabs: Upload (local file), Database search, Google image search (embedded webview).
 
 import { useState, useRef, useEffect } from "react";
+import Modal from "../components/ui/Modal";
+import Button from "../components/ui/Button";
 import { v4 as uuidv4 } from "uuid";
 import { IngestItem } from "../types";
 import type { DbSearchResult, GoogleSearchResult } from "../global.d";
@@ -62,6 +64,15 @@ export default function AddImageModal({ slotIndex, onLocalFile, onItemReady, onC
   }, [webviewUrl]);
 
   const isGoogleTab = activeTab === "google";
+
+  // ── Close on Escape ─────────────────────────────────────────────────────
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !processing) onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [processing, onClose]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -197,21 +208,9 @@ export default function AddImageModal({ slotIndex, onLocalFile, onItemReady, onC
           Select an image from your computer.<br />
           It will be processed automatically (OCR, background removal).
         </p>
-        <button
-          onClick={handleUpload}
-          style={{
-            padding: "12px 32px",
-            background: "#4CAF50",
-            color: "#fff",
-            border: "none",
-            borderRadius: 8,
-            fontSize: 16,
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
-        >
+        <Button variant="primary" size="lg" onClick={handleUpload}>
           Browse Files
-        </button>
+        </Button>
       </div>
     );
   }
@@ -232,16 +231,13 @@ export default function AddImageModal({ slotIndex, onLocalFile, onItemReady, onC
               border: "1px solid #ddd", borderRadius: 8,
             }}
           />
-          <button
+          <Button
+            variant="primary"
             onClick={handleDbSearch}
             disabled={dbLoading || !dbQuery.trim()}
-            style={{
-              padding: "10px 20px", background: "#9C27B0", color: "#fff",
-              border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer",
-            }}
           >
             {dbLoading ? "Searching..." : "Search"}
-          </button>
+          </Button>
         </div>
 
         {dbLoading && <p style={{ color: "#666", textAlign: "center" }}>Searching database...</p>}
@@ -280,16 +276,13 @@ export default function AddImageModal({ slotIndex, onLocalFile, onItemReady, onC
               border: "1px solid #ddd", borderRadius: 8,
             }}
           />
-          <button
+          <Button
+            variant="primary"
             onClick={handleGoogleSearch}
             disabled={!googleQuery.trim()}
-            style={{
-              padding: "10px 20px", background: "#4285F4", color: "#fff",
-              border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer",
-            }}
           >
             Search
-          </button>
+          </Button>
 
           {/* Grocery context toggle */}
           <button
@@ -385,46 +378,37 @@ export default function AddImageModal({ slotIndex, onLocalFile, onItemReady, onC
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.5)",
+    <Modal
+      open={true}
+      onOpenChange={(open) => !open && !processing && onClose()}
+      closeOnOverlayClick={!processing}
+      contentStyle={{
+        padding: isGoogleTab ? 16 : 24,
+        width: isGoogleTab ? "95vw" : 680,
+        maxWidth: isGoogleTab ? 1400 : "92vw",
+        height: isGoogleTab ? "92vh" : undefined,
+        maxHeight: isGoogleTab ? undefined : "85vh",
         display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 10000,
+        flexDirection: "column",
+        transition: "width 0.2s, height 0.2s, max-width 0.2s",
       }}
-      onClick={processing ? undefined : onClose}
     >
-      <div
-        style={{
-          background: "#fff",
-          borderRadius: 12,
-          padding: isGoogleTab ? 16 : 24,
-          width: isGoogleTab ? "95vw" : 680,
-          maxWidth: isGoogleTab ? 1400 : "92vw",
-          height: isGoogleTab ? "92vh" : undefined,
-          maxHeight: isGoogleTab ? undefined : "85vh",
-          display: "flex",
-          flexDirection: "column",
-          boxShadow: "0 12px 48px rgba(0,0,0,0.3)",
-          transition: "width 0.2s, height 0.2s, max-width 0.2s",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
         {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Add Image</h2>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: "var(--font-bold)", color: "var(--color-text)" }}>Add Image</h2>
           <button
-            onClick={onClose}
+            onClick={() => !processing && onClose()}
             disabled={processing}
             style={{
-              background: "none", border: "none", cursor: "pointer",
-              fontSize: 20, color: "#868E96", lineHeight: 1,
+              background: "none",
+              border: "none",
+              cursor: processing ? "wait" : "pointer",
+              fontSize: 20,
+              color: "var(--color-text-muted)",
+              lineHeight: 1,
             }}
           >
-            ✕
+            ×
           </button>
         </div>
 
@@ -460,7 +444,6 @@ export default function AddImageModal({ slotIndex, onLocalFile, onItemReady, onC
           {activeTab === "database" && <DatabaseTab />}
           {activeTab === "google"   && <GoogleTab />}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

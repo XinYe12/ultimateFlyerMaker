@@ -1,8 +1,14 @@
 export type SlotDef = { x: number; y: number; width: number; height: number };
 
+export type CardDepartmentDef = {
+  region: { x: number; y: number; width: number; height: number };
+  rows: number;
+};
+
 export type DepartmentDef =
   | { x: number; y: number; width: number; height: number }
-  | { slots: SlotDef[] };
+  | { slots: SlotDef[] }
+  | CardDepartmentDef;
 
 export interface FlyerTemplateConfig {
   templateId: string;
@@ -13,8 +19,12 @@ export interface FlyerTemplateConfig {
   }[];
 }
 
+export function isCardDepartment(def: DepartmentDef): def is CardDepartmentDef {
+  return "region" in def && "rows" in def;
+}
+
 export function isSlottedDepartment(def: DepartmentDef): def is { slots: SlotDef[] } {
-  return "slots" in def && Array.isArray(def.slots);
+  return "slots" in def && Array.isArray((def as any).slots);
 }
 
 export async function loadFlyerTemplateConfig(

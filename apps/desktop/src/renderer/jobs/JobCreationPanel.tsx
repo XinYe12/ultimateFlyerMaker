@@ -4,6 +4,8 @@
 import { useState, useRef } from "react";
 import { FlyerJob, DepartmentId, DiscountInput } from "../types";
 import DepartmentSelector from "../components/DepartmentSelector";
+import Button from "../components/ui/Button";
+import Card from "../components/ui/Card";
 
 const TEMPLATE_OPTIONS = [
   { id: "weekly_v1", label: "Weekly V1" },
@@ -49,36 +51,29 @@ export default function JobCreationPanel({
     return (
       <div
         style={{
-          background: "#fff",
-          border: "2px dashed #DEE2E6",
-          borderRadius: 8,
+          background: "var(--color-bg)",
+          border: "2px dashed var(--color-border)",
+          borderRadius: "var(--radius-md)",
           padding: 24,
           textAlign: "center",
         }}
       >
-        <h3 style={{ margin: "0 0 16px", color: "#495057" }}>Create New Flyer Job</h3>
+        <h3 style={{ margin: "0 0 16px", color: "var(--color-text-muted)" }}>Create New Flyer Job</h3>
 
         <div style={{ marginBottom: 16 }}>
-          <label style={{ display: "block", marginBottom: 8, fontWeight: 500 }}>
+          <label style={{ display: "block", marginBottom: 8, fontWeight: "var(--font-medium)" }}>
             Template
           </label>
-          <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+          <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "center" }}>
             {TEMPLATE_OPTIONS.map(t => (
-              <button
+              <Button
                 key={t.id}
+                variant={templateId === t.id ? "primary" : "secondary"}
+                size="sm"
                 onClick={() => setTemplateId(t.id)}
-                style={{
-                  padding: "8px 16px",
-                  border: "none",
-                  borderRadius: 6,
-                  background: templateId === t.id ? "#4C6EF5" : "#E9ECEF",
-                  color: templateId === t.id ? "#fff" : "#333",
-                  fontWeight: templateId === t.id ? 600 : 500,
-                  cursor: "pointer",
-                }}
               >
                 {t.label}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
@@ -94,21 +89,9 @@ export default function JobCreationPanel({
           />
         </div>
 
-        <button
-          onClick={() => onCreate(templateId, department)}
-          style={{
-            padding: "12px 24px",
-            background: "#4C6EF5",
-            color: "#fff",
-            border: "none",
-            borderRadius: 6,
-            fontWeight: 600,
-            cursor: "pointer",
-            fontSize: 14,
-          }}
-        >
+        <Button variant="primary" size="lg" onClick={() => onCreate(templateId, department)}>
           Start New Job
-        </button>
+        </Button>
       </div>
     );
   }
@@ -157,23 +140,17 @@ export default function JobCreationPanel({
     }
   };
 
-  const canQueue = job.images.length > 0;
+  const hasDiscount = xlsxPath !== null || discountText.trim().length > 0;
+  const canQueue = job.images.length > 0 || hasDiscount;
   const isProcessing = job.status === "queued" || job.status === "processing";
   const progressPercent = job.progress.totalImages > 0
     ? Math.round((job.progress.processedImages / job.progress.totalImages) * 100)
     : 0;
 
   return (
-    <div
-      style={{
-        background: "#fff",
-        border: "1px solid #DEE2E6",
-        borderRadius: 8,
-        padding: 20,
-      }}
-    >
+    <Card style={{ padding: 20 }}>
       {/* Job Name */}
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: "var(--space-4)" }}>
         <input
           type="text"
           value={job.name}
@@ -183,11 +160,12 @@ export default function JobCreationPanel({
           style={{
             width: "100%",
             padding: "10px 12px",
-            border: "1px solid #DEE2E6",
-            borderRadius: 6,
-            fontSize: 16,
-            fontWeight: 600,
+            border: "1px solid var(--color-border)",
+            borderRadius: "var(--radius-sm)",
+            fontSize: "var(--text-lg)",
+            fontWeight: "var(--font-semibold)",
             opacity: isProcessing ? 0.6 : 1,
+            fontFamily: "var(--font-sans)",
           }}
         />
       </div>
@@ -195,33 +173,25 @@ export default function JobCreationPanel({
       {/* Template + Department Row */}
       <div style={{ display: "flex", gap: 16, marginBottom: 16, flexWrap: "wrap" }}>
         <div>
-          <label style={{ display: "block", marginBottom: 4, fontSize: 12, color: "#868E96" }}>
+          <label style={{ display: "block", marginBottom: 4, fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>
             Template
           </label>
           <div style={{ display: "flex", gap: 6 }}>
             {TEMPLATE_OPTIONS.map(t => (
-              <button
+              <Button
                 key={t.id}
+                variant={job.templateId === t.id ? "primary" : "secondary"}
+                size="sm"
                 onClick={() => onSetTemplate(t.id)}
-                style={{
-                  padding: "6px 12px",
-                  border: "none",
-                  borderRadius: 4,
-                  background: job.templateId === t.id ? "#4C6EF5" : "#E9ECEF",
-                  color: job.templateId === t.id ? "#fff" : "#333",
-                  fontWeight: job.templateId === t.id ? 600 : 500,
-                  cursor: "pointer",
-                  fontSize: 13,
-                }}
               >
                 {t.label}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
 
         <div style={{ flex: 1 }}>
-          <label style={{ display: "block", marginBottom: 4, fontSize: 12, color: "#868E96" }}>
+          <label style={{ display: "block", marginBottom: 4, fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>
             Department
           </label>
           <DepartmentSelector
@@ -232,11 +202,16 @@ export default function JobCreationPanel({
         </div>
       </div>
 
+      {/* Helper text */}
+      <p style={{ margin: "0 0 16px", fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>
+        Add images and/or a discount list, then start processing.
+      </p>
+
       {/* Parallel Input: Images + Discounts */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-4)" }}>
         {/* Images Panel */}
         <div>
-          <label style={{ display: "block", marginBottom: 8, fontWeight: 600, fontSize: 14 }}>
+          <label style={{ display: "block", marginBottom: 8, fontWeight: "var(--font-semibold)", fontSize: "var(--text-base)" }}>
             Product Images ({job.images.length})
           </label>
           <div
@@ -246,12 +221,12 @@ export default function JobCreationPanel({
               handleImageDrop(Array.from(e.dataTransfer.files) as ElectronFile[]);
             }}
             style={{
-              border: "2px dashed #DEE2E6",
-              borderRadius: 6,
+              border: "2px dashed var(--color-border)",
+              borderRadius: "var(--radius-sm)",
               padding: 20,
               textAlign: "center",
               cursor: "pointer",
-              background: "#F8F9FA",
+              background: "var(--color-bg-subtle)",
               minHeight: 120,
             }}
             onClick={() => {
@@ -268,8 +243,8 @@ export default function JobCreationPanel({
               input.click();
             }}
           >
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>Drop Images Here</div>
-            <div style={{ fontSize: 12, color: "#868E96" }}>JPG, PNG (multiple allowed)</div>
+            <div style={{ fontWeight: "var(--font-semibold)", marginBottom: 4 }}>Drop Images Here</div>
+            <div style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>JPG, PNG (multiple allowed)</div>
           </div>
 
           {/* Image list */}
@@ -283,7 +258,7 @@ export default function JobCreationPanel({
                     alignItems: "center",
                     justifyContent: "space-between",
                     padding: "6px 8px",
-                    background: idx % 2 === 0 ? "#F8F9FA" : "#fff",
+                    background: idx % 2 === 0 ? "var(--color-bg-subtle)" : "var(--color-bg)",
                     borderRadius: 4,
                     fontSize: 12,
                   }}
@@ -296,7 +271,7 @@ export default function JobCreationPanel({
                     style={{
                       background: "none",
                       border: "none",
-                      color: "#868E96",
+                      color: "var(--color-text-muted)",
                       cursor: "pointer",
                       padding: "2px 6px",
                     }}
@@ -311,7 +286,7 @@ export default function JobCreationPanel({
 
         {/* Discounts Panel */}
         <div>
-          <label style={{ display: "block", marginBottom: 8, fontWeight: 600, fontSize: 14 }}>
+          <label style={{ display: "block", marginBottom: 8, fontWeight: "var(--font-semibold)", fontSize: "var(--text-base)" }}>
             Discount List {discountSource && `(${discountSource.toUpperCase()})`}
           </label>
           <div
@@ -322,16 +297,16 @@ export default function JobCreationPanel({
             }}
             onClick={() => fileInputRef.current?.click()}
             style={{
-              border: "2px dashed #DEE2E6",
-              borderRadius: 6,
+              border: "2px dashed var(--color-border)",
+              borderRadius: "var(--radius-sm)",
               padding: 12,
               textAlign: "center",
               cursor: "pointer",
-              background: "#F8F9FA",
+              background: "var(--color-bg-subtle)",
               marginBottom: 8,
             }}
           >
-            <div style={{ fontSize: 12, color: "#868E96" }}>
+            <div style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>
               Drop file or click: TXT, CSV, XLSX
             </div>
           </div>
@@ -352,48 +327,45 @@ export default function JobCreationPanel({
               width: "100%",
               height: 100,
               padding: 10,
-              border: "1px solid #DEE2E6",
-              borderRadius: 6,
-              fontSize: 13,
+              border: "1px solid var(--color-border)",
+              borderRadius: "var(--radius-sm)",
+              fontSize: "var(--text-sm)",
               resize: "none",
               fontFamily: "monospace",
             }}
           />
 
           {xlsxPath && (
-            <div style={{ fontSize: 12, color: "#2F9E44", marginTop: 4 }}>
+            <div style={{ fontSize: "var(--text-sm)", color: "var(--color-success)", marginTop: 4 }}>
               XLSX loaded: {xlsxPath.split("/").pop()}
             </div>
           )}
         </div>
       </div>
 
-      {/* Queue Button */}
+      {/* Start Processing Button */}
       <div style={{ marginTop: 20 }}>
         <div style={{ textAlign: "right", marginBottom: 12 }}>
-          <button
+          <Button
+            variant="primary"
+            size="lg"
             onClick={onQueueJob}
             disabled={!canQueue || isProcessing}
-            style={{
-              padding: "12px 32px",
-              background: (canQueue && !isProcessing) ? "#2F9E44" : "#ADB5BD",
-              color: "#fff",
-              border: "none",
-              borderRadius: 6,
-              fontWeight: 600,
-              cursor: (canQueue && !isProcessing) ? "pointer" : "not-allowed",
-              fontSize: 14,
-            }}
+            style={
+              canQueue && !isProcessing
+                ? { background: "var(--color-success)" }
+                : undefined
+            }
           >
-            {isProcessing ? "Processing..." : `Queue Job (${job.images.length} images)`}
-          </button>
+            {isProcessing ? "Processing..." : `Start Processing (${job.images.length} images)`}
+          </Button>
         </div>
 
         {/* Progress Bar */}
         {isProcessing && (
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-              <span style={{ fontSize: 13, color: "#495057", fontWeight: 500 }}>
+              <span style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)", fontWeight: "var(--font-medium)" }}>
                 {job.progress.currentStep}
               </span>
               <span style={{ fontSize: 13, color: "#868E96" }}>
@@ -413,7 +385,7 @@ export default function JobCreationPanel({
                 style={{
                   width: `${progressPercent}%`,
                   height: "100%",
-                  background: "linear-gradient(90deg, #4C6EF5 0%, #5F3DC4 100%)",
+                  background: "linear-gradient(90deg, var(--color-primary) 0%, #5F3DC4 100%)",
                   transition: "width 0.3s ease",
                 }}
               />
@@ -428,12 +400,12 @@ export default function JobCreationPanel({
         {job.status === "completed" && (
           <div
             style={{
-              padding: "12px",
+              padding: "var(--space-3)",
               background: "#D3F9D8",
-              color: "#2F9E44",
-              borderRadius: 6,
-              fontSize: 14,
-              fontWeight: 500,
+              color: "var(--color-success)",
+              borderRadius: "var(--radius-sm)",
+              fontSize: "var(--text-base)",
+              fontWeight: "var(--font-medium)",
               textAlign: "center",
             }}
           >
@@ -441,21 +413,7 @@ export default function JobCreationPanel({
           </div>
         )}
 
-        {/* Error Message */}
-        {job.status === "failed" && job.error && (
-          <div
-            style={{
-              padding: "12px",
-              background: "#FFE3E3",
-              color: "#C92A2A",
-              borderRadius: 6,
-              fontSize: 13,
-            }}
-          >
-            <strong>Error:</strong> {job.error}
-          </div>
-        )}
       </div>
-    </div>
+    </Card>
   );
 }

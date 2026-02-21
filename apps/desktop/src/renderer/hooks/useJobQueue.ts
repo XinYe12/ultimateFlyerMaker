@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
-import { FlyerJob, ImageTask, DiscountInput, DepartmentId, JobStatus, IngestItem } from "../types";
+import { FlyerJob, ImageTask, DiscountInput, DepartmentId, JobStatus, IngestItem, CardLayout } from "../types";
 import { loadJobs, saveJobs } from "../services/jobPersistence";
 
 declare global {
@@ -224,8 +224,8 @@ export function useJobQueue() {
     const job = jobs.find(j => j.id === jobId);
     if (!job || job.status !== "drafting") return;
 
-    if (job.images.length === 0) {
-      console.warn("[useJobQueue] Cannot start job with no images");
+    if (job.images.length === 0 && !job.discount?.source) {
+      console.warn("[useJobQueue] Cannot start job with no images and no discount");
       return;
     }
 
@@ -273,7 +273,7 @@ export function useJobQueue() {
 
   // Sync current editor items + discount labels back to a drafting job (updates draft in job queue UI)
   const syncJobFromEditorItems = useCallback(
-    (jobId: string, items: IngestItem[], discountLabels?: any[]) => {
+    (jobId: string, items: IngestItem[], discountLabels?: any[], slotOverrides?: Record<number, { x: number; y: number; width: number; height: number }>, cardLayouts?: Record<string, CardLayout>) => {
       const images: ImageTask[] = items.map((item) => ({
         id: item.id,
         path: item.path,
@@ -298,6 +298,8 @@ export function useJobQueue() {
                   processedImages: images,
                   discountLabels: discountLabels ?? j.result?.discountLabels ?? [],
                 },
+                slotOverrides: slotOverrides ?? j.slotOverrides,
+                cardLayouts: cardLayouts ?? j.cardLayouts,
               }
             : j
         )

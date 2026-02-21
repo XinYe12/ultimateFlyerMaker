@@ -45,13 +45,13 @@ contextBridge.exposeInMainWorld("ufm", {
   },
 
   // ---------- XLSX ----------
-  parseDiscountXlsx: (filePath) => {
+  parseDiscountXlsx: (filePath, department) => {
     console.log(
-      "🧩 PRELOAD parseDiscountXlsx received:",
+      "PRELOAD parseDiscountXlsx received:",
       JSON.stringify(filePath),
-      typeof filePath
+      "dept:", department
     );
-    return ipcRenderer.invoke("ufm:parseDiscountXlsx", filePath);
+    return ipcRenderer.invoke("ufm:parseDiscountXlsx", filePath, department);
   },
 
   // ---------- EXPORT ----------
@@ -72,10 +72,6 @@ contextBridge.exposeInMainWorld("ufm", {
     );
     return ipcRenderer.invoke("ufm:ingestPhoto", filePath);
   },
-
- ingestPhoto: (path) =>
-  ipcRenderer.invoke("ingestImages", [path]).then(r => r[0]),
-
 
   // ---------- XLSX DIALOG ----------
   openXlsxDialog: () => {
@@ -99,8 +95,6 @@ contextBridge.exposeInMainWorld("ufm", {
   backendRequest: (req) => {
     return ipcRenderer.invoke("backend:request", req);
   },
-  matchDiscountToSlots: (payload) =>
-  ipcRenderer.invoke("match-discount-to-slots", payload),
 
   // ---------- NATIVE FILE DRAG (for Google Lens) ----------
   startDrag: (filePath) => ipcRenderer.send("ufm:startDrag", filePath),
@@ -135,5 +129,40 @@ contextBridge.exposeInMainWorld("ufm", {
     const handler = (_, data) => callback(data);
     ipcRenderer.on("ufm:jobError", handler);
     return () => ipcRenderer.removeListener("ufm:jobError", handler);
+  },
+
+  // ---------- DB BATCH UPLOAD ----------
+  startDbBatch: (paths) => ipcRenderer.invoke("ufm:startDbBatch", paths),
+  confirmDbImage: (imagePath, action, parsed, embedding) =>
+    ipcRenderer.invoke("ufm:confirmDbImage", imagePath, action, parsed, embedding),
+
+  getDbStats: () => ipcRenderer.invoke("ufm:getDbStats"),
+  checkDbStorage: () => ipcRenderer.invoke("ufm:checkDbStorage"),
+  fixDbStorage: (report) => ipcRenderer.invoke("ufm:fixDbStorage", report),
+  checkOllamaStatus: () => ipcRenderer.invoke("ufm:checkOllamaStatus"),
+  getQuotaStatus: () => ipcRenderer.invoke("ufm:getQuotaStatus"),
+
+  onDbBatchProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:dbBatchProgress", handler);
+    return () => ipcRenderer.removeListener("ufm:dbBatchProgress", handler);
+  },
+
+  onDbBatchComplete: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:dbBatchComplete", handler);
+    return () => ipcRenderer.removeListener("ufm:dbBatchComplete", handler);
+  },
+
+  scanNonProducts: () => ipcRenderer.invoke("ufm:scanNonProducts"),
+  onScanNonProductsProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:scanNonProductsProgress", handler);
+    return () => ipcRenderer.removeListener("ufm:scanNonProductsProgress", handler);
+  },
+  onScanNonProductsComplete: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:scanNonProductsComplete", handler);
+    return () => ipcRenderer.removeListener("ufm:scanNonProductsComplete", handler);
   },
 });

@@ -1,12 +1,38 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import Modal from "../components/ui/Modal";
+import Button from "../components/ui/Button";
 
 type Props = {
   itemId: string;
   initialEnglishTitle: string;
   initialRegularPrice: string;
   initialSalePrice: string;
-  onSave: (itemId: string, englishTitle: string, regularPrice: string, salePrice: string) => void;
+  onSave: (
+    itemId: string,
+    englishTitle: string,
+    regularPrice: string,
+    salePrice: string
+  ) => void;
   onClose: () => void;
+};
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "10px 12px",
+  fontSize: "var(--text-base)",
+  border: "1px solid var(--color-border)",
+  borderRadius: "var(--radius-md)",
+  marginBottom: 14,
+  fontFamily: "var(--font-sans)",
+};
+
+const labelStyle: React.CSSProperties = {
+  display: "block",
+  fontSize: "var(--text-sm)",
+  fontWeight: "var(--font-semibold)",
+  color: "var(--color-text)",
+  marginBottom: "var(--space-1)",
 };
 
 export default function DiscountDetailsDialog({
@@ -17,16 +43,25 @@ export default function DiscountDetailsDialog({
   onSave,
   onClose,
 }: Props) {
-  const [englishTitle, setEnglishTitle] = useState(() => String(initialEnglishTitle ?? ""));
-  const [regularPrice, setRegularPrice] = useState(() => String(initialRegularPrice ?? ""));
-  const [salePrice, setSalePrice] = useState(() => String(initialSalePrice ?? ""));
+  const [englishTitle, setEnglishTitle] = useState(() =>
+    String(initialEnglishTitle ?? "")
+  );
+  const [regularPrice, setRegularPrice] = useState(() =>
+    String(initialRegularPrice ?? "")
+  );
+  const [salePrice, setSalePrice] = useState(() =>
+    String(initialSalePrice ?? "")
+  );
 
-  const parsePrice = (v: unknown) => parseFloat(String(v ?? "").replace(/^\$/, ""));
+  const parsePrice = (v: unknown) =>
+    parseFloat(String(v ?? "").replace(/^\$/, ""));
   const regNum = parsePrice(regularPrice);
   const saleNum = parsePrice(salePrice);
   const priceError =
-    String(regularPrice).trim() && String(salePrice).trim() &&
-    !isNaN(regNum) && !isNaN(saleNum) &&
+    String(regularPrice).trim() &&
+    String(salePrice).trim() &&
+    !isNaN(regNum) &&
+    !isNaN(saleNum) &&
     saleNum > regNum
       ? "Sale price cannot be higher than regular price."
       : "";
@@ -37,119 +72,85 @@ export default function DiscountDetailsDialog({
   };
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.5)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 10000,
-      }}
-      onClick={onClose}
-    >
+    <Modal open={true} onOpenChange={(open) => !open && onClose()}>
+      <h2
+        style={{
+          margin: "0 0 var(--space-4)",
+          fontSize: "var(--text-xl)",
+          fontWeight: "var(--font-semibold)",
+          color: "var(--color-text)",
+        }}
+      >
+        Add discount details
+      </h2>
+      <p
+        style={{
+          color: "var(--color-text-muted)",
+          fontSize: "var(--text-sm)",
+          marginBottom: "var(--space-4)",
+        }}
+      >
+        Shown on the product card and used for Database search.
+      </p>
+      <label style={labelStyle}>English title</label>
+      <input
+        type="text"
+        value={englishTitle}
+        onChange={(e) => setEnglishTitle(e.target.value)}
+        placeholder="e.g. Norwegian Mackerel Fillet"
+        autoFocus
+        style={inputStyle}
+      />
+      <label style={labelStyle}>Regular price</label>
+      <input
+        type="text"
+        value={regularPrice}
+        onChange={(e) => setRegularPrice(e.target.value)}
+        placeholder="e.g. 25.00"
+        style={inputStyle}
+      />
+      <label style={labelStyle}>Sale price</label>
+      <input
+        type="text"
+        value={salePrice}
+        onChange={(e) => setSalePrice(e.target.value)}
+        placeholder="e.g. 19.99 or $19.99"
+        style={{ ...inputStyle, marginBottom: 20 }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") handleSave();
+          if (e.key === "Escape") onClose();
+        }}
+      />
+      {priceError && (
+        <p
+          style={{
+            margin: "0 0 var(--space-3)",
+            fontSize: "var(--text-sm)",
+            color: "var(--color-error)",
+          }}
+        >
+          {priceError}
+        </p>
+      )}
       <div
         style={{
-          background: "#fff",
-          borderRadius: 12,
-          padding: 24,
-          width: 400,
-          boxShadow: "0 12px 48px rgba(0,0,0,0.3)",
+          display: "flex",
+          gap: "var(--space-2)",
+          justifyContent: "flex-end",
         }}
-        onClick={(e) => e.stopPropagation()}
       >
-        <h2 style={{ margin: "0 0 16px", fontSize: 18 }}>Add discount details</h2>
-        <p style={{ color: "#666", fontSize: 13, marginBottom: 16 }}>
-          Shown on the product card and used for Database search.
-        </p>
-        <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#333", marginBottom: 4 }}>
-          English title
-        </label>
-        <input
-          type="text"
-          value={englishTitle}
-          onChange={(e) => setEnglishTitle(e.target.value)}
-          placeholder="e.g. Norwegian Mackerel Fillet"
-          autoFocus
-          style={{
-            width: "100%",
-            boxSizing: "border-box",
-            padding: "10px 12px",
-            fontSize: 14,
-            border: "1px solid #ddd",
-            borderRadius: 8,
-            marginBottom: 14,
-          }}
-        />
-        <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#333", marginBottom: 4 }}>
-          Regular price
-        </label>
-        <input
-          type="text"
-          value={regularPrice}
-          onChange={(e) => setRegularPrice(e.target.value)}
-          placeholder="e.g. 25.00"
-          style={{
-            width: "100%",
-            boxSizing: "border-box",
-            padding: "10px 12px",
-            fontSize: 14,
-            border: "1px solid #ddd",
-            borderRadius: 8,
-            marginBottom: 14,
-          }}
-        />
-        <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#333", marginBottom: 4 }}>
-          Sale price
-        </label>
-        <input
-          type="text"
-          value={salePrice}
-          onChange={(e) => setSalePrice(e.target.value)}
-          placeholder="e.g. 19.99 or $19.99"
-          style={{
-            width: "100%",
-            boxSizing: "border-box",
-            padding: "10px 12px",
-            fontSize: 14,
-            border: "1px solid #ddd",
-            borderRadius: 8,
-            marginBottom: 20,
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleSave();
-            if (e.key === "Escape") onClose();
-          }}
-        />
-        {priceError && (
-          <p style={{ margin: "0 0 12px", fontSize: 13, color: "#C92A2A" }}>{priceError}</p>
-        )}
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{ padding: "8px 16px", cursor: "pointer" }}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={!!priceError}
-            style={{
-              padding: "8px 16px",
-              background: priceError ? "#aaa" : "#333",
-              color: "#fff",
-              border: "none",
-              borderRadius: 8,
-              cursor: priceError ? "not-allowed" : "pointer",
-            }}
-          >
-            Save
-          </button>
-        </div>
+        <Button variant="secondary" type="button" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          variant="primary"
+          type="button"
+          onClick={handleSave}
+          disabled={!!priceError}
+        >
+          Save
+        </Button>
       </div>
-    </div>
+    </Modal>
   );
 }

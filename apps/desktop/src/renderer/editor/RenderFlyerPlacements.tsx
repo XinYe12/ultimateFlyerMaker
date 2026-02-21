@@ -106,23 +106,122 @@ export default function RenderFlyerPlacements({
         const item = items.find((it: any) => it.id === p.itemId);
         if (!item) return null;
 
+        const isPendingFlavors = item?.result?.pendingFlavorSelection === true;
+        const rawPaths = item?.result?.cutoutPaths;
+        // When pending, show all flavors dimmed. After selection, show only chosen ones.
+        const hasMultiImages = !isPendingFlavors && Array.isArray(rawPaths) && rawPaths.length > 1;
         const rawSrc =
           item?.image?.src ??
           item?.cutoutPath ??
           item?.result?.cutoutPath ??
+          (Array.isArray(rawPaths) && rawPaths.length > 0 ? rawPaths[0] : null) ??
           null;
-        if (!rawSrc) return null;
 
-        const imgSrc =
-          rawSrc.startsWith("http") || rawSrc.startsWith("file://")
+        const imgSrc = rawSrc
+          ? rawSrc.startsWith("http") || rawSrc.startsWith("file://")
             ? rawSrc
-            : `file://${rawSrc}`;
+            : `file://${rawSrc}`
+          : null;
+
+        const imgSrcs = hasMultiImages
+          ? rawPaths.map((rp) =>
+              rp.startsWith("http") || rp.startsWith("file://") ? rp : `file://${rp}`
+            )
+          : null;
+
+        // Staged flavors (dimmed preview) for pending items — use allFlavorPaths when available
+        const allFlavorPaths = item?.result?.allFlavorPaths;
+        const stagedSrcs = isPendingFlavors
+          ? (Array.isArray(allFlavorPaths) && allFlavorPaths.length > 0 ? allFlavorPaths : rawPaths ?? [])
+              .map((rp: string) =>
+                rp.startsWith("http") || rp.startsWith("file://") ? rp : `file://${rp}`
+              )
+          : null;
 
         const label = getLabelForItem(item, p.itemId);
         const hasLabel = label != null;
 
+        // ── PENDING FLAVOR SELECTION: show dimmed grid + amber badge ──
+        if (isPendingFlavors && stagedSrcs) {
+          const cols = Math.min(3, stagedSrcs.length);
+          return (
+            <div
+              key={p.itemId}
+              style={{
+                position: "absolute",
+                left: p.x,
+                top: p.y,
+                width: p.width,
+                height: p.height,
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden",
+              }}
+            >
+              {/* top spacing */}
+              <div style={{ flex: 1, minHeight: 0 }} />
+
+              {/* dimmed flavor grid */}
+              <div style={{
+                flex: 3,
+                minHeight: 0,
+                padding: "0 10px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                overflow: "hidden",
+                opacity: 0.35,
+              }}>
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: `repeat(${cols}, 1fr)`,
+                  gap: 4,
+                  maxWidth: "100%",
+                  maxHeight: "100%",
+                }}>
+                  {stagedSrcs.map((src, idx) => (
+                    <img key={idx} src={src} alt="" style={{ width: "100%", height: "auto", objectFit: "contain" }} />
+                  ))}
+                </div>
+              </div>
+
+              {/* amber "select flavors" banner */}
+              <div style={{
+                flex: 1,
+                minHeight: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}>
+                {hasLabel && (() => {
+                  const pp = label!.price.display ? parsePriceDisplay(label!.price.display) : null;
+                  return (
+                    <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-end", padding: "4px", gap: 6, width: "100%" }}>
+                      {(label!.title.en || label!.title.zh) && (
+                        <div className="ufm-title" style={{ flex: "0 0 32%", minWidth: 0 }}>
+                          <div className="ufm-title-main">{label!.title.en.toUpperCase()}</div>
+                        </div>
+                      )}
+                      {pp && (
+                        <div className="ufm-price" style={{ flex: "1 1 0", minWidth: 0, display: "flex", alignItems: "baseline", justifyContent: "center" }}>
+                          {pp.type === "MULTI" && <span className="ufm-price-qty">{pp.quantity}/</span>}
+                          <span className="ufm-price-main">{pp.integer}</span>
+                          {pp.decimal && <span className="ufm-price-decimal">{pp.decimal}</span>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          );
+        }
+
+        // Nothing to render at all
+        if (!imgSrc && !imgSrcs?.length && !hasLabel) return null;
+
         // ── no labels → original full-card image ──
-        if (!hasLabel) {
+        if (!hasLabel && imgSrc) {
           return (
             <div
               key={p.itemId}
@@ -140,7 +239,7 @@ export default function RenderFlyerPlacements({
               {/* top 20%: spacing */}
               <div style={{ flex: 1, minHeight: 0 }} />
 
-              {/* remaining 80%: product image */}
+              {/* remaining 80%: product image(s) */}
               <div style={{
                 flex: 4,
                 minHeight: 0,
@@ -150,16 +249,22 @@ export default function RenderFlyerPlacements({
                 justifyContent: "center",
                 overflow: "hidden",
               }}>
-                <img
-                  src={imgSrc}
-                  style={{
+                {imgSrcs && imgSrcs.length > 1 ? (
+                  <div style={{
+                    display: "grid",
+                    gridTemplateColumns: `repeat(${Math.min(3, imgSrcs.length)}, 1fr)`,
+                    gap: 4,
                     maxWidth: "100%",
                     maxHeight: "100%",
-                    width: "auto",
-                    height: "auto",
-                    display: "block",
-                  }}
-                />
+                    alignSelf: "center",
+                  }}>
+                    {imgSrcs.map((src, idx) => (
+                      <img key={idx} src={src} alt="" style={{ width: "100%", height: "auto", objectFit: "contain" }} />
+                    ))}
+                  </div>
+                ) : imgSrc ? (
+                  <img src={imgSrc} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} />
+                ) : null}
               </div>
             </div>
           );
@@ -189,7 +294,7 @@ export default function RenderFlyerPlacements({
 
               {/* bottom 80%: product left, labels right */}
               <div style={{ flex: 4, minHeight: 0, display: "flex", flexDirection: "row", overflow: "visible" }}>
-                {/* left 75%: product image */}
+                {/* left 75%: product image(s) */}
                 <div style={{
                   flex: 75,
                   minWidth: 0,
@@ -199,16 +304,22 @@ export default function RenderFlyerPlacements({
                   justifyContent: "center",
                   overflow: "hidden",
                 }}>
-                  <img
-                    src={imgSrc}
-                    style={{
+                  {imgSrcs && imgSrcs.length > 1 ? (
+                    <div style={{
+                      display: "grid",
+                      gridTemplateColumns: `repeat(${Math.min(3, imgSrcs.length)}, 1fr)`,
+                      gap: 4,
                       maxWidth: "100%",
                       maxHeight: "100%",
-                      width: "auto",
-                      height: "auto",
-                      display: "block",
-                    }}
-                  />
+                      alignSelf: "center",
+                    }}>
+                      {imgSrcs.map((src, idx) => (
+                        <img key={idx} src={src} alt="" style={{ width: "100%", height: "auto", objectFit: "contain" }} />
+                      ))}
+                    </div>
+                  ) : imgSrc ? (
+                    <img src={imgSrc} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} />
+                  ) : null}
                 </div>
 
                 {/* right 25%: title and price stacked */}
@@ -278,7 +389,7 @@ export default function RenderFlyerPlacements({
             {/* top 20%: spacing */}
             <div style={{ flex: 1, minHeight: 0 }} />
 
-            {/* middle 60%: product image */}
+            {/* middle 60%: product image(s) */}
             <div style={{
               flex: 3,
               minHeight: 0,
@@ -288,16 +399,22 @@ export default function RenderFlyerPlacements({
               justifyContent: "center",
               overflow: "hidden",
             }}>
-              <img
-                src={imgSrc}
-                style={{
+              {imgSrcs && imgSrcs.length > 1 ? (
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: `repeat(${Math.min(3, imgSrcs.length)}, 1fr)`,
+                  gap: 4,
                   maxWidth: "100%",
                   maxHeight: "100%",
-                  width: "auto",
-                  height: "auto",
-                  display: "block",
-                }}
-              />
+                  alignSelf: "center",
+                }}>
+                  {imgSrcs.map((src, idx) => (
+                    <img key={idx} src={src} alt="" style={{ width: "100%", height: "auto", objectFit: "contain" }} />
+                  ))}
+                </div>
+              ) : imgSrc ? (
+                <img src={imgSrc} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} />
+              ) : null}
             </div>
 
             {/* bottom 20%: title + price in a row; price centered in remaining space */}

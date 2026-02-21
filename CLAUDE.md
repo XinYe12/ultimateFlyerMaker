@@ -76,6 +76,7 @@ python -m uvicorn cutout_service.server:app --host 127.0.0.1 --port 17890
 | Python backend | `apps/desktop/backend/src/` |
 | Shared layout/models | `apps/shared/flyer/` |
 | Flyer templates | `apps/desktop/src/renderer/public/assets/flyer_templates/` |
+| Java DB ingestion pipeline | `apps/ingestion-java/` |
 
 ### IPC Channels
 
@@ -94,7 +95,18 @@ DEEPSEEK_API_KEY=sk-...
 PYTHON_BIN=/path/to/python3.11
 UFM_PORT=17890
 UFM_HOST=127.0.0.1
-OPENAI_API_KEY=sk-... (optional backup)
+
+# Product Library: Ollama for vision + embeddings (free, local)
+# Run: ollama pull qwen2.5vl
+# Run: ollama pull nomic-embed-text
+OLLAMA_BASE_URL=http://localhost:11434   # optional, default shown
+OLLAMA_VISION_MODEL=qwen2.5vl            # optional, default shown
+OLLAMA_EMBED_MODEL=nomic-embed-text      # optional, default shown
+UFM_BATCH_DELAY_MS=2000                  # optional; pause between images to reduce Ollama CPU spikes (default 0)
+
+# Firestore (if using non-default database or emulator)
+FIRESTORE_DATABASE_ID=(default)          # optional; use your database ID if not default
+FIRESTORE_EMULATOR_HOST=localhost:8080   # optional; set for local emulator
 ```
 
 ## Tech Stack
@@ -105,8 +117,26 @@ OPENAI_API_KEY=sk-... (optional backup)
 - **Image Processing**: @napi-rs/canvas, OpenCV
 - **Data**: Firebase Admin SDK, xlsx parser
 
+## Java Ingestion Pipeline (`apps/ingestion-java/`)
+
+Standalone Maven project that populates the Firestore `product_vectors` collection (read by `DbSearchModal` in the desktop app).
+
+```bash
+# Run on a folder of product images
+export OPENAI_API_KEY=sk-...
+mvn exec:java -Dexec.args="/path/to/images"
+
+# Test without API costs (skips vision + embeddings)
+mvn exec:java -DskipAI=true -Dexec.args="./sample-images"
+
+# Maintenance: clear stale pHash fields
+mvn exec:java -Dexec.mainClass="com.unitedflyer.ClearOldPHash"
+```
+
+Credentials: place Firebase service account key at `apps/ingestion-java/credentials/service-key.json`
+(or set `FIREBASE_CREDENTIALS` env var to an absolute path).
+
 ## Monorepo Notes
 
-- `firebase webapp/` is a legacy project (archived)
 - Root `package.json` has shared ML dependencies (@huggingface/transformers)
 - No monorepo tooling (lerna/nx) - uses manual path references

@@ -1,4 +1,5 @@
 import type { FlyerJob } from "../types";
+import Button from "./ui/Button";
 
 type Props = {
   viewingJob: FlyerJob | null;
@@ -8,7 +9,7 @@ type Props = {
 
 const styles = {
   toolbar: {
-    marginBottom: 16,
+    marginBottom: "var(--space-4)",
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
@@ -16,48 +17,22 @@ const styles = {
   toolbarLeft: {
     display: "flex",
     alignItems: "center",
-    gap: 12,
-  } as const,
-  backBtn: {
-    padding: "8px 16px",
-    background: "#F1F3F5",
-    border: "none",
-    borderRadius: 6,
-    cursor: "pointer",
-    fontWeight: 500,
+    gap: "var(--space-3)",
   } as const,
   jobName: {
-    color: "#868E96",
-  } as const,
-  deleteBtn: {
-    padding: "8px 16px",
-    background: "#FFE3E3",
-    color: "#C92A2A",
-    border: "none",
-    borderRadius: 6,
-    cursor: "pointer",
-    fontWeight: 500,
+    color: "var(--color-text-muted)",
   } as const,
   noJobWrapper: {
-    marginBottom: 16,
-  } as const,
-  backBtnStandalone: {
-    padding: "8px 16px",
-    background: "#F1F3F5",
-    border: "none",
-    borderRadius: 6,
-    cursor: "pointer",
-    fontWeight: 500,
-    marginBottom: 12,
+    marginBottom: "var(--space-4)",
   } as const,
   warningBox: {
     padding: 20,
     background: "#FFF3BF",
-    borderRadius: 8,
+    borderRadius: "var(--radius-md)",
   } as const,
   warningText: {
     margin: 0,
-    color: "#E67700",
+    color: "var(--color-warning)",
   } as const,
 };
 
@@ -65,9 +40,9 @@ export default function EditorHeader({ viewingJob, onBack, onDeleteDraft }: Prop
   if (!viewingJob) {
     return (
       <div style={styles.noJobWrapper}>
-        <button onClick={onBack} style={styles.backBtnStandalone}>
+        <Button variant="secondary" onClick={onBack} style={{ marginBottom: "var(--space-3)" }}>
           Back to Queue
-        </button>
+        </Button>
         <div style={styles.warningBox}>
           <p style={styles.warningText}>
             No job selected. Go to Job Queue to create and process a flyer job.
@@ -80,15 +55,15 @@ export default function EditorHeader({ viewingJob, onBack, onDeleteDraft }: Prop
   return (
     <div style={styles.toolbar}>
       <div style={styles.toolbarLeft}>
-        <button onClick={onBack} style={styles.backBtn}>
+        <Button variant="secondary" onClick={onBack}>
           Back to Queue
-        </button>
+        </Button>
         <span style={styles.jobName}>Viewing: {viewingJob.name}</span>
       </div>
       {viewingJob.status === "drafting" && (
-        <button onClick={onDeleteDraft} style={styles.deleteBtn}>
+        <Button variant="danger" onClick={onDeleteDraft}>
           Delete Draft
-        </button>
+        </Button>
       )}
     </div>
   );

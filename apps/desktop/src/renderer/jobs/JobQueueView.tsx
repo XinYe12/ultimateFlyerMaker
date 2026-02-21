@@ -1,8 +1,9 @@
 // apps/desktop/src/renderer/jobs/JobQueueView.tsx
 // Main container for job queue management
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useJobQueue } from "../hooks/useJobQueue";
+import Button from "../components/ui/Button";
 import { FlyerJob, DepartmentId } from "../types";
 import { loadFlyerTemplateConfig, FlyerTemplateConfig } from "../editor/loadFlyerTemplateConfig";
 import DepartmentOverview from "./DepartmentOverview";
@@ -15,9 +16,10 @@ type Props = {
   onViewFlyer: (job: FlyerJob) => void;
   onOpenDraft?: (job: FlyerJob) => void;
   jobQueueHook: ReturnType<typeof useJobQueue>;
+  onOpenDbUpload?: () => void;
 };
 
-export default function JobQueueView({ onViewFlyer, onOpenDraft, jobQueueHook }: Props) {
+export default function JobQueueView({ onViewFlyer, onOpenDraft, jobQueueHook, onOpenDbUpload }: Props) {
   const {
     jobs,
     createJob,
@@ -38,6 +40,7 @@ export default function JobQueueView({ onViewFlyer, onOpenDraft, jobQueueHook }:
   const [showExportWarning, setShowExportWarning] = useState(false);
   const [exportReadiness, setExportReadiness] = useState<ExportReadinessCheck | null>(null);
   const [showExportModal, setShowExportModal] = useState(false);
+  const draftPanelRef = useRef<HTMLDivElement | null>(null);
 
   // Load template config to get available departments
   useEffect(() => {
@@ -54,17 +57,21 @@ export default function JobQueueView({ onViewFlyer, onOpenDraft, jobQueueHook }:
   // Find current drafting job
   const draftingJob = draftingJobId ? getJob(draftingJobId) : null;
 
-  // If drafting job was queued or has images, clear the drafting state
+  // Auto-open editor when job completes; clear panel on terminal states
   useEffect(() => {
     if (draftingJob) {
-      // If job status changed from drafting, clear local state
-      if (draftingJob.status !== "drafting") {
+      if (draftingJob.status === "completed") {
+        onOpenDraft?.(draftingJob);
+        setDraftingJobId(null);
+      } else if (draftingJob.status === "failed") {
+        // Error toast is handled by App.tsx; clear the panel
         setDraftingJobId(null);
       }
-      // If job now has images, it's "in progress" - allow opening in editor
-      // But keep showing the panel until user manually opens editor
     }
   }, [draftingJob]);
+
+  const jobHasWork = (job: FlyerJob) =>
+    job.images.length > 0 || (job.result?.processedImages?.length ?? 0) > 0;
 
   const handleDepartmentClick = (department: DepartmentId) => {
     // Find any job for this department (completed or drafting)
@@ -83,26 +90,30 @@ export default function JobQueueView({ onViewFlyer, onOpenDraft, jobQueueHook }:
     // Prefer processing/drafting jobs over completed
     const jobToOpen = processingJob || draftingJob || completedJob;
 
-    // If there's a job with images, open it in editor
-    if (jobToOpen && jobToOpen.images.length > 0) {
-      // Open in editor
+    // If there's a job with work (images or discount-only processed), open it in editor
+    if (jobToOpen && jobHasWork(jobToOpen)) {
       onOpenDraft?.(jobToOpen);
       return;
     }
 
     // NOT STARTED: show upload panel
     if (draftingJob) {
-      // Draft exists but no images - show creation panel
       setDraftingJobId(draftingJob.id);
     } else {
-      // No draft exists - create new and show creation panel
       const jobId = createJob(currentTemplate, department);
       setDraftingJobId(jobId);
     }
   };
 
+  // Scroll the draft panel into view when it appears
+  useEffect(() => {
+    if (draftingJob && draftPanelRef.current) {
+      draftPanelRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [draftingJob?.id]);
+
   const handleOpenInEditor = () => {
-    if (draftingJob && draftingJob.images.length > 0) {
+    if (draftingJob && jobHasWork(draftingJob)) {
       onOpenDraft?.(draftingJob);
       setDraftingJobId(null); // Clear local state when opening in editor
     }
@@ -111,7 +122,6 @@ export default function JobQueueView({ onViewFlyer, onOpenDraft, jobQueueHook }:
   const handleQueueJob = () => {
     if (draftingJobId) {
       startJob(draftingJobId);
-      setDraftingJobId(null);
     }
   };
 
@@ -159,80 +169,51 @@ export default function JobQueueView({ onViewFlyer, onOpenDraft, jobQueueHook }:
         onDepartmentClick={handleDepartmentClick}
       />
 
-      {/* Export Flyer Button */}
-      <div style={{ marginTop: 24, textAlign: "center" }}>
-        <button
+      {/* Action Buttons */}
+      <div style={{ marginTop: 24, display: "flex", gap: 12, justifyContent: "center", alignItems: "center" }}>
+        <Button variant="secondary" size="lg" onClick={onOpenDbUpload}>
+          Product Library
+        </Button>
+        <Button
+          variant="primary"
+          size="lg"
           onClick={handleExportClick}
           style={{
             padding: "14px 32px",
-            background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-            color: "#fff",
-            border: "none",
-            borderRadius: 10,
-            cursor: "pointer",
-            fontWeight: 700,
-            fontSize: 16,
-            boxShadow: "0 4px 12px rgba(102, 126, 234, 0.4)",
-            transition: "all 0.2s ease",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.transform = "translateY(-2px)";
-            e.currentTarget.style.boxShadow = "0 6px 16px rgba(102, 126, 234, 0.5)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.transform = "translateY(0)";
-            e.currentTarget.style.boxShadow = "0 4px 12px rgba(102, 126, 234, 0.4)";
+            boxShadow: "0 4px 12px rgba(76, 110, 245, 0.35)",
           }}
         >
-          📄 Export Flyer to PDF
-        </button>
+          Export Flyer to PDF
+        </Button>
       </div>
 
       {/* Job Creation Panel - shown when drafting */}
       {draftingJob && (
-        <div style={{ marginTop: 24 }}>
+        <div ref={draftPanelRef} style={{ marginTop: 24, scrollMarginTop: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <h3 style={{ margin: 0, fontSize: 18, color: "#495057" }}>
-              Draft: {draftingJob.department.charAt(0).toUpperCase() + draftingJob.department.slice(1)}
+            <h3 style={{ margin: 0, fontSize: "var(--text-xl)", color: "var(--color-text-muted)" }}>
+              {jobHasWork(draftingJob)
+                ? `Editing: ${draftingJob.department.charAt(0).toUpperCase() + draftingJob.department.slice(1)}`
+                : `Draft: ${draftingJob.department.charAt(0).toUpperCase() + draftingJob.department.slice(1)}`}
             </h3>
-            <div style={{ display: "flex", gap: 8 }}>
-              {draftingJob.images.length > 0 && (
-                <button
-                  onClick={handleOpenInEditor}
-                  style={{
-                    padding: "8px 16px",
-                    background: "#4C6EF5",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 6,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    fontSize: 13,
-                  }}
-                >
+            <div style={{ display: "flex", gap: "var(--space-2)" }}>
+              {jobHasWork(draftingJob) && (
+                <Button variant="primary" size="sm" onClick={handleOpenInEditor}>
                   Open in Editor
-                </button>
+                </Button>
               )}
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => {
                   if (draftingJobId) {
                     deleteJob(draftingJobId);
                     setDraftingJobId(null);
                   }
                 }}
-                style={{
-                  padding: "8px 16px",
-                  background: "#F1F3F5",
-                  color: "#495057",
-                  border: "none",
-                  borderRadius: 6,
-                  fontWeight: 500,
-                  cursor: "pointer",
-                  fontSize: 13,
-                }}
               >
                 Cancel
-              </button>
+              </Button>
             </div>
           </div>
           <JobCreationPanel

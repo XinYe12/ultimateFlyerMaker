@@ -1,8 +1,0 @@
-{
-  "dependencies": {
-    "@google-cloud/vertexai": "^1.10.0",
-    "@google-cloud/discoveryengine": "^2.5.2",
-    "axios": "^1.12.2",
-    "firebase": "^12.4.0"
-  }
-}

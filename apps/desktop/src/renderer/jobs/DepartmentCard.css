@@ -1,0 +1,322 @@
+/* 3D hover-tracking department card - based on Uiverse.io by kennyotsu */
+
+.dept-card-container {
+  position: relative;
+  width: 190px;
+  height: 254px;
+  transition: 200ms;
+  cursor: pointer;
+  overflow: visible;
+}
+
+.dept-card-container:active {
+  width: 180px;
+  height: 245px;
+}
+
+.dept-card-canvas {
+  perspective: 800px;
+  transform-style: preserve-3d;
+  inset: 0;
+  z-index: 200;
+  position: absolute;
+  overflow: visible;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr 1fr 1fr;
+  gap: 0;
+  grid-template-areas:
+    "tr-1 tr-2 tr-3 tr-4 tr-5"
+    "tr-6 tr-7 tr-8 tr-9 tr-10"
+    "tr-11 tr-12 tr-13 tr-14 tr-15"
+    "tr-16 tr-17 tr-18 tr-19 tr-20"
+    "tr-21 tr-22 tr-23 tr-24 tr-25";
+}
+
+.dept-card-tracker {
+  z-index: 200;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dept-card-tracker:hover {
+  cursor: pointer;
+}
+
+.dept-card-tracker:hover ~ .dept-card .dept-card-prompt {
+  opacity: 1;
+}
+
+.dept-card-tracker:hover ~ .dept-card {
+  transition: 300ms;
+  filter: brightness(1.1);
+}
+
+/* Card face */
+.dept-card {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border-radius: 20px;
+  transition: 700ms;
+  transform-style: preserve-3d;
+  background: var(--dept-card-gradient, linear-gradient(43deg, rgb(65, 88, 208) 0%, rgb(200, 80, 192) 46%, rgb(255, 204, 112) 100%));
+}
+
+.dept-card::before {
+  content: "";
+  background: var(--dept-card-gradient, linear-gradient(43deg, rgb(65, 88, 208) 0%, rgb(200, 80, 192) 46%, rgb(255, 204, 112) 100%));
+  filter: blur(2rem);
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  z-index: -1;
+  transition: opacity 200ms ease;
+  border-radius: 20px;
+  left: -10%;
+  top: -10%;
+  width: 120%;
+  height: 120%;
+}
+
+.dept-card-container:hover .dept-card::before {
+  opacity: 50%;
+}
+
+.dept-card-prompt {
+  top: 50%;
+  left: 0;
+  right: 0;
+  transform: translateY(-50%);
+  z-index: 20;
+  font-size: 20px;
+  font-weight: 800;
+  transition: 300ms ease-in-out;
+  position: absolute;
+  text-align: center;
+  opacity: 0;
+}
+
+.dept-card--not-started .dept-card-prompt,
+.dept-card--uploading .dept-card-prompt {
+  color: rgb(80, 80, 90);
+}
+
+.dept-card--in-progress .dept-card-prompt {
+  color: rgb(100, 80, 30);
+}
+
+.dept-card--done .dept-card-prompt,
+.dept-card--done-edited .dept-card-prompt {
+  color: rgb(30, 80, 40);
+}
+
+.dept-card-tracker:hover ~ .dept-card .dept-card-prompt {
+  opacity: 1;
+}
+
+.dept-card-title {
+  position: absolute;
+  top: 24px;
+  left: 0;
+  right: 0;
+  font-size: 22px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.dept-card--not-started .dept-card-title,
+.dept-card--uploading .dept-card-title {
+  color: rgb(80, 80, 90);
+}
+
+.dept-card--in-progress .dept-card-title {
+  color: rgb(100, 80, 30);
+}
+
+.dept-card--done .dept-card-title,
+.dept-card--done-edited .dept-card-title {
+  color: rgb(30, 80, 40);
+}
+
+.dept-card-subtitle {
+  position: absolute;
+  bottom: 14px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 13px;
+  transition: color 300ms ease-in-out;
+}
+
+.dept-card-subtitle[data-status="not-started"] {
+  color: rgb(100, 100, 110);
+}
+
+.dept-card-subtitle[data-status="uploading"] {
+  color: rgb(100, 100, 110);
+}
+
+.dept-card-subtitle[data-status="in-progress"] {
+  color: rgb(120, 90, 40);
+}
+
+.dept-card-subtitle[data-status="done"],
+.dept-card-subtitle[data-status="done-edited"] {
+  color: rgb(40, 100, 50);
+}
+
+.dept-card-tracker:hover ~ .dept-card .dept-card-subtitle {
+  color: rgb(80, 80, 90);
+}
+
+/* Grid areas for trackers */
+.dept-card-tracker.tr-1 { grid-area: tr-1; }
+.dept-card-tracker.tr-2 { grid-area: tr-2; }
+.dept-card-tracker.tr-3 { grid-area: tr-3; }
+.dept-card-tracker.tr-4 { grid-area: tr-4; }
+.dept-card-tracker.tr-5 { grid-area: tr-5; }
+.dept-card-tracker.tr-6 { grid-area: tr-6; }
+.dept-card-tracker.tr-7 { grid-area: tr-7; }
+.dept-card-tracker.tr-8 { grid-area: tr-8; }
+.dept-card-tracker.tr-9 { grid-area: tr-9; }
+.dept-card-tracker.tr-10 { grid-area: tr-10; }
+.dept-card-tracker.tr-11 { grid-area: tr-11; }
+.dept-card-tracker.tr-12 { grid-area: tr-12; }
+.dept-card-tracker.tr-13 { grid-area: tr-13; }
+.dept-card-tracker.tr-14 { grid-area: tr-14; }
+.dept-card-tracker.tr-15 { grid-area: tr-15; }
+.dept-card-tracker.tr-16 { grid-area: tr-16; }
+.dept-card-tracker.tr-17 { grid-area: tr-17; }
+.dept-card-tracker.tr-18 { grid-area: tr-18; }
+.dept-card-tracker.tr-19 { grid-area: tr-19; }
+.dept-card-tracker.tr-20 { grid-area: tr-20; }
+.dept-card-tracker.tr-21 { grid-area: tr-21; }
+.dept-card-tracker.tr-22 { grid-area: tr-22; }
+.dept-card-tracker.tr-23 { grid-area: tr-23; }
+.dept-card-tracker.tr-24 { grid-area: tr-24; }
+.dept-card-tracker.tr-25 { grid-area: tr-25; }
+
+/* 25 tilt rules - row 1 (top) */
+.dept-card-tracker.tr-1:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(20deg) rotateY(-10deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-2:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(20deg) rotateY(-5deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-3:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(20deg) rotateY(0deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-4:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(20deg) rotateY(5deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-5:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(20deg) rotateY(10deg) rotateZ(0deg);
+}
+
+/* Row 2 */
+.dept-card-tracker.tr-6:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(10deg) rotateY(-10deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-7:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(10deg) rotateY(-5deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-8:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(10deg) rotateY(0deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-9:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(10deg) rotateY(5deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-10:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(10deg) rotateY(10deg) rotateZ(0deg);
+}
+
+/* Row 3 (center) */
+.dept-card-tracker.tr-11:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(0deg) rotateY(-10deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-12:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(0deg) rotateY(-5deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-13:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-14:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(0deg) rotateY(5deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-15:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(0deg) rotateY(10deg) rotateZ(0deg);
+}
+
+/* Row 4 */
+.dept-card-tracker.tr-16:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(-10deg) rotateY(-10deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-17:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(-10deg) rotateY(-5deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-18:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(-10deg) rotateY(0deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-19:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(-10deg) rotateY(5deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-20:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(-10deg) rotateY(10deg) rotateZ(0deg);
+}
+
+/* Row 5 (bottom) */
+.dept-card-tracker.tr-21:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(-20deg) rotateY(-10deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-22:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(-20deg) rotateY(-5deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-23:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(-20deg) rotateY(0deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-24:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(-20deg) rotateY(5deg) rotateZ(0deg);
+}
+.dept-card-tracker.tr-25:hover ~ .dept-card {
+  transition: 125ms ease-in-out;
+  transform: rotateX(-20deg) rotateY(10deg) rotateZ(0deg);
+}
+
+.noselect {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}

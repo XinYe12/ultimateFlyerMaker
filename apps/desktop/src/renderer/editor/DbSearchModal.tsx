@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { DbSearchResult } from "../global.d";
 
 type Props = {
@@ -14,6 +14,15 @@ export default function DbSearchModal({ itemId, initialQuery, onReplace, onClose
   const [loading, setLoading] = useState(false);
   const [searchedOnce, setSearchedOnce] = useState(false);
   const [replacing, setReplacing] = useState(false);
+
+  // Close on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !replacing) onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [replacing, onClose]);
 
   const handleSearch = async () => {
     const query = searchQuery.trim();

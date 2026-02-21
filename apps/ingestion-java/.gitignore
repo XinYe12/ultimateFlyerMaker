@@ -1,0 +1,11 @@
+# Build output
+target/
+
+# Firebase service account key — never commit this
+credentials/service-key.json
+
+# Environment variables
+.env
+
+# macOS
+.DS_Store

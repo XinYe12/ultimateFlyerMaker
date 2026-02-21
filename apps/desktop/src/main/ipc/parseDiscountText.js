@@ -64,6 +64,30 @@ function normalizePricing(item) {
   };
 }
 
+/**
+ * Detect if a product name indicates multiple flavors/variants (series).
+ * Strong keywords always trigger series; "flavor(s)"/"variety(ies)" only trigger
+ * when preceded by an explicit number (e.g. "4 Flavors") to avoid false positives
+ * on names like "Original Flavor" or "Grape Flavour Juice".
+ */
+function detectSeries(en, zh) {
+  const combined = `${(en || "").toLowerCase()} ${(zh || "")}`;
+
+  // Always-series keywords — reliably mean a product line or assorted pack
+  const strongKeywords = ["series", "assorted", "多种", "系列", "什锦", "混合"];
+  const hasStrong = strongKeywords.some(kw => combined.includes(kw));
+
+  // Conditional: "flavor(s)" / "variety(ies)" only count when a digit precedes them
+  const hasNumberedFlavor = /\d+\s*(?:flavor|flavours?|flavors|variety|varieties)/i.test(combined);
+
+  if (!hasStrong && !hasNumberedFlavor) return { isSeries: false, flavorCount: 1 };
+
+  // Extract explicit count from patterns like "6 flavors", "4 varieties", "4种"
+  const numMatch = combined.match(/(\d+)\s*(?:flavor|flavours?|variety|varieties|种|个|pack|pc)/i);
+  const n = numMatch ? Math.min(12, Math.max(2, parseInt(numMatch[1], 10))) : 6;
+  return { isSeries: true, flavorCount: n };
+}
+
 /** Extract numeric price; for "2/4.99" use 4.99 not 24.99. */
 function extractPriceForDisplay(salePrice, isMultiBuy) {
   const raw = String(salePrice ?? "").trim();
@@ -117,15 +141,20 @@ export async function parseDiscountText(_event, rawText) {
 
   const items = rows.map(rawItem => {
     const item = normalizePricing(rawItem);
+    const en = item.english_name ?? "";
+    const zh = (item.chinese_name ?? "").toString();
+    const { isSeries, flavorCount } = detectSeries(en, zh);
 
     return {
-      en: item.english_name ?? "",
-      zh: item.chinese_name ?? "",
+      en,
+      zh,
       size: (item.size ?? "").toString().trim(),
       salePrice: item.sale_price ?? "",
       regularPrice: item.regular_price ?? "",
       unit: item.unit ?? "",
       quantity: item.quantity ?? null,
+      isSeries,
+      flavorCount,
       price: {
         display: buildPriceDisplay(item)
       }

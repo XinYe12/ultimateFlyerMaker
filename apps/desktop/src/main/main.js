@@ -14,7 +14,7 @@ import { exportDiscountImages } from "./ipc/exportDiscountImages.js";
 import { parseDiscountXlsx } from "./ipc/parseDiscountXlsx.js";
 import { ingestImages } from "./ipc/ingestImages.js";
 import { getJobProcessor } from "./jobs/JobProcessor.js";
-import { searchByText } from "./ingestion/searchService.js";
+import { searchForDiscountItem } from "./ingestion/searchService.js";
 import { braveImageSearchByQuery } from "./ingestion/braveSearchService.js";
 import { googleImageSearch, googleKeysPresent } from "./ingestion/googleImageSearchService.js";
 import os from "os";
@@ -24,6 +24,9 @@ import { waitForBackend } from "./waitForBackend.js";
 import { initFirebase, admin } from "./firebase.js";
 import { registerBackendIpc } from "./ipc/backend.js";
 import { registerBackendProxyIpc } from "./ipc/backendProxy.js";
+import { processDbBatch, getDbStats, checkDbStorageConsistency, fixDbStorageConsistency, confirmSingleImageToDb, scanAndRemoveNonProducts } from "./ipc/batchIngestToDB.js";
+import { getQuotaStatus, getLiveQuotaStatus } from "./ipc/quotaTracker.js";
+import { checkOllamaStatus } from "./ingestion/imageEmbeddingService.js";
 import "./net/longFetch.js";
 
 /* ---------- ESM __dirname fix ---------- */
@@ -182,7 +185,7 @@ ipcMain.handle("ingestImages", ingestImages);
 ipcMain.handle("ufm:searchDatabaseByText", async (_, query) => {
   try {
     if (!query || !String(query).trim()) return [];
-    return await searchByText(String(query).trim(), 6, 0.15);
+    return await searchForDiscountItem({ en: String(query).trim() }, 6);
   } catch (err) {
     console.error("[searchDatabaseByText] error:", err);
     return [];
@@ -328,6 +331,108 @@ ipcMain.handle("ufm:getJobQueueStatus", async () => {
   };
 });
 
+/* ---------- IPC: batch DB upload ---------- */
+ipcMain.handle("ufm:confirmDbImage", async (_, imagePath, action, parsed, embedding) => {
+  if (action !== "add") {
+    return { ok: false, error: "Invalid action" };
+  }
+  if (!imagePath || typeof imagePath !== "string") {
+    return { ok: false, error: "Image path required" };
+  }
+  return confirmSingleImageToDb(imagePath, parsed || {}, embedding || []);
+});
+
+ipcMain.handle("ufm:startDbBatch", async (_, paths) => {
+  processDbBatch(
+    paths,
+    (data) => mainWindow?.webContents.send("ufm:dbBatchProgress", data),
+    (data) => mainWindow?.webContents.send("ufm:dbBatchComplete", data)
+  ).catch((err) => {
+    console.error("[startDbBatch] batch failed:", err);
+    mainWindow?.webContents.send("ufm:dbBatchComplete", {
+      added: 0,
+      duplicates: 0,
+      skipped: 0,
+      errors: Array.isArray(paths) ? paths.length : 0,
+      error: err.message,
+    });
+  });
+  return { ok: true };
+});
+
+const DB_STATS_TIMEOUT_MS = 10000;
+
+ipcMain.handle("ufm:getDbStats", async () => {
+  const LOG = (step, msg) => console.log(`[ufm:getDbStats IPC] [${step}]`, msg);
+  LOG("1", "IPC received. Starting " + DB_STATS_TIMEOUT_MS + "ms timeout race...");
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => {
+      console.warn("[ufm:getDbStats IPC] [TIMEOUT] " + DB_STATS_TIMEOUT_MS + "ms elapsed, aborting.");
+      reject(new Error("Connection timed out (10s). Check VPN/network."));
+    }, DB_STATS_TIMEOUT_MS)
+  );
+  try {
+    const result = await Promise.race([getDbStats(), timeout]);
+    LOG("2", "Success. Returning count=" + result.count);
+    return result;
+  } catch (err) {
+    const msg = err?.message || String(err);
+    console.warn("[ufm:getDbStats IPC] [FAIL]", msg);
+    return { count: 0, error: msg };
+  }
+});
+
+ipcMain.handle("ufm:checkDbStorage", async () => {
+  return checkDbStorageConsistency();
+});
+
+ipcMain.handle("ufm:fixDbStorage", async (_, report) => {
+  return fixDbStorageConsistency(report);
+});
+
+ipcMain.handle("ufm:scanNonProducts", async () => {
+  scanAndRemoveNonProducts(
+    (data) => mainWindow?.webContents.send("ufm:scanNonProductsProgress", data),
+    (data) => mainWindow?.webContents.send("ufm:scanNonProductsComplete", data)
+  ).catch((err) => {
+    console.error("[scanNonProducts] Failed:", err);
+    mainWindow?.webContents.send("ufm:scanNonProductsComplete", {
+      scanned: 0,
+      deleted: 0,
+      errors: 1,
+      error: err.message,
+    });
+  });
+  return { ok: true };
+});
+
+ipcMain.handle("ufm:checkOllamaStatus", async () => {
+  try {
+    return await checkOllamaStatus();
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle("ufm:getQuotaStatus", async () => {
+  try {
+    const saPath = path.join(
+      app.isPackaged ? process.resourcesPath : app.getAppPath(),
+      "backend", "config", "firebase-service-account.json"
+    );
+    if (!fs.existsSync(saPath)) {
+      return getQuotaStatus();
+    }
+    const sa = JSON.parse(fs.readFileSync(saPath, "utf8"));
+    const projectId  = sa.project_id;
+    const bucketName = `${projectId}.firebasestorage.app`;
+    return await getLiveQuotaStatus(projectId, bucketName, saPath);
+  } catch (err) {
+    console.warn("[ufm:getQuotaStatus] Live fetch failed, falling back to local:", err.message);
+    return getQuotaStatus();
+  }
+});
+
 /* ---------- App bootstrap ---------- */
 app.whenReady().then(async () => {
   try {
@@ -349,9 +454,10 @@ app.whenReady().then(async () => {
     initFirebase();
 
     // 3b. Verify Firestore in background — do not block window from opening
+    console.log("[firebase] [post-init] Running test query: product_vectors.limit(1)...");
     admin.firestore().collection("product_vectors").limit(1).get()
-      .then(snap => console.log("[firebase] ✅ Firestore connected. product_vectors sample size:", snap.size))
-      .catch(err => console.warn("[firebase] ⚠️ Firestore check failed (connection or permissions):", err.message));
+      .then(snap => console.log("[firebase] [post-init] ✅ Test query OK. Sample size:", snap.size))
+      .catch(err => console.warn("[firebase] [post-init] ❌ Test query failed:", err?.message?.slice(0, 100)));
 
     // 4️⃣ Register IPC (backend info)
     registerBackendIpc();

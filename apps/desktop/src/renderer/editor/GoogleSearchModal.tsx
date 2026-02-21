@@ -40,6 +40,15 @@ export default function GoogleSearchModal({ itemId, initialQuery, currentImageSr
     }
   }, [webviewUrl]);
 
+  // Close on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !processing) onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [processing, onClose]);
+
   const handleSearch = () => {
     const query = searchQuery.trim();
     if (!query) return;

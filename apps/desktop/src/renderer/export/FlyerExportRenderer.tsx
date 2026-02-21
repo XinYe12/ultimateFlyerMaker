@@ -6,7 +6,8 @@ import { FlyerJob, IngestItem } from "../types";
 import { FlyerTemplateConfig } from "../editor/loadFlyerTemplateConfig";
 import RenderFlyerPlacements from "../editor/RenderFlyerPlacements";
 import { layoutFlyer, layoutFlyerSlots } from "../../../../shared/flyer/layout/layoutFlyer";
-import { isSlottedDepartment } from "../editor/loadFlyerTemplateConfig";
+import { isSlottedDepartment, isCardDepartment } from "../editor/loadFlyerTemplateConfig";
+import { layoutCardRows, computeCardRects, CARD_BG } from "../../../../shared/flyer/layout/layoutCardRows";
 
 type Props = {
   templateConfig: FlyerTemplateConfig;
@@ -80,13 +81,12 @@ export default function FlyerExportRenderer({
 
             {/* Render each department on this page */}
             {Object.entries(page.departments).map(([deptId, deptDef]) => {
-              // Find job for this department
+              // Find job for this department (completed or drafting)
               const job = jobs.find(
-                (j) => j.department === deptId && j.status === "completed"
+                (j) => j.department === deptId && (j.status === "completed" || j.status === "drafting")
               );
 
               if (!job?.result?.processedImages) {
-                // No completed job - render empty placeholder
                 return (
                   <div
                     key={deptId}
@@ -98,9 +98,7 @@ export default function FlyerExportRenderer({
                       height: "100%",
                       pointerEvents: "none",
                     }}
-                  >
-                    {/* Empty - no products to render */}
-                  </div>
+                  />
                 );
               }
 
@@ -115,45 +113,107 @@ export default function FlyerExportRenderer({
                   slotIndex: img.slotIndex,
                 }));
 
-              // Check if this is a slotted department
-              if (!isSlottedDepartment(deptDef)) {
-                // Non-slotted department (free-form placement) - skip for now
-                return null;
-              }
-
-              // Layout items into slots
-              const placements = layoutFlyerSlots({
-                items: ingestItems.map((item) => ({
-                  id: item.id,
-                  slotIndex: item.slotIndex,
-                })),
-                pageId: page.pageId,
-                regionId: deptId,
-                slots: deptDef.slots,
-              });
-
               // Get discount labels
               const discountLabels = job.result.discountLabels || [];
 
-              return (
-                <div
-                  key={deptId}
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    width: "100%",
-                    height: "100%",
-                    pointerEvents: "none",
-                  }}
-                >
-                  <RenderFlyerPlacements
-                    items={ingestItems}
-                    placements={placements}
-                    discountLabels={discountLabels}
-                  />
-                </div>
-              );
+              // ── CARD-BASED DEPARTMENT ──
+              if (isCardDepartment(deptDef)) {
+                const cardLayout = job.cardLayouts?.[deptId];
+                if (!cardLayout || cardLayout.length === 0) return null;
+
+                const cardRegion = deptDef.region;
+
+                const placements = layoutCardRows({
+                  cards: cardLayout,
+                  region: cardRegion,
+                  pageId: page.pageId,
+                  regionId: deptId,
+                });
+
+                const cardRects = computeCardRects({
+                  cards: cardLayout,
+                  region: cardRegion,
+                });
+
+                return (
+                  <div
+                    key={deptId}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      height: "100%",
+                      pointerEvents: "none",
+                    }}
+                  >
+                    {/* Grey card backgrounds */}
+                    {cardRects.map((rect) => (
+                      <div
+                        key={`card-bg-${rect.cardId}`}
+                        style={{
+                          position: "absolute",
+                          left: rect.x,
+                          top: rect.y,
+                          width: rect.width,
+                          height: rect.height,
+                          background: CARD_BG,
+                        }}
+                      />
+                    ))}
+
+                    {/* Product content */}
+                    <RenderFlyerPlacements
+                      items={ingestItems}
+                      placements={placements}
+                      discountLabels={discountLabels}
+                    />
+                  </div>
+                );
+              }
+
+              // ── SLOT-BASED DEPARTMENT ──
+              if (isSlottedDepartment(deptDef)) {
+                // Apply slot overrides from the job (WYSIWYG export)
+                const effectiveSlots = deptDef.slots.map((slot: any, i: number) => {
+                  const override = job.slotOverrides?.[i];
+                  return override ? { ...slot, ...override } : slot;
+                });
+
+                // Layout items into slots using effective (overridden) slots
+                const placements = layoutFlyerSlots({
+                  items: ingestItems.map((item) => ({
+                    id: item.id,
+                    slotIndex: item.slotIndex,
+                  })),
+                  pageId: page.pageId,
+                  regionId: deptId,
+                  slots: effectiveSlots,
+                });
+
+                return (
+                  <div
+                    key={deptId}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      height: "100%",
+                      pointerEvents: "none",
+                    }}
+                  >
+                    <RenderFlyerPlacements
+                      items={ingestItems}
+                      placements={placements}
+                      discountLabels={discountLabels}
+                    />
+                  </div>
+                );
+              }
+
+              // Non-slotted, non-card department — skip
+              return null;
             })}
           </div>
         );

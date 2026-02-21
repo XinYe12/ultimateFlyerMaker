@@ -1,10 +1,7 @@
-import "./firebase.js"; // force init
-import { getFirestore } from "firebase-admin/firestore";
+import { db } from "./firebase.js";
 import { FIRESTORE_COLLECTION } from "../config/vectorConfig.js";
-import { getImageEmbedding } from "./imageEmbeddingService.js";
+import { getImageEmbedding, embedText } from "./imageEmbeddingService.js";
 import { cosineSimilarity } from "./vectorUtils.js";
-
-const db = getFirestore();
 
 /* ---------- Shared response shape (no embeddings) ---------- */
 function pickPublicFields(p) {
@@ -69,7 +66,34 @@ function scoreTextMatch(queryTokens, hayTokens, p) {
 }
 
 /**
+ * Build search token array from parsed vision data.
+ * Exported so batchIngestToDB can store tokens at ingest time.
+ */
+export function buildSearchTokens(parsed) {
+  return tokenize(buildHaystack(parsed));
+}
+
+/* ---------- Embedding cache (for image search) ---------- */
+let _embeddingCache = null; // null = stale, array = loaded
+
+export function invalidateEmbeddingCache() {
+  _embeddingCache = null;
+}
+
+async function getEmbeddingCache() {
+  if (_embeddingCache) return _embeddingCache;
+  const snapshot = await db
+    .collection(FIRESTORE_COLLECTION)
+    .where("status", "==", "active")
+    .select("id", "englishTitle", "chineseTitle", "brand", "size", "category", "publicUrl", "embedding")
+    .get();
+  _embeddingCache = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+  return _embeddingCache;
+}
+
+/**
  * Search product_vectors by title/text. Returns up to `limit` products with publicUrl for UI.
+ * Uses array-contains-any index query — reads only matching docs, not all N.
  * @param {string} query - Product title or search text
  * @param {number} limit - Max results (default 6 for Replace UI)
  * @param {number} minScore - Minimum text match score (0–1)
@@ -81,10 +105,14 @@ export async function searchByText(query, limit = 6, minScore = 0.15) {
   const queryTokens = tokenize(String(query).trim());
   if (!queryTokens.length) return [];
 
-  const snapshot = await db.collection(FIRESTORE_COLLECTION).get();
-  const products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const snapshot = await db
+    .collection(FIRESTORE_COLLECTION)
+    .where("searchTokens", "array-contains-any", queryTokens.slice(0, 10))
+    .get();
 
-  return products
+  return snapshot.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((p) => p.status === "active")
     .map((p) => {
       const hayTokens = tokenize(buildHaystack(p));
       const score = scoreTextMatch(queryTokens, hayTokens, p);
@@ -94,6 +122,61 @@ export async function searchByText(query, limit = 6, minScore = 0.15) {
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map(pickPublicFields);
+}
+
+/**
+ * Semantic search: embed query text and find nearest products by cosine similarity.
+ * Better than text tokens for "Milk 2L" vs "Whole Milk 2 Liter", synonyms, etc.
+ * Falls back to [] if Ollama embed fails.
+ * @param {string} query - Product name, size, etc. (e.g. "Atlantic Salmon 500g")
+ * @param {number} limit - Max results (default 6)
+ * @param {number} minScore - Min cosine similarity 0–1 (default 0.3)
+ */
+export async function searchByTextEmbedding(query, limit = 6, minScore = 0.3) {
+  if (!query || !String(query).trim()) return [];
+
+  const queryEmbedding = await embedText(String(query).trim());
+  if (!Array.isArray(queryEmbedding) || queryEmbedding.length === 0) return [];
+
+  const all = await getEmbeddingCache();
+  if (!all.length) return [];
+
+  return all
+    .map((p) => ({
+      ...p,
+      score: Array.isArray(p.embedding)
+        ? cosineSimilarity(queryEmbedding, p.embedding)
+        : 0,
+    }))
+    .filter((p) => p.score >= minScore)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(pickPublicFields);
+}
+
+/**
+ * Best-effort search for discount item → DB products.
+ * Tries semantic (embedding) first; falls back to text tokens if Ollama fails.
+ * Query includes en, zh, size for best match.
+ * @param {{ en?: string; zh?: string; size?: string }} item - Discount item fields
+ * @param {number} limit - Max results (1 for single, N for series)
+ * @returns {Promise<Array>} Products with publicUrl, scores
+ */
+export async function searchForDiscountItem(item, limit = 6) {
+  const parts = [item?.en, item?.zh, item?.size].filter(Boolean).map(String).map((s) => s.trim());
+  const query = parts.join(" ").trim();
+  if (!query) return [];
+
+  const minScore = 0.25;
+
+  try {
+    const byEmbed = await searchByTextEmbedding(query, limit, minScore);
+    if (byEmbed.length > 0) return byEmbed;
+  } catch (err) {
+    console.warn("[searchForDiscountItem] Embedding search failed, falling back to text:", err?.message?.slice(0, 60));
+  }
+
+  return searchByText(query, limit, 0.15);
 }
 
 /* ---------- Image search (embedding + cosine similarity) ---------- */
@@ -112,8 +195,7 @@ export async function searchByImage(imagePath, limit = 5) {
     return [];
   }
 
-  const snapshot = await db.collection(FIRESTORE_COLLECTION).get();
-  const all = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const all = await getEmbeddingCache();
 
   if (!all.length) return [];
 

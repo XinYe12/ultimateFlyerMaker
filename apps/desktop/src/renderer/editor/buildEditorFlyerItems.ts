@@ -4,8 +4,8 @@ import type { IngestItem } from '../types'
 export function buildEditorFlyerItems(items: IngestItem[]) {
   return items
     .map((item) => {
-      const image = item.result?.cutoutPath
-      if (!image) return null
+      const image = item.result?.cutoutPaths?.[0] ?? item.result?.cutoutPath;
+      if (!image) return null;
 
       const size = sizeFromImage(image)
 

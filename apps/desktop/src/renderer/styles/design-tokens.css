@@ -1,0 +1,40 @@
+/* Design tokens for Ultimate Flyer Maker */
+
+:root {
+  /* Primary palette */
+  --color-primary: #4C6EF5;
+  --color-primary-hover: #364FC7;
+  --color-primary-muted: #E7F5FF;
+
+  /* Semantic */
+  --color-success: #2F9E44;
+  --color-warning: #E67700;
+  --color-error: #C92A2A;
+
+  /* Neutrals */
+  --color-text: #212529;
+  --color-text-muted: #868E96;
+  --color-border: #DEE2E6;
+  --color-bg-subtle: #F8F9FA;
+  --color-bg: #fff;
+
+  /* Typography */
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --text-sm: 12px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+
+  /* Spacing & radii */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+}

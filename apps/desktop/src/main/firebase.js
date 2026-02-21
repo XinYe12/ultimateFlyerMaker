@@ -19,29 +19,27 @@ function resolveServiceAccountPath() {
 }
 
 export function initFirebase() {
-  // 🔒 REAL singleton guard (Firebase-native)
+  console.log("[firebase main] initFirebase() called. admin.apps.length=" + admin.apps.length);
   if (admin.apps.length > 0) {
+    console.log("[firebase main] Firebase already initialized (by ingestion/firebase.js), skipping.");
     return admin.app();
   }
 
   const serviceAccountPath = resolveServiceAccountPath();
-
+  console.log("[firebase main] Service account path:", serviceAccountPath);
   if (!fs.existsSync(serviceAccountPath)) {
-    throw new Error(
-      `[firebase] service account NOT FOUND: ${serviceAccountPath}`
-    );
+    throw new Error(`[firebase] service account NOT FOUND: ${serviceAccountPath}`);
   }
 
-  const serviceAccount = JSON.parse(
-    fs.readFileSync(serviceAccountPath, "utf-8")
-  );
-
-  console.log("[firebase] initializing with:", serviceAccountPath);
+  const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf-8"));
+  console.log("[firebase main] Initializing app, project_id=" + serviceAccount.project_id);
 
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
+    storageBucket: `${serviceAccount.project_id}.firebasestorage.app`,
   });
 
+  console.log("[firebase main] App initialized.");
   return admin.app();
 }
 

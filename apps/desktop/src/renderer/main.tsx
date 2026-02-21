@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import "./styles/design-tokens.css";
 import "./styles/newspaper.css";
 
 const container = document.getElementById("root");

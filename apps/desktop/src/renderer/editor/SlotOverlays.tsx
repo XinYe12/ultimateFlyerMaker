@@ -1,7 +1,8 @@
 // FILE: apps/desktop/src/renderer/editor/SlotOverlays.tsx
-// ROLE: Interactive overlays for adding/replacing product images in slots
+// ROLE: Interactive overlays for adding/replacing product images in slots or cards
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { CardDef, CardLayout } from "../types";
 
 type Slot = {
   x: number;
@@ -18,8 +19,18 @@ type Placement = {
   height: number;
 };
 
+type CardRect = {
+  cardId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  itemId?: string;
+};
+
 type SlotOverlaysProps = {
   slots: Slot[];
+  items?: any[];
   placements: Placement[];
   onAddImage: (slotIndex: number) => void;
   onReplaceImage: (itemId: string) => void;
@@ -27,10 +38,16 @@ type SlotOverlaysProps = {
   onChooseDatabaseResults?: (itemId: string) => void;
   onGoogleSearch?: (itemId: string) => void;
   onEditTitle?: (itemId: string) => void;
+  onPickSeriesFlavors?: (itemId: string) => void;
+  // Card mode props
+  cardMode?: boolean;
+  cardRects?: CardRect[];
+  cardLayout?: CardLayout;
 };
 
 export default function SlotOverlays({
   slots,
+  items,
   placements,
   onAddImage,
   onReplaceImage,
@@ -38,6 +55,10 @@ export default function SlotOverlays({
   onChooseDatabaseResults,
   onGoogleSearch,
   onEditTitle,
+  onPickSeriesFlavors,
+  cardMode,
+  cardRects,
+  cardLayout,
 }: SlotOverlaysProps) {
   const [hoveredSlot, setHoveredSlot] = useState<number | null>(null);
   const [showReplaceMenu, setShowReplaceMenu] = useState<number | null>(null);
@@ -45,10 +66,45 @@ export default function SlotOverlays({
   const [confirmDeleteSlot, setConfirmDeleteSlot] = useState<number | null>(null);
   const [hoveredFullSlot, setHoveredFullSlot] = useState<number | null>(null);
 
+  // Close menus on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (showReplaceMenu !== null) {
+          setShowReplaceMenu(null);
+          setReplacingItemId(null);
+        }
+        if (confirmDeleteSlot !== null) {
+          setConfirmDeleteSlot(null);
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showReplaceMenu, confirmDeleteSlot]);
+
   // Find which placement occupies each slot (if any)
   const getPlacementForSlot = (slotIndex: number): Placement | null => {
+    // Card mode: match by cardRect's itemId
+    if (cardMode && cardRects && cardRects[slotIndex]) {
+      const cardRect = cardRects[slotIndex];
+      if (cardRect.itemId) {
+        const p = placements.find(pl => pl.itemId === cardRect.itemId);
+        if (p) return p;
+      }
+      return null;
+    }
+
+    // Slot mode: first try item assigned to this slot index
+    if (items) {
+      const item = items.find((it: any) => it.slotIndex === slotIndex);
+      if (item) {
+        const p = placements.find(pl => pl.itemId === item.id);
+        if (p) return p;
+      }
+    }
+    // Fallback: center-point overlap check
     const slot = slots[slotIndex];
-    // Check if any placement overlaps with this slot (center point check)
     const centerX = slot.x + slot.width / 2;
     const centerY = slot.y + slot.height / 2;
 
@@ -71,7 +127,7 @@ export default function SlotOverlays({
         const isHovered = hoveredSlot === index;
 
         if (isEmpty) {
-          // Empty slot: centered overlay with "Add Image" button
+          // Empty slot/card: centered overlay with "Add Image" button
           return (
             <div
               key={`slot-overlay-${index}`}
@@ -85,7 +141,7 @@ export default function SlotOverlays({
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                backgroundColor: "rgba(200, 200, 200, 0.1)",
+                backgroundColor: cardMode ? "transparent" : "rgba(200, 200, 200, 0.1)",
               }}
             >
               <button
@@ -97,14 +153,14 @@ export default function SlotOverlays({
                   flexDirection: "column",
                   alignItems: "center",
                   justifyContent: "center",
-                  fontSize: "16px",
-                  fontWeight: "700",
+                  fontSize: "var(--text-lg)",
+                  fontWeight: "var(--font-bold)",
                   color: "#fff",
-                  backgroundColor: "#4CAF50",
+                  backgroundColor: "var(--color-success)",
                   border: "none",
-                  borderRadius: "12px",
+                  borderRadius: "var(--radius-lg)",
                   cursor: "pointer",
-                  boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
+                  boxShadow: "var(--shadow-md)",
                   transition: "transform 0.2s, box-shadow 0.2s",
                 }}
                 onMouseEnter={(e) => {
@@ -123,24 +179,71 @@ export default function SlotOverlays({
           );
         }
 
-        // Filled slot: full-bounds outer for X button, center 70% for Replace/Edit
+        // Filled slot/card: positioned at the slot rect
+        const overlayRect = slot;
+
+        // Detect if this item has pending flavor selection
+        const itemForSlot = items?.find((it: any) => it.id === placement?.itemId);
+        const isPendingFlavors = itemForSlot?.result?.pendingFlavorSelection === true;
+        // Use allFlavorPaths so count is accurate even after user narrows to 1
+        const flavorCount = itemForSlot?.result?.allFlavorPaths?.length ?? 0;
+
         return (
           <div
             key={`slot-overlay-${index}`}
             style={{
               position: "absolute",
-              left: slot.x,
-              top: slot.y,
-              width: slot.width,
-              height: slot.height,
+              left: overlayRect.x,
+              top: overlayRect.y,
+              width: overlayRect.width,
+              height: overlayRect.height,
               pointerEvents: "auto",
             }}
             onMouseEnter={() => setHoveredFullSlot(index)}
             onMouseLeave={() => {
               setHoveredFullSlot(null);
-              if (confirmDeleteSlot === index) setConfirmDeleteSlot(null);
             }}
           >
+            {/* ── Pending flavors: always-visible amber badge at bottom ── */}
+            {isPendingFlavors && onPickSeriesFlavors && confirmDeleteSlot !== index && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onPickSeriesFlavors(placement.itemId);
+                }}
+                style={{
+                  position: "absolute",
+                  bottom: 10,
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  zIndex: 25,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "10px 22px",
+                  background: "linear-gradient(135deg, #f59e0b, #d97706)",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 50,
+                  cursor: "pointer",
+                  fontWeight: 700,
+                  fontSize: 18,
+                  whiteSpace: "nowrap",
+                  boxShadow: "0 4px 16px rgba(245,158,11,0.5)",
+                  pointerEvents: "auto",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = "translateX(-50%) scale(1.06)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = "translateX(-50%) scale(1)";
+                }}
+              >
+                <span style={{ fontSize: 20 }}>🍦</span>
+                {flavorCount} Flavors Staged — Select
+              </button>
+            )}
+
             {/* Delete X button — top-right corner, visible on full-slot hover */}
             {hoveredFullSlot === index && confirmDeleteSlot !== index && onRemoveItem && (
               <button
@@ -155,7 +258,7 @@ export default function SlotOverlays({
                   width: 28,
                   height: 28,
                   borderRadius: "50%",
-                  backgroundColor: "#E53935",
+                  backgroundColor: "var(--color-error)",
                   color: "#fff",
                   border: "none",
                   cursor: "pointer",
@@ -192,7 +295,7 @@ export default function SlotOverlays({
                   flexDirection: "column",
                   alignItems: "center",
                   justifyContent: "center",
-                  gap: 12,
+                  gap: 36,
                   zIndex: 30,
                   borderRadius: 4,
                 }}
@@ -204,15 +307,15 @@ export default function SlotOverlays({
                     setHoveredFullSlot(null);
                   }}
                   style={{
-                    padding: "10px 28px",
-                    backgroundColor: "#E53935",
+                    padding: "30px 84px",
+                    backgroundColor: "var(--color-error)",
                     color: "#fff",
                     border: "none",
-                    borderRadius: 8,
+                    borderRadius: 16,
                     cursor: "pointer",
                     fontWeight: 700,
-                    fontSize: 18,
-                    boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+                    fontSize: 54,
+                    boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
                   }}
                 >
                   Delete
@@ -220,14 +323,14 @@ export default function SlotOverlays({
                 <button
                   onClick={() => setConfirmDeleteSlot(null)}
                   style={{
-                    padding: "8px 24px",
+                    padding: "24px 72px",
                     backgroundColor: "rgba(255,255,255,0.9)",
-                    color: "#333",
+                    color: "var(--color-text)",
                     border: "none",
-                    borderRadius: 8,
+                    borderRadius: 16,
                     cursor: "pointer",
                     fontWeight: 600,
-                    fontSize: 16,
+                    fontSize: 48,
                   }}
                 >
                   Cancel
@@ -235,14 +338,14 @@ export default function SlotOverlays({
               </div>
             )}
 
-            {/* Center 70% zone for Replace/Edit hover (unchanged behavior) */}
+            {/* Center 70% zone for Replace/Edit hover */}
             <div
               style={{
                 position: "absolute",
-                left: slot.width * 0.15,
-                top: slot.height * 0.15,
-                width: slot.width * 0.7,
-                height: slot.height * 0.7,
+                left: overlayRect.width * 0.15,
+                top: overlayRect.height * 0.15,
+                width: overlayRect.width * 0.7,
+                height: overlayRect.height * 0.7,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -252,6 +355,38 @@ export default function SlotOverlays({
             >
             {isHovered && showReplaceMenu !== index && confirmDeleteSlot !== index && (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+                {/* Pending flavors: prominent "Pick Flavors" button in hover menu */}
+                {isPendingFlavors && onPickSeriesFlavors && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPickSeriesFlavors(placement.itemId);
+                    }}
+                    style={{
+                      width: "200px",
+                      height: "80px",
+                      display: "flex",
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 10,
+                      fontSize: "18px",
+                      fontWeight: "700",
+                      color: "#fff",
+                      background: "linear-gradient(135deg, #f59e0b, #d97706)",
+                      border: "none",
+                      borderRadius: "12px",
+                      cursor: "pointer",
+                      boxShadow: "0 4px 16px rgba(245,158,11,0.45)",
+                      transition: "transform 0.2s",
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.transform = "scale(1.06)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+                  >
+                    <span style={{ fontSize: "26px" }}>🍦</span>
+                    Pick Flavors ({flavorCount})
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     setShowReplaceMenu(index);
@@ -267,7 +402,7 @@ export default function SlotOverlays({
                   fontSize: "16px",
                   fontWeight: "700",
                   color: "#fff",
-                  backgroundColor: "#FF9800",
+                  backgroundColor: "var(--color-warning)",
                   border: "none",
                   borderRadius: "12px",
                   cursor: "pointer",
@@ -285,8 +420,8 @@ export default function SlotOverlays({
                   e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.3)";
                 }}
               >
-                  <div style={{ fontSize: "40px", marginBottom: "8px", lineHeight: 1 }}>🔄</div>
-                  <div style={{ fontSize: "25px", fontWeight: "700" }}>Replace</div>
+                  <div style={{ fontSize: "40px", marginBottom: "8px", lineHeight: 1 }}>🖼️</div>
+                  <div style={{ fontSize: "22px", fontWeight: "700" }}>EDIT PICTURES</div>
                 </button>
                 {onEditTitle && (
                   <button
@@ -295,7 +430,7 @@ export default function SlotOverlays({
                     }}
                     style={{
                       padding: "20px 36px",
-                      backgroundColor: "#5C6BC0",
+                      backgroundColor: "var(--color-primary)",
                       color: "#fff",
                       border: "none",
                       borderRadius: 12,
@@ -322,7 +457,7 @@ export default function SlotOverlays({
               </div>
             )}
 
-            {/* Replace Source Menu — same gradient as job queue view */}
+            {/* Replace Source Menu */}
             {showReplaceMenu === index && (
               <div
                 style={{
@@ -352,8 +487,61 @@ export default function SlotOverlays({
                     opacity: 0.95,
                   }}
                 >
-                  Choose Image Source
+                  Edit Pictures
                 </div>
+
+                {/* Series flavor toggle — shown when item has multiple staged flavor images */}
+                {(() => {
+                  const replacingItem = items?.find((it: any) => it.id === replacingItemId);
+                  // Use allFlavorPaths (preserved full set) so button stays after selecting 1 flavor
+                  const isSeries = (replacingItem?.result?.allFlavorPaths?.length ?? 0) > 1;
+                  if (!isSeries || !onPickSeriesFlavors || !replacingItemId) return null;
+                  const isPending = replacingItem?.result?.pendingFlavorSelection === true;
+                  const count = replacingItem?.result?.allFlavorPaths?.length ?? 0;
+                  return (
+                    <button
+                      onClick={() => {
+                        onPickSeriesFlavors(replacingItemId);
+                        setShowReplaceMenu(null);
+                        setReplacingItemId(null);
+                      }}
+                      style={{
+                        padding: "28px 40px",
+                        background: isPending
+                          ? "linear-gradient(135deg, rgba(245,158,11,0.5), rgba(217,119,6,0.5))"
+                          : "rgba(255,255,255,0.2)",
+                        color: "#fff",
+                        border: isPending
+                          ? "1px solid rgba(245,158,11,0.8)"
+                          : "1px solid rgba(255,255,255,0.4)",
+                        borderRadius: "14px",
+                        cursor: "pointer",
+                        fontWeight: "600",
+                        fontSize: "24px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "16px",
+                        transition: "background 0.2s, transform 0.2s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = isPending
+                          ? "linear-gradient(135deg, rgba(245,158,11,0.7), rgba(217,119,6,0.7))"
+                          : "rgba(255,255,255,0.3)";
+                        e.currentTarget.style.transform = "scale(1.02)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = isPending
+                          ? "linear-gradient(135deg, rgba(245,158,11,0.5), rgba(217,119,6,0.5))"
+                          : "rgba(255,255,255,0.2)";
+                        e.currentTarget.style.transform = "scale(1)";
+                      }}
+                    >
+                      <span style={{ fontSize: "28px" }}>🍦</span>
+                      {isPending ? `Select Flavors (${count} staged)` : `Change Flavors (${count} selected)`}
+                    </button>
+                  );
+                })()}
 
                 {/* Option 0: Edit product title */}
                 {onEditTitle && replacingItemId && (

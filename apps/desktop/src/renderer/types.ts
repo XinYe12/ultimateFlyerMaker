@@ -23,6 +23,12 @@ export type DepartmentId =
 export type IngestResult = {
   inputPath: string;
   cutoutPath: string;
+  /** Multi-flavor/series: currently active/selected product images */
+  cutoutPaths?: string[];
+  /** Full staged set from DB search — preserved even after user narrows selection */
+  allFlavorPaths?: string[];
+  /** True when item is a series and user has not yet chosen which flavors to include */
+  pendingFlavorSelection?: boolean;
   layout: { size: string };
   titleImagePath?: string;
   priceImagePath?: string;
@@ -155,6 +161,21 @@ export type DiscountLabel = {
 };
 
 // =======================
+// CARD LAYOUT TYPES
+// =======================
+
+export type CardDef = {
+  id: string;        // uuid
+  row: number;       // 0-based row index
+  order: number;     // left-to-right position within row
+  widthPx: number;   // pixel width (from fraction initially, then drag-adjusted)
+  itemId?: string;   // linked IngestItem.id; undefined = empty card
+  rowSpan?: number;  // number of rows this card spans (default 1)
+};
+
+export type CardLayout = CardDef[];
+
+// =======================
 // JOB QUEUE TYPES
 // =======================
 
@@ -197,4 +218,10 @@ export type FlyerJob = {
     discountLabels: DiscountLabel[];
   };
   error?: string;
+
+  /** Per-slot position/size overrides, keyed by slot index */
+  slotOverrides?: Record<number, { x: number; y: number; width: number; height: number }>;
+
+  /** Card layouts for card-based departments (departmentId → cards) */
+  cardLayouts?: Record<string, CardLayout>;
 };
