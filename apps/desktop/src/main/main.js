@@ -28,6 +28,7 @@ import { processDbBatch, getDbStats, checkDbStorageConsistency, fixDbStorageCons
 import { getQuotaStatus, getLiveQuotaStatus } from "./ipc/quotaTracker.js";
 import { checkOllamaStatus } from "./ingestion/imageEmbeddingService.js";
 import "./net/longFetch.js";
+import log from "./logger.js";
 
 /* ---------- ESM __dirname fix ---------- */
 const __filename = fileURLToPath(import.meta.url);
@@ -147,11 +148,13 @@ ipcMain.handle("batch-cutout", async (_, filePaths) => {
 
   for (const filePath of filePaths) {
     const flyerItem = { image: { src: filePath } };
-
     const start = Date.now();
-    await processFlyerImage(flyerItem);
+    try {
+      await processFlyerImage(flyerItem);
+    } catch (err) {
+      log.error("[batch-cutout] item failed:", filePath, err?.message ?? err);
+    }
     const end = Date.now();
-
     results.push({
       input: filePath,
       output: flyerItem.image.src,
@@ -167,19 +170,50 @@ ipcMain.handle("batch-cutout", async (_, filePaths) => {
 
 /* ---------- IPC: ingestion ---------- */
 ipcMain.handle("ufm:ingestPhoto", async (_, inputPath) => {
-  return ingestPhoto(inputPath);
+  try {
+    return await ingestPhoto(inputPath);
+  } catch (err) {
+    log.error("[ufm:ingestPhoto]", err);
+    throw err;
+  }
 });
 
 /* ---------- IPC: parsing ---------- */
-ipcMain.handle("ufm:parseDiscountXlsx", parseDiscountXlsx);
-ipcMain.handle("ufm:parseDiscountText", parseDiscountText);
-
-/* ---------- IPC: export discount labels ---------- */
-ipcMain.handle("ufm:exportDiscountImages", (_event, items) => {
-  return exportDiscountImages(items);
+ipcMain.handle("ufm:parseDiscountXlsx", async (event, ...args) => {
+  try {
+    return await parseDiscountXlsx(event, ...args);
+  } catch (err) {
+    log.error("[ufm:parseDiscountXlsx]", err);
+    throw err;
+  }
+});
+ipcMain.handle("ufm:parseDiscountText", async (event, ...args) => {
+  try {
+    return await parseDiscountText(event, ...args);
+  } catch (err) {
+    log.error("[ufm:parseDiscountText]", err);
+    throw err;
+  }
 });
 
-ipcMain.handle("ingestImages", ingestImages);
+/* ---------- IPC: export discount labels ---------- */
+ipcMain.handle("ufm:exportDiscountImages", async (_event, items) => {
+  try {
+    return await exportDiscountImages(items);
+  } catch (err) {
+    log.error("[ufm:exportDiscountImages]", err);
+    throw err;
+  }
+});
+
+ipcMain.handle("ingestImages", async (event, ...args) => {
+  try {
+    return await ingestImages(event, ...args);
+  } catch (err) {
+    log.error("[ingestImages]", err);
+    throw err;
+  }
+});
 
 /* ---------- IPC: DB search (Replace → Database Results) ---------- */
 ipcMain.handle("ufm:searchDatabaseByText", async (_, query) => {
@@ -383,11 +417,21 @@ ipcMain.handle("ufm:getDbStats", async () => {
 });
 
 ipcMain.handle("ufm:checkDbStorage", async () => {
-  return checkDbStorageConsistency();
+  try {
+    return await checkDbStorageConsistency();
+  } catch (err) {
+    log.error("[ufm:checkDbStorage]", err);
+    return { ok: false, error: err?.message ?? String(err) };
+  }
 });
 
 ipcMain.handle("ufm:fixDbStorage", async (_, report) => {
-  return fixDbStorageConsistency(report);
+  try {
+    return await fixDbStorageConsistency(report);
+  } catch (err) {
+    log.error("[ufm:fixDbStorage]", err);
+    return { ok: false, error: err?.message ?? String(err) };
+  }
 });
 
 ipcMain.handle("ufm:scanNonProducts", async () => {
@@ -478,7 +522,7 @@ app.whenReady().then(async () => {
       mainWindow?.webContents.send("ufm:jobError", { jobId, error: error?.message || String(error) });
     });
   } catch (err) {
-    console.error("❌ App startup failed:", err);
+    log.error("App startup failed:", err);
     dialog.showErrorBox(
       "Startup Error",
       err?.message || "Failed to start application"

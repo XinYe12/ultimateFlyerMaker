@@ -20,10 +20,14 @@ export async function ingestPhoto(inputPath) {
   let llmResult = { items: [] };
 
   if (rec_texts.length > 0) {
-    llmResult = await runDeepSeek({
-      raw_ocr_text: rec_texts,
-      image_path: inputPath,
-    });
+    try {
+      llmResult = await runDeepSeek({
+        raw_ocr_text: rec_texts,
+        image_path: inputPath,
+      });
+    } catch (err) {
+      console.warn("[ingestPhoto] DeepSeek failed, continuing without LLM data:", err?.message ?? err);
+    }
   }
 
 const title = formatTitle(llmResult);

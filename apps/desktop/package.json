@@ -21,6 +21,7 @@
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-visually-hidden": "^1.2.4",
     "dotenv": "^17.2.3",
+    "electron-log": "^5.4.3",
     "firebase-admin": "^13.6.0",
     "get-port": "^7.1.0",
     "html2canvas": "^1.4.1",

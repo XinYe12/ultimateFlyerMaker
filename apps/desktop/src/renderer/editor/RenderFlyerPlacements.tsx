@@ -3,7 +3,7 @@
 // PURE TEXT RENDERING - NO PNG LABELS
 // Titles use Maven Pro, Prices use Trade Winds
 
-const HORIZONTAL_ASPECT = 1.5;
+import React, { useState, useCallback } from "react";
 
 // Helper to parse price display into parts for rendering
 function parsePriceDisplay(display: string) {
@@ -36,6 +36,12 @@ function parsePriceDisplay(display: string) {
   return null;
 }
 
+/** Scale (naturalW × naturalH) to fit inside (cellW × cellH), preserving aspect ratio. */
+function fitContain(natW: number, natH: number, cellW: number, cellH: number) {
+  const scale = Math.min(cellW / natW, cellH / natH);
+  return { width: Math.round(natW * scale), height: Math.round(natH * scale) };
+}
+
 type DiscountLabel = {
   id: string;
   title: {
@@ -51,6 +57,311 @@ type DiscountLabel = {
     regular?: string;
   };
 };
+
+function PlacementCard({ p, item, label }: { p: any; item: any; label: DiscountLabel | null }) {
+  const [imgInfo, setImgInfo] = useState<{
+    natW: number; natH: number;
+    bboxX: number; bboxY: number; bboxW: number; bboxH: number;
+  } | null>(null);
+
+  const onFirstImgLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
+    const el = e.currentTarget;
+    if (el.naturalWidth <= 0 || imgInfo) return;
+
+    const SCAN = 200;
+    const cv = document.createElement("canvas");
+    cv.width = SCAN; cv.height = SCAN;
+    const ctx = cv.getContext("2d")!;
+    let data: Uint8ClampedArray;
+    try {
+      ctx.drawImage(el, 0, 0, SCAN, SCAN);
+      data = ctx.getImageData(0, 0, SCAN, SCAN).data;
+    } catch {
+      // canvas taint (cross-origin) — fall back to full dims
+      setImgInfo({ natW: el.naturalWidth, natH: el.naturalHeight,
+                   bboxX: 0, bboxY: 0, bboxW: el.naturalWidth, bboxH: el.naturalHeight });
+      return;
+    }
+
+    let top = -1, bottom = -1, left = SCAN, right = -1;
+    for (let y = 0; y < SCAN; y++) {
+      for (let x = 0; x < SCAN; x++) {
+        if (data[(y * SCAN + x) * 4 + 3] > 0) {
+          if (top === -1) top = y;
+          bottom = y;
+          if (x < left) left = x;
+          if (x > right) right = x;
+        }
+      }
+    }
+
+    const { naturalWidth: nw, naturalHeight: nh } = el;
+    const bboxX = top === -1 ? 0 : Math.round(left / SCAN * nw);
+    const bboxY = top === -1 ? 0 : Math.round(top / SCAN * nh);
+    const bboxW = top === -1 ? nw : Math.round((right - left + 1) / SCAN * nw);
+    const bboxH = top === -1 ? nh : Math.round((bottom - top + 1) / SCAN * nh);
+    setImgInfo({ natW: nw, natH: nh, bboxX, bboxY, bboxW, bboxH });
+  }, [imgInfo]);
+
+  // ── source resolution ──
+  const isPendingFlavors = item?.result?.pendingFlavorSelection === true;
+  const rawPaths = item?.result?.cutoutPaths;
+  // When pending, show all flavors dimmed. After selection, show only chosen ones.
+  const hasMultiImages = !isPendingFlavors && Array.isArray(rawPaths) && rawPaths.length > 1;
+  const rawSrc =
+    item?.image?.src ??
+    item?.cutoutPath ??
+    item?.result?.cutoutPath ??
+    (Array.isArray(rawPaths) && rawPaths.length > 0 ? rawPaths[0] : null) ??
+    null;
+
+  const imgSrc = rawSrc
+    ? rawSrc.startsWith("http") || rawSrc.startsWith("file://") ? rawSrc : `file://${rawSrc}`
+    : null;
+
+  const imgSrcs = hasMultiImages
+    ? rawPaths.map((rp: string) =>
+        rp.startsWith("http") || rp.startsWith("file://") ? rp : `file://${rp}`
+      )
+    : null;
+
+  // Staged flavors (dimmed preview) for pending items — use allFlavorPaths when available
+  const allFlavorPaths = item?.result?.allFlavorPaths;
+  const stagedSrcs = isPendingFlavors
+    ? (Array.isArray(allFlavorPaths) && allFlavorPaths.length > 0 ? allFlavorPaths : rawPaths ?? [])
+        .map((rp: string) =>
+          rp.startsWith("http") || rp.startsWith("file://") ? rp : `file://${rp}`
+        )
+    : null;
+
+  const hasLabel = label != null;
+  const priceParts = label?.price.display ? parsePriceDisplay(label.price.display) : null;
+  const multiQty = priceParts?.type === "MULTI" ? parseInt(priceParts.quantity!, 10) : 0;
+  const displaySrcs = imgSrcs ?? (multiQty >= 2 && imgSrc ? Array(multiQty).fill(imgSrc) : null);
+
+  // ── image sizing ──
+  // Image zone: 5% top padding from card top, bottom limit = bottom 25% (label zone).
+  // No-label cards use no label zone, so image fills 5% → 100%.
+  const SIDE_PAD = 8;
+  const topPad = Math.round(p.height * 0.05);
+  const LABEL_ZONE_H = hasLabel ? Math.round(p.height * 0.25) : 0;
+  const availW = p.width - SIDE_PAD * 2;
+  const availH = p.height - topPad - LABEL_ZONE_H;
+  const n = displaySrcs ? displaySrcs.length : 1;
+  const GAP = 4;
+  const cellW = n > 1 ? (availW - (n - 1) * GAP) / n : availW;
+  const cellH = availH;
+
+  // Derived render info — null until image loads and bbox is scanned.
+  const imgRender = imgInfo ? (() => {
+    const { natW, natH, bboxX, bboxY, bboxW, bboxH } = imgInfo;
+    const { width: dispW, height: dispH } = fitContain(bboxW, bboxH, cellW, cellH);
+    const scale = dispW / bboxW;
+    return {
+      wrapperStyle: {
+        position: "relative" as const,
+        width: dispW, height: dispH,
+        overflow: "hidden" as const,
+        flexShrink: 0,
+      },
+      imgAbsStyle: {
+        position: "absolute" as const,
+        width: Math.round(natW * scale),
+        height: Math.round(natH * scale),
+        left: Math.round(-bboxX * scale),
+        top: Math.round(-bboxY * scale),
+        display: "block" as const,
+      },
+    };
+  })() : null;
+
+  const fallbackImgStyle: React.CSSProperties = {
+    width: "100%", maxWidth: cellW, maxHeight: cellH,
+    height: "auto", objectFit: "contain" as const, display: "block",
+  };
+
+  const renderImg = (src: string, idx?: number) => {
+    const isFirst = idx === undefined || idx === 0;
+    if (imgRender) {
+      return (
+        <div key={idx} style={imgRender.wrapperStyle}>
+          <img style={imgRender.imgAbsStyle} src={src} alt="" />
+        </div>
+      );
+    }
+    return (
+      <img
+        key={idx}
+        style={fallbackImgStyle}
+        src={src}
+        alt=""
+        onLoad={isFirst ? onFirstImgLoad : undefined}
+      />
+    );
+  };
+
+  // ── PENDING FLAVOR SELECTION: show dimmed grid + amber badge ──
+  if (isPendingFlavors && stagedSrcs) {
+    const cols = Math.min(3, stagedSrcs.length);
+    return (
+      <div
+        style={{
+          position: "absolute",
+          left: p.x,
+          top: p.y,
+          width: p.width,
+          height: p.height,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        {/* top spacing */}
+        <div style={{ flex: 1, minHeight: 0 }} />
+
+        {/* dimmed flavor grid */}
+        <div style={{
+          flex: 3,
+          minHeight: 0,
+          padding: "0 10px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          overflow: "hidden",
+          opacity: 0.35,
+        }}>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: `repeat(${cols}, 1fr)`,
+            gap: 4,
+            maxWidth: "100%",
+            maxHeight: "100%",
+          }}>
+            {stagedSrcs.map((src: string, idx: number) => (
+              <img key={idx} src={src} alt="" style={{ width: "100%", height: "auto", objectFit: "contain" }} />
+            ))}
+          </div>
+        </div>
+
+        {/* amber "select flavors" banner */}
+        <div style={{
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}>
+          {hasLabel && (() => {
+            const pp = label!.price.display ? parsePriceDisplay(label!.price.display) : null;
+            return (
+              <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-end", padding: "4px", gap: 6, width: "100%" }}>
+                {(label!.title.en || label!.title.zh) && (
+                  <div className="ufm-title" style={{ flex: "0 0 32%", minWidth: 0 }}>
+                    <div className="ufm-title-main">{label!.title.en.toUpperCase()}</div>
+                  </div>
+                )}
+                {pp && (
+                  <div className="ufm-price" style={{ flex: "1 1 0", minWidth: 0, display: "flex", alignItems: "baseline", justifyContent: "center" }}>
+                    {pp.type === "MULTI" && <span className="ufm-price-qty">{pp.quantity}/</span>}
+                    <span className="ufm-price-main">{pp.integer}</span>
+                    {pp.decimal && <span className="ufm-price-decimal">{pp.decimal}</span>}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+      </div>
+    );
+  }
+
+  // Nothing to render at all
+  if (!imgSrc && !imgSrcs?.length && !hasLabel) return null;
+
+  // ── Unified layout: image top-centered, labels pinned to bottom ──
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: p.x,
+        top: p.y,
+        width: p.width,
+        height: p.height,
+        overflow: "hidden",
+      }}
+    >
+      {/* Image zone: starts at 5% from top, fills down to label zone boundary */}
+      <div
+        style={{
+          position: "absolute",
+          top: topPad,
+          left: SIDE_PAD,
+          width: availW,
+          height: availH,
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "flex-start",
+          justifyContent: "center",
+          gap: GAP,
+          overflow: "hidden",
+        }}
+      >
+        {displaySrcs && displaySrcs.length > 1
+          ? displaySrcs.map((src, idx) => renderImg(src, idx))
+          : imgSrc ? renderImg(imgSrc) : null}
+      </div>
+
+      {/* Label zone: pinned to bottom, always on top */}
+      {hasLabel && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: LABEL_ZONE_H,
+            zIndex: 10,
+            display: "flex",
+            flexDirection: "row",
+            alignItems: "flex-end",
+            padding: "4px",
+            gap: 6,
+          }}
+        >
+          {(label.title.en || label.title.zh) && (
+            <div className="ufm-title" style={{ flex: "0 0 32%", minWidth: 0 }}>
+              <div className="ufm-title-main">
+                {label.title.en.toUpperCase()}
+              </div>
+              {(label.title.size || label.title.regularPrice) && (
+                <div className="ufm-title-meta">
+                  {label.title.size}
+                  {label.title.regularPrice && (
+                    <> REG: {label.title.regularPrice}</>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {priceParts && (
+            <div className="ufm-price" style={{ flex: "1 1 0", minWidth: 0, display: "flex", alignItems: "baseline", justifyContent: "center" }}>
+              {priceParts.type === "MULTI" && (
+                <span className="ufm-price-qty">{priceParts.quantity}/</span>
+              )}
+              <span className="ufm-price-main">{priceParts.integer}</span>
+              {priceParts.decimal && (
+                <span className="ufm-price-decimal">{priceParts.decimal}</span>
+              )}
+              {priceParts.type === "SINGLE" && priceParts.unit && (
+                <span className="ufm-price-unit">/{priceParts.unit.toUpperCase()}</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function RenderFlyerPlacements({
   items,
@@ -105,365 +416,8 @@ export default function RenderFlyerPlacements({
       {placements.map((p) => {
         const item = items.find((it: any) => it.id === p.itemId);
         if (!item) return null;
-
-        const isPendingFlavors = item?.result?.pendingFlavorSelection === true;
-        const rawPaths = item?.result?.cutoutPaths;
-        // When pending, show all flavors dimmed. After selection, show only chosen ones.
-        const hasMultiImages = !isPendingFlavors && Array.isArray(rawPaths) && rawPaths.length > 1;
-        const rawSrc =
-          item?.image?.src ??
-          item?.cutoutPath ??
-          item?.result?.cutoutPath ??
-          (Array.isArray(rawPaths) && rawPaths.length > 0 ? rawPaths[0] : null) ??
-          null;
-
-        const imgSrc = rawSrc
-          ? rawSrc.startsWith("http") || rawSrc.startsWith("file://")
-            ? rawSrc
-            : `file://${rawSrc}`
-          : null;
-
-        const imgSrcs = hasMultiImages
-          ? rawPaths.map((rp) =>
-              rp.startsWith("http") || rp.startsWith("file://") ? rp : `file://${rp}`
-            )
-          : null;
-
-        // Staged flavors (dimmed preview) for pending items — use allFlavorPaths when available
-        const allFlavorPaths = item?.result?.allFlavorPaths;
-        const stagedSrcs = isPendingFlavors
-          ? (Array.isArray(allFlavorPaths) && allFlavorPaths.length > 0 ? allFlavorPaths : rawPaths ?? [])
-              .map((rp: string) =>
-                rp.startsWith("http") || rp.startsWith("file://") ? rp : `file://${rp}`
-              )
-          : null;
-
         const label = getLabelForItem(item, p.itemId);
-        const hasLabel = label != null;
-
-        // ── PENDING FLAVOR SELECTION: show dimmed grid + amber badge ──
-        if (isPendingFlavors && stagedSrcs) {
-          const cols = Math.min(3, stagedSrcs.length);
-          return (
-            <div
-              key={p.itemId}
-              style={{
-                position: "absolute",
-                left: p.x,
-                top: p.y,
-                width: p.width,
-                height: p.height,
-                display: "flex",
-                flexDirection: "column",
-                overflow: "hidden",
-              }}
-            >
-              {/* top spacing */}
-              <div style={{ flex: 1, minHeight: 0 }} />
-
-              {/* dimmed flavor grid */}
-              <div style={{
-                flex: 3,
-                minHeight: 0,
-                padding: "0 10px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                overflow: "hidden",
-                opacity: 0.35,
-              }}>
-                <div style={{
-                  display: "grid",
-                  gridTemplateColumns: `repeat(${cols}, 1fr)`,
-                  gap: 4,
-                  maxWidth: "100%",
-                  maxHeight: "100%",
-                }}>
-                  {stagedSrcs.map((src, idx) => (
-                    <img key={idx} src={src} alt="" style={{ width: "100%", height: "auto", objectFit: "contain" }} />
-                  ))}
-                </div>
-              </div>
-
-              {/* amber "select flavors" banner */}
-              <div style={{
-                flex: 1,
-                minHeight: 0,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}>
-                {hasLabel && (() => {
-                  const pp = label!.price.display ? parsePriceDisplay(label!.price.display) : null;
-                  return (
-                    <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-end", padding: "4px", gap: 6, width: "100%" }}>
-                      {(label!.title.en || label!.title.zh) && (
-                        <div className="ufm-title" style={{ flex: "0 0 32%", minWidth: 0 }}>
-                          <div className="ufm-title-main">{label!.title.en.toUpperCase()}</div>
-                        </div>
-                      )}
-                      {pp && (
-                        <div className="ufm-price" style={{ flex: "1 1 0", minWidth: 0, display: "flex", alignItems: "baseline", justifyContent: "center" }}>
-                          {pp.type === "MULTI" && <span className="ufm-price-qty">{pp.quantity}/</span>}
-                          <span className="ufm-price-main">{pp.integer}</span>
-                          {pp.decimal && <span className="ufm-price-decimal">{pp.decimal}</span>}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-          );
-        }
-
-        // Nothing to render at all
-        if (!imgSrc && !imgSrcs?.length && !hasLabel) return null;
-
-        // ── no labels → original full-card image ──
-        if (!hasLabel && imgSrc) {
-          return (
-            <div
-              key={p.itemId}
-              style={{
-                position: "absolute",
-                left: p.x,
-                top: p.y,
-                width: p.width,
-                height: p.height,
-                display: "flex",
-                flexDirection: "column",
-                overflow: "hidden",
-              }}
-            >
-              {/* top 20%: spacing */}
-              <div style={{ flex: 1, minHeight: 0 }} />
-
-              {/* remaining 80%: product image(s) */}
-              <div style={{
-                flex: 4,
-                minHeight: 0,
-                padding: "0 10px 10px 10px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                overflow: "hidden",
-              }}>
-                {imgSrcs && imgSrcs.length > 1 ? (
-                  <div style={{
-                    display: "grid",
-                    gridTemplateColumns: `repeat(${Math.min(3, imgSrcs.length)}, 1fr)`,
-                    gap: 4,
-                    maxWidth: "100%",
-                    maxHeight: "100%",
-                    alignSelf: "center",
-                  }}>
-                    {imgSrcs.map((src, idx) => (
-                      <img key={idx} src={src} alt="" style={{ width: "100%", height: "auto", objectFit: "contain" }} />
-                    ))}
-                  </div>
-                ) : imgSrc ? (
-                  <img src={imgSrc} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} />
-                ) : null}
-              </div>
-            </div>
-          );
-        }
-
-        const isHorizontal = p.width / p.height > HORIZONTAL_ASPECT;
-        const priceParts = label.price.display ? parsePriceDisplay(label.price.display) : null;
-
-        // ── HORIZONTAL: top space (20%), then [image left 75% | labels right 25%] (80%) ──
-        if (isHorizontal) {
-          return (
-            <div
-              key={p.itemId}
-              style={{
-                position: "absolute",
-                left: p.x,
-                top: p.y,
-                width: p.width,
-                height: p.height,
-                display: "flex",
-                flexDirection: "column",
-                overflow: "visible",
-              }}
-            >
-              {/* top 20%: spacing */}
-              <div style={{ flex: 1, minHeight: 0 }} />
-
-              {/* bottom 80%: product left, labels right */}
-              <div style={{ flex: 4, minHeight: 0, display: "flex", flexDirection: "row", overflow: "visible" }}>
-                {/* left 75%: product image(s) */}
-                <div style={{
-                  flex: 75,
-                  minWidth: 0,
-                  padding: "0 6px 10px 10px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  overflow: "hidden",
-                }}>
-                  {imgSrcs && imgSrcs.length > 1 ? (
-                    <div style={{
-                      display: "grid",
-                      gridTemplateColumns: `repeat(${Math.min(3, imgSrcs.length)}, 1fr)`,
-                      gap: 4,
-                      maxWidth: "100%",
-                      maxHeight: "100%",
-                      alignSelf: "center",
-                    }}>
-                      {imgSrcs.map((src, idx) => (
-                        <img key={idx} src={src} alt="" style={{ width: "100%", height: "auto", objectFit: "contain" }} />
-                      ))}
-                    </div>
-                  ) : imgSrc ? (
-                    <img src={imgSrc} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} />
-                  ) : null}
-                </div>
-
-                {/* right 25%: title and price stacked */}
-                <div
-                  style={{
-                    flex: 25,
-                    minWidth: 0,
-                    display: "flex",
-                    flexDirection: "column",
-                    padding: "0 6px 6px 0",
-                    gap: 4,
-                  }}
-                >
-                  {/* Title */}
-                  {(label.title.en || label.title.zh) && (
-                    <div className="ufm-title" style={{ flex: "0 0 auto" }}>
-                      <div className="ufm-title-main">
-                        {label.title.en.toUpperCase()}
-                      </div>
-                      {(label.title.size || label.title.regularPrice) && (
-                        <div className="ufm-title-meta">
-                          {label.title.size}
-                          {label.title.regularPrice && (
-                            <> REG: {label.title.regularPrice}</>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Price */}
-                  {priceParts && (
-                    <div className="ufm-price" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      {priceParts.type === "MULTI" && (
-                        <span className="ufm-price-qty">{priceParts.quantity}/</span>
-                      )}
-                      <span className="ufm-price-main">{priceParts.integer}</span>
-                      {priceParts.decimal && (
-                        <span className="ufm-price-decimal">{priceParts.decimal}</span>
-                      )}
-                      {priceParts.type === "SINGLE" && priceParts.unit && (
-                        <span className="ufm-price-unit">/{priceParts.unit.toUpperCase()}</span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        }
-
-        // ── VERTICAL: top space (20%), product image (60%), labels (20%) ──
-        return (
-          <div
-            key={p.itemId}
-            style={{
-              position: "absolute",
-              left: p.x,
-              top: p.y,
-              width: p.width,
-              height: p.height,
-              display: "flex",
-              flexDirection: "column",
-              overflow: "visible",
-            }}
-          >
-            {/* top 20%: spacing */}
-            <div style={{ flex: 1, minHeight: 0 }} />
-
-            {/* middle 60%: product image(s) */}
-            <div style={{
-              flex: 3,
-              minHeight: 0,
-              padding: "0 10px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              overflow: "hidden",
-            }}>
-              {imgSrcs && imgSrcs.length > 1 ? (
-                <div style={{
-                  display: "grid",
-                  gridTemplateColumns: `repeat(${Math.min(3, imgSrcs.length)}, 1fr)`,
-                  gap: 4,
-                  maxWidth: "100%",
-                  maxHeight: "100%",
-                  alignSelf: "center",
-                }}>
-                  {imgSrcs.map((src, idx) => (
-                    <img key={idx} src={src} alt="" style={{ width: "100%", height: "auto", objectFit: "contain" }} />
-                  ))}
-                </div>
-              ) : imgSrc ? (
-                <img src={imgSrc} style={{ maxWidth: "100%", maxHeight: "100%", width: "auto", height: "auto", display: "block" }} />
-              ) : null}
-            </div>
-
-            {/* bottom 20%: title + price in a row; price centered in remaining space */}
-            <div
-              style={{
-                flex: 1,
-                minHeight: 0,
-                display: "flex",
-                flexDirection: "row",
-                alignItems: "flex-end",
-                padding: "4px",
-                gap: 6,
-              }}
-            >
-              {/* Title - fixed width so price can sit more toward center */}
-              {(label.title.en || label.title.zh) && (
-                <div className="ufm-title" style={{ flex: "0 0 32%", minWidth: 0 }}>
-                  <div className="ufm-title-main">
-                    {label.title.en.toUpperCase()}
-                  </div>
-                  {(label.title.size || label.title.regularPrice) && (
-                    <div className="ufm-title-meta">
-                      {label.title.size}
-                      {label.title.regularPrice && (
-                        <> REG: {label.title.regularPrice}</>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Price - fills rest, centered so price sits more toward card center */}
-              {priceParts && (
-                <div className="ufm-price" style={{ flex: "1 1 0", minWidth: 0, display: "flex", alignItems: "baseline", justifyContent: "center" }}>
-                  {priceParts.type === "MULTI" && (
-                    <span className="ufm-price-qty">{priceParts.quantity}/</span>
-                  )}
-                  <span className="ufm-price-main">{priceParts.integer}</span>
-                  {priceParts.decimal && (
-                    <span className="ufm-price-decimal">{priceParts.decimal}</span>
-                  )}
-                  {priceParts.type === "SINGLE" && priceParts.unit && (
-                    <span className="ufm-price-unit">/{priceParts.unit.toUpperCase()}</span>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        );
+        return <PlacementCard key={p.itemId} p={p} item={item} label={label} />;
       })}
     </>
   );
