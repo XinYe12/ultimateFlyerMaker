@@ -3,6 +3,20 @@
 
 export type IngestStatus = "pending" | "running" | "done" | "error";
 
+// Shape produced by parseDiscountText and parseDiscountXlsx
+export type ParsedDiscount = {
+  en: string;
+  zh: string;
+  size: string;
+  salePrice: string;
+  regularPrice: string;
+  unit: string;
+  quantity: string | number | null;
+  isSeries: boolean;
+  flavorCount: number;
+  price: { display: string };
+};
+
 export type OCRResult = Array<{
   rec_texts: string[];
   rec_scores?: number[];
@@ -39,7 +53,7 @@ export type IngestResult = {
     zh?: string;
     size?: string;
     confidence: "high" | "low";
-    source?: "deepseek";
+    source?: "deepseek" | "manual" | "xlsx";
   };
 
   aiTitle?: {
@@ -47,7 +61,7 @@ export type IngestResult = {
     zh?: string;
     size?: string;
     confidence: "high" | "low";
-    source?: "deepseek";
+    source?: "deepseek" | "manual" | "xlsx";
   };
 
   ocr: OCRResult;

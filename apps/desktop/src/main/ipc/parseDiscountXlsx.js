@@ -54,7 +54,7 @@ function detectSeries(en, zh) {
 }
 
 /** Weights (924, 650g) go to size; only real multi-buy counts use "N FOR $price". */
-function buildPriceDisplay(item) {
+export function buildPriceDisplay(item) {
   const isMultiBuy = !!item.quantity;
   const price = extractPriceForDisplay(item.salePrice, isMultiBuy);
 
@@ -91,7 +91,7 @@ const DEPARTMENT_ALIASES = {
  * Extracts quantity and price directly from the sale column without LLM.
  * Handles: "2/4.99", "2/$4.99", "3 FOR $5.99", "3for5.99", "$2.99", "2.99"
  */
-function parseSaleField(sale) {
+export function parseSaleField(sale) {
   const raw = String(sale ?? "").trim();
   // "2/4.99" or "2/$4.99"
   const slashMatch = raw.match(/^(\d+)\s*\/\s*\$?([0-9.]+)/);

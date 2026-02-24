@@ -30,6 +30,8 @@ type Props = {
   onBack: () => void;
 };
 
+const CHUNK_SIZE = 50;
+
 let idCounter = 0;
 function newId() {
   return `dbup_${Date.now()}_${++idCounter}`;
@@ -317,9 +319,11 @@ export default function DbUploadView({ onBack }: Props) {
   const [quota, setQuota] = useState<QuotaStatus | null>(null);
   const [quotaLoading, setQuotaLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [queuedCount, setQueuedCount] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queueRef = useRef<string[]>([]);
   const processingRef = useRef(false);
+  const pendingUpdatesRef = useRef<Map<string, Partial<DbUploadItem>>>(new Map());
 
   const refreshQuota = useCallback(() => {
     setQuotaLoading(true);
@@ -383,25 +387,57 @@ export default function DbUploadView({ onBack }: Props) {
   // Subscribe to IPC progress/complete events
   useEffect(() => {
     const unsubProgress = window.ufm.onDbBatchProgress((data: DbBatchProgressEvent) => {
-      setItems((prev) =>
-        prev.map((item) =>
-          item.path === data.path
-            ? {
-                ...item,
-                status: data.status,
-                title: data.title ?? item.title,
-                publicUrl: data.publicUrl ?? item.publicUrl,
-                error: data.error ?? item.error,
-                parsed: data.parsed ?? item.parsed,
-                embedding: data.embedding ?? item.embedding,
-              }
-            : item
-        )
-      );
+      pendingUpdatesRef.current.set(data.path, {
+        status: data.status,
+        title: data.title,
+        publicUrl: data.publicUrl,
+        error: data.error,
+        parsed: data.parsed,
+        embedding: data.embedding,
+      });
     });
+
+    const flushTimer = setInterval(() => {
+      if (pendingUpdatesRef.current.size === 0) return;
+      const snapshot = new Map(pendingUpdatesRef.current);
+      pendingUpdatesRef.current.clear();
+      setItems((prev) => prev.map((item) => {
+        const u = snapshot.get(item.path);
+        if (!u) return item;
+        return {
+          ...item,
+          status: u.status ?? item.status,
+          title: u.title ?? item.title,
+          publicUrl: u.publicUrl ?? item.publicUrl,
+          error: u.error ?? item.error,
+          parsed: u.parsed ?? item.parsed,
+          embedding: u.embedding ?? item.embedding,
+        };
+      }));
+    }, 100);
 
     const unsubComplete = window.ufm.onDbBatchComplete((data: DbBatchCompleteEvent) => {
       processingRef.current = false;
+
+      // Flush any buffered progress updates immediately
+      if (pendingUpdatesRef.current.size > 0) {
+        const snapshot = new Map(pendingUpdatesRef.current);
+        pendingUpdatesRef.current.clear();
+        setItems((prev) => prev.map((item) => {
+          const u = snapshot.get(item.path);
+          if (!u) return item;
+          return {
+            ...item,
+            status: u.status ?? item.status,
+            title: u.title ?? item.title,
+            publicUrl: u.publicUrl ?? item.publicUrl,
+            error: u.error ?? item.error,
+            parsed: u.parsed ?? item.parsed,
+            embedding: u.embedding ?? item.embedding,
+          };
+        }));
+      }
+
       setSessionStats((prev) => ({
         added: prev.added + (data.added ?? 0),
         duplicates: prev.duplicates + (data.duplicates ?? 0),
@@ -430,18 +466,24 @@ export default function DbUploadView({ onBack }: Props) {
     return () => {
       unsubProgress();
       unsubComplete();
+      clearInterval(flushTimer);
     };
-  }, [refreshDbConnection, refreshOllamaStatus]);
+  }, [refreshDbConnection, refreshOllamaStatus, refreshQuota]);
 
   const drainQueue = useCallback(() => {
     if (processingRef.current) return;
     if (queueRef.current.length === 0) return;
-    const batch = [...queueRef.current];
-    queueRef.current = [];
+    const batchPaths = queueRef.current.splice(0, CHUNK_SIZE);
     processingRef.current = true;
-    window.ufm.startDbBatch(batch).catch((err: Error) => {
+    const batchItems: DbUploadItem[] = batchPaths.map((p) => ({
+      id: newId(), path: p, status: "pending" as const,
+    }));
+    setItems((prev) => [...prev, ...batchItems]);
+    setQueuedCount((n) => Math.max(0, n - batchPaths.length));
+    window.ufm.startDbBatch(batchPaths).catch((err: Error) => {
       console.error("[DbUploadView] startDbBatch error:", err);
       processingRef.current = false;
+      drainQueue();
     });
   }, []);
 
@@ -450,16 +492,8 @@ export default function DbUploadView({ onBack }: Props) {
       const imageExts = /\.(jpe?g|png|gif|webp|bmp|tiff?)$/i;
       const validPaths = filePaths.filter((p) => imageExts.test(p));
       if (validPaths.length === 0) return;
-
-      const newItems: DbUploadItem[] = validPaths.map((p) => ({
-        id: newId(),
-        path: p,
-        status: "pending",
-      }));
-      setItems((prev) => [...prev, ...newItems]);
-
-      // Queue paths for processing
       queueRef.current.push(...validPaths);
+      setQueuedCount((n) => n + validPaths.length);
       drainQueue();
     },
     [drainQueue]
@@ -472,14 +506,21 @@ export default function DbUploadView({ onBack }: Props) {
   };
   const handleDragLeave = () => setIsDragging(false);
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
     const paths: string[] = [];
     for (const file of Array.from(e.dataTransfer.files)) {
       if ((file as any).path) paths.push((file as any).path);
     }
-    handleFilesAdded(paths);
+    if (paths.length === 0) return;
+    const resolved = await window.ufm.resolveDroppedPaths(paths);
+    handleFilesAdded(resolved);
+  };
+
+  const handlePickFolder = async () => {
+    const paths = await window.ufm.openFolderDialog();
+    if (paths.length > 0) handleFilesAdded(paths);
   };
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -641,13 +682,11 @@ export default function DbUploadView({ onBack }: Props) {
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
             style={{
               border: `2px dashed ${isDragging ? "#228BE6" : "#CED4DA"}`,
               borderRadius: 12,
               padding: "40px 20px",
               textAlign: "center",
-              cursor: "pointer",
               background: isDragging ? "#E7F5FF" : "#FAFAFA",
               transition: "all 0.15s ease",
               userSelect: "none",
@@ -655,10 +694,44 @@ export default function DbUploadView({ onBack }: Props) {
           >
             <div style={{ fontSize: 40, marginBottom: 12 }}>📁</div>
             <div style={{ fontWeight: 600, fontSize: 15, color: "#343A40", marginBottom: 6 }}>
-              Drop product images here
+              Drop images or folders here
             </div>
-            <div style={{ fontSize: 13, color: "#868E96" }}>
-              or click to pick files
+            <div style={{ fontSize: 13, color: "#868E96", marginBottom: 14 }}>
+              or pick files / folders below
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+                style={{
+                  padding: "6px 14px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  border: "1px solid #CED4DA",
+                  borderRadius: 7,
+                  background: "#fff",
+                  color: "#495057",
+                  cursor: "pointer",
+                }}
+              >
+                Pick Files
+              </button>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); handlePickFolder(); }}
+                style={{
+                  padding: "6px 14px",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  border: "1px solid #228BE6",
+                  borderRadius: 7,
+                  background: "#E7F5FF",
+                  color: "#1971C2",
+                  cursor: "pointer",
+                }}
+              >
+                Pick Folder
+              </button>
             </div>
             <input
               ref={fileInputRef}
@@ -670,11 +743,20 @@ export default function DbUploadView({ onBack }: Props) {
             />
           </div>
 
-          {items.length > 0 && (
+          {(items.length > 0 || queuedCount > 0) && (
             <div style={{ marginTop: 14, fontSize: 13, color: "#868E96", textAlign: "center" }}>
-              {pendingCount > 0
-                ? `${pendingCount} pending • ${doneCount} done`
-                : `${doneCount} of ${items.length} done`}
+              {queuedCount > 0 && (
+                <div style={{ marginBottom: 4, color: "#1971C2", fontWeight: 600 }}>
+                  {queuedCount.toLocaleString()} images queued
+                </div>
+              )}
+              {items.length > 0 && (
+                <div>
+                  {pendingCount > 0
+                    ? `${pendingCount} processing • ${doneCount} done`
+                    : `${doneCount} of ${items.length} done`}
+                </div>
+              )}
             </div>
           )}
         </div>

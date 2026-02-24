@@ -19,7 +19,7 @@ import { braveImageSearchByQuery } from "./ingestion/braveSearchService.js";
 import { googleImageSearch, googleKeysPresent } from "./ingestion/googleImageSearchService.js";
 import os from "os";
 
-import { startBackend, stopBackend } from "./startBackend.js";
+import { startBackend, stopBackend, startHealthWatch } from "./startBackend.js";
 import { waitForBackend } from "./waitForBackend.js";
 import { initFirebase, admin } from "./firebase.js";
 import { registerBackendIpc } from "./ipc/backend.js";
@@ -68,6 +68,17 @@ async function waitForVite(host = "127.0.0.1", port = 5173, maxAttempts = 60, in
   throw new Error(`Vite dev server at ${url} did not become ready after ${maxAttempts} attempts`);
 }
 
+/* ---------- Safe IPC send helper ---------- */
+function safeSend(channel, data) {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send(channel, data);
+    }
+  } catch (err) {
+    console.warn(`[safeSend] dropped ${channel}:`, err?.message ?? err);
+  }
+}
+
 /* ---------- Electron window ---------- */
 let mainWindow = null;
 let googleSearchWindow = null;
@@ -89,7 +100,7 @@ function createWindow() {
   });
 
   mainWindow.loadURL("http://localhost:5173");
-  mainWindow.webContents.openDevTools();
+  if (!app.isPackaged) mainWindow.webContents.openDevTools();
 
   // Confirm before closing
   mainWindow.on("close", (e) => {
@@ -291,7 +302,7 @@ ipcMain.handle("ufm:downloadAndIngestFromUrl", async (_, publicUrl) => {
 
   try {
     console.log(`[downloadAndIngest] fetching: ${url}`);
-    const res = await fetch(url, { timeout: 15000 });
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
     if (!res.ok) throw new Error(`Download failed: ${res.status}`);
 
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
@@ -348,6 +359,65 @@ ipcMain.handle("ufm:openImageDialog", async () => {
   return result.filePaths[0];
 });
 
+/* ---------- IPC: folder picker + recursive image scan ---------- */
+const IMAGE_EXTS = /\.(jpe?g|png|gif|webp|bmp|tiff?)$/i;
+
+async function collectImagesRecursive(dirPath) {
+  const results = [];
+  const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...(await collectImagesRecursive(full)));
+    } else if (entry.isFile() && IMAGE_EXTS.test(entry.name)) {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
+ipcMain.handle("ufm:openFolderDialog", async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ["openDirectory", "multiSelections"],
+  });
+  if (result.canceled || result.filePaths.length === 0) return [];
+  const allImages = [];
+  for (const dir of result.filePaths) {
+    try {
+      allImages.push(...(await collectImagesRecursive(dir)));
+    } catch (err) {
+      console.warn("[openFolderDialog] failed to scan", dir, err.message);
+    }
+  }
+  return allImages;
+});
+
+ipcMain.handle("ufm:openXlsxDialog", async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ["openFile"],
+    filters: [{ name: "Excel", extensions: ["xlsx", "xls"] }],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
+
+ipcMain.handle("ufm:resolveDroppedPaths", async (_event, paths) => {
+  const allImages = [];
+  for (const p of paths) {
+    try {
+      const stat = await fs.promises.stat(p);
+      if (stat.isDirectory()) {
+        allImages.push(...(await collectImagesRecursive(p)));
+      } else if (stat.isFile() && IMAGE_EXTS.test(p)) {
+        allImages.push(p);
+      }
+    } catch {
+      // ignore unreadable paths
+    }
+  }
+  return allImages;
+});
+
 /* ---------- IPC: job queue ---------- */
 const jobProcessor = getJobProcessor();
 
@@ -379,11 +449,11 @@ ipcMain.handle("ufm:confirmDbImage", async (_, imagePath, action, parsed, embedd
 ipcMain.handle("ufm:startDbBatch", async (_, paths) => {
   processDbBatch(
     paths,
-    (data) => mainWindow?.webContents.send("ufm:dbBatchProgress", data),
-    (data) => mainWindow?.webContents.send("ufm:dbBatchComplete", data)
+    (data) => safeSend("ufm:dbBatchProgress", data),
+    (data) => safeSend("ufm:dbBatchComplete", data)
   ).catch((err) => {
     console.error("[startDbBatch] batch failed:", err);
-    mainWindow?.webContents.send("ufm:dbBatchComplete", {
+    safeSend("ufm:dbBatchComplete", {
       added: 0,
       duplicates: 0,
       skipped: 0,
@@ -436,11 +506,11 @@ ipcMain.handle("ufm:fixDbStorage", async (_, report) => {
 
 ipcMain.handle("ufm:scanNonProducts", async () => {
   scanAndRemoveNonProducts(
-    (data) => mainWindow?.webContents.send("ufm:scanNonProductsProgress", data),
-    (data) => mainWindow?.webContents.send("ufm:scanNonProductsComplete", data)
+    (data) => safeSend("ufm:scanNonProductsProgress", data),
+    (data) => safeSend("ufm:scanNonProductsComplete", data)
   ).catch((err) => {
     console.error("[scanNonProducts] Failed:", err);
-    mainWindow?.webContents.send("ufm:scanNonProductsComplete", {
+    safeSend("ufm:scanNonProductsComplete", {
       scanned: 0,
       deleted: 0,
       errors: 1,
@@ -477,10 +547,27 @@ ipcMain.handle("ufm:getQuotaStatus", async () => {
   }
 });
 
+/* ---------- Env validation ---------- */
+function validateEnv() {
+  const required = [
+    ["DEEPSEEK_API_KEY", "Required for OCR text parsing and discount text input"],
+    ["PYTHON_BIN",       "Required to start the image processing backend"],
+  ];
+  const missing = required.filter(([key]) => !String(process.env[key] || "").trim());
+  if (missing.length > 0) {
+    const lines = missing.map(([k, desc]) => `  ${k} — ${desc}`).join("\n");
+    throw new Error(`Missing required environment variables:\n${lines}\n\nCopy .env.example to .env and fill in your values.`);
+  }
+}
+
 /* ---------- App bootstrap ---------- */
 app.whenReady().then(async () => {
   try {
-    // 0️⃣ Check for crash from last run — no dialog; renderer shows progress overlay and auto-resumes
+    // 0️⃣ Validate required environment variables before doing anything else
+    validateEnv();
+    log.info(`UFM starting — electron ${process.versions.electron}, node ${process.versions.node}`);
+
+    // Check for crash from last run — no dialog; renderer shows progress overlay and auto-resumes
     const crashed = didCrashLastRun();
     if (crashed) {
       global.__ufmCrashedLastRun = true;
@@ -493,6 +580,9 @@ app.whenReady().then(async () => {
 
     // 2️⃣ Wait for backend health
     await waitForBackend(backend);
+
+    // 2b. Backend confirmed ready — now start the health watch
+    startHealthWatch(backend);
 
     // 3️⃣ Init Firebase (idempotent)
     initFirebase();
@@ -513,13 +603,13 @@ app.whenReady().then(async () => {
 
     // 6️⃣ Set up job processor event forwarding to renderer
     jobProcessor.on("progress", (jobId, progress) => {
-      mainWindow?.webContents.send("ufm:jobProgress", { jobId, progress });
+      safeSend("ufm:jobProgress", { jobId, progress });
     });
     jobProcessor.on("complete", (jobId, result) => {
-      mainWindow?.webContents.send("ufm:jobComplete", { jobId, result });
+      safeSend("ufm:jobComplete", { jobId, result });
     });
     jobProcessor.on("error", (jobId, error) => {
-      mainWindow?.webContents.send("ufm:jobError", { jobId, error: error?.message || String(error) });
+      safeSend("ufm:jobError", { jobId, error: error?.message || String(error) });
     });
   } catch (err) {
     log.error("App startup failed:", err);

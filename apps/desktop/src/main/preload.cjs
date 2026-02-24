@@ -85,6 +85,15 @@ contextBridge.exposeInMainWorld("ufm", {
     return ipcRenderer.invoke("ufm:openImageDialog");
   },
 
+  // ---------- FOLDER DIALOG ----------
+  openFolderDialog: () => {
+    return ipcRenderer.invoke("ufm:openFolderDialog");
+  },
+
+  resolveDroppedPaths: (paths) => {
+    return ipcRenderer.invoke("ufm:resolveDroppedPaths", paths);
+  },
+
   // ---------- MATCH DISCOUNTS ----------
   matchDiscountToSlots: (args) => {
     console.log("🧩 PRELOAD matchDiscountToSlots called");

@@ -18,7 +18,7 @@ function isLikelyWeightGrams(num) {
  * - Weights (e.g. 924, 650g) → move to size, do not use as quantity.
  * - "2 for", "3 for" → quantity = 2 or 3, unit = "pcs".
  */
-function normalizePricing(item) {
+export function normalizePricing(item) {
   let quantity = item.quantity ?? null;
   let unit = (item.unit ?? "").toString().trim().toLowerCase();
   let size = (item.size ?? "").toString().trim();

@@ -74,7 +74,7 @@ export default function ExportModal({
         onOpenChange={(open) => {
           if (!open && canClose) handleClose();
         }}
-        closeOnOverlayClick={canClose && showCloseButton}
+        closeOnOverlayClick={canClose && Boolean(showCloseButton)}
         contentStyle={{ maxWidth: 600 }}
       >
         <h2

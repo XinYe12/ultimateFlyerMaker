@@ -1,8 +1,9 @@
 import log from "electron-log/main.js";
 
-log.initialize();
+// Route main-process console.* calls through electron-log so they land in the file
+Object.assign(console, log.functions);
 
-// File transport: info+ written to userData/logs/main.log
+// File transport: info+ written to ~/Library/Logs/<appName>/main.log
 log.transports.file.level = "info";
 log.transports.file.format = "[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}";
 log.transports.file.maxSize = 5 * 1024 * 1024; // 5 MB

@@ -1,5 +1,7 @@
 export {};
 
+import type { IngestResult, ParsedDiscount, DiscountLabel } from "./types";
+
 export type DbSearchResult = {
   id: string;
   englishTitle?: string;
@@ -111,18 +113,20 @@ declare global {
     };
 
     ufm: {
-      ingestPhoto: (path: string) => Promise<any>;
-      parseDiscountText: (text: string) => Promise<any>;
-      parseDiscountXlsx: (filePath: string, department?: string) => Promise<any>;
-      exportDiscountImages: (items: any[]) => Promise<any>;
+      ingestPhoto: (path: string) => Promise<IngestResult>;
+      parseDiscountText: (text: string) => Promise<ParsedDiscount[]>;
+      parseDiscountXlsx: (filePath: string, department?: string) => Promise<ParsedDiscount[]>;
+      exportDiscountImages: (items: any[]) => Promise<DiscountLabel[]>;
       openXlsxDialog: () => Promise<string>;
       openImageDialog: () => Promise<string | null>;
-      ingestImages: (paths: string[]) => Promise<any[]>;
-      getDiscounts: () => Promise<any[]>;
+      openFolderDialog: () => Promise<string[]>;
+      resolveDroppedPaths: (paths: string[]) => Promise<string[]>;
+      ingestImages: (paths: string[]) => Promise<IngestResult[]>;
+      getDiscounts: () => Promise<ParsedDiscount[]>;
       testFirestore: () => Promise<{ ok: boolean; count?: number; sample?: any[]; error?: string }>;
 
       searchDatabaseByText: (query: string) => Promise<DbSearchResult[]>;
-      downloadAndIngestFromUrl: (publicUrl: string) => Promise<{ path: string; result: any }>;
+      downloadAndIngestFromUrl: (publicUrl: string) => Promise<{ path: string; result: IngestResult }>;
       googleImageSearch: (query: string) => Promise<GoogleSearchResult[]>;
       openGoogleSearchWindow: (query: string) => Promise<void>;
 
@@ -165,7 +169,7 @@ declare namespace JSX {
       React.HTMLAttributes<HTMLElement> & {
         src?: string;
         partition?: string;
-        allowpopups?: string;
+        allowpopups?: boolean;
         useragent?: string;
       },
       HTMLElement

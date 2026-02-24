@@ -73,7 +73,7 @@ ${rawText}
       temperature: 0,
       max_tokens: 2048,
     }),
-    timeout: DEEPSEEK_TIMEOUT_MS,
+    signal: AbortSignal.timeout(DEEPSEEK_TIMEOUT_MS),
   });
 
   if (!res.ok) {

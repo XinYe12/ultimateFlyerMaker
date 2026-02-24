@@ -27,7 +27,7 @@ export async function runCutout(inputPath) {
     res = await fetch("http://127.0.0.1:17890/cutout", {
       method: "POST",
       body: form,
-      timeout: 30_000,
+      signal: AbortSignal.timeout(30_000),
     });
   } finally {
     // ensure fd is released

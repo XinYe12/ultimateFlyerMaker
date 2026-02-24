@@ -17,7 +17,7 @@ export async function runOCR(imagePath) {
     body: JSON.stringify({
       image_path: imagePath,
     }),
-    timeout: OCR_TIMEOUT_MS,
+    signal: AbortSignal.timeout(OCR_TIMEOUT_MS),
   });
 
   if (!res.ok) {

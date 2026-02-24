@@ -697,10 +697,10 @@ export default function App() {
             en: item.en || "",
             zh: item.zh || "",
             size: item.size || "",
-            confidence: 1,
+            confidence: "high",
             source: "xlsx",
           },
-          ocr: { lines: [] },
+          ocr: [],
           llmResult: {
             best_title: { english_name: item.en || "", chinese_name: item.zh || "", confidence: 1 },
             items: [{
