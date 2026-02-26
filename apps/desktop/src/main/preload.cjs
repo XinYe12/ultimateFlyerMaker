@@ -150,6 +150,7 @@ contextBridge.exposeInMainWorld("ufm", {
   fixDbStorage: (report) => ipcRenderer.invoke("ufm:fixDbStorage", report),
   checkOllamaStatus: () => ipcRenderer.invoke("ufm:checkOllamaStatus"),
   getQuotaStatus: () => ipcRenderer.invoke("ufm:getQuotaStatus"),
+  clearCutoutCache: () => ipcRenderer.invoke("ufm:clearCutoutCache"),
 
   onDbBatchProgress: (callback) => {
     const handler = (_, data) => callback(data);

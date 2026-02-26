@@ -58,9 +58,15 @@
     "files": [
       "dist/**",
       "src/main/**",
-      "backend/**",
       "assets/**",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend/dist/cutout_service",
+        "to": "backend/cutout_service",
+        "filter": ["**/*"]
+      }
     ],
     "win": {
       "target": "nsis",

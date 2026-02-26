@@ -41,6 +41,8 @@ function buildGoogleUrl(rawQuery: string, contextOn: boolean) {
 export default function AddImageModal({ slotIndex, onLocalFile, onItemReady, onClose }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>("upload");
   const [processing, setProcessing] = useState(false);
+  const [uploadDragOver, setUploadDragOver] = useState(false);
+  const uploadFileRef = useRef<HTMLInputElement>(null);
 
   // ── Database tab state ────────────────────────────────────────────────────
   const [dbQuery, setDbQuery] = useState("");
@@ -80,6 +82,17 @@ export default function AddImageModal({ slotIndex, onLocalFile, onItemReady, onC
     const filePath = await window.ufm.openImageDialog();
     if (!filePath) return;
     onLocalFile(slotIndex, filePath);
+    onClose();
+  };
+
+  const handleUploadDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setUploadDragOver(false);
+    const file = Array.from(e.dataTransfer.files).find(f =>
+      /\.(jpg|jpeg|png|webp)$/i.test(f.name)
+    ) as (File & { path?: string }) | undefined;
+    if (!file?.path) return;
+    onLocalFile(slotIndex, file.path);
     onClose();
   };
 
@@ -203,14 +216,41 @@ export default function AddImageModal({ slotIndex, onLocalFile, onItemReady, onC
   function UploadTab() {
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, padding: "32px 0" }}>
-        <div style={{ fontSize: 64 }}>📁</div>
-        <p style={{ margin: 0, color: "#666", fontSize: 14, textAlign: "center" }}>
-          Select an image from your computer.<br />
-          It will be processed automatically (OCR, background removal).
-        </p>
-        <Button variant="primary" size="lg" onClick={handleUpload}>
-          Browse Files
-        </Button>
+        <div
+          onDragOver={e => { e.preventDefault(); setUploadDragOver(true); }}
+          onDragLeave={() => setUploadDragOver(false)}
+          onDrop={handleUploadDrop}
+          onClick={() => uploadFileRef.current?.click()}
+          style={{
+            width: "100%",
+            padding: "40px 24px",
+            border: `2px dashed ${uploadDragOver ? "#228be6" : "#ccc"}`,
+            borderRadius: 12,
+            background: uploadDragOver ? "#e7f5ff" : "#fafafa",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 10,
+            cursor: "pointer",
+            transition: "border-color 0.15s, background 0.15s",
+          }}
+        >
+          <div style={{ fontSize: 48 }}>📁</div>
+          <div style={{ fontWeight: 600, fontSize: 14, color: "#333" }}>
+            Drop image here or click to browse
+          </div>
+          <div style={{ fontSize: 12, color: "#888" }}>JPG, PNG, WebP</div>
+        </div>
+        <input
+          ref={uploadFileRef}
+          type="file"
+          hidden
+          accept="image/jpeg,image/png,image/webp"
+          onChange={e => {
+            const file = e.target.files?.[0] as (File & { path?: string }) | undefined;
+            if (file?.path) { onLocalFile(slotIndex, file.path); onClose(); }
+          }}
+        />
       </div>
     );
   }

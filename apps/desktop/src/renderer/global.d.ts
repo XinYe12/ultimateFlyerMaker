@@ -153,6 +153,7 @@ declare global {
       fixDbStorage: (report: DbSyncReport) => Promise<DbSyncResult>;
       checkOllamaStatus: () => Promise<{ ok: boolean; model?: string; error?: string }>;
       getQuotaStatus: () => Promise<QuotaStatus>;
+      clearCutoutCache: () => Promise<{ cleared: number; error?: string }>;
       onDbBatchProgress: (cb: (data: DbBatchProgressEvent) => void) => () => void;
       onDbBatchComplete: (cb: (data: DbBatchCompleteEvent) => void) => () => void;
 

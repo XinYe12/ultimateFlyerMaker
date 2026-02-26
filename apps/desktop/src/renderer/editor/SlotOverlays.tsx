@@ -198,6 +198,7 @@ export default function SlotOverlays({
               width: overlayRect.width,
               height: overlayRect.height,
               pointerEvents: "auto",
+              zIndex: 20,
             }}
             onMouseEnter={() => setHoveredFullSlot(index)}
             onMouseLeave={() => {

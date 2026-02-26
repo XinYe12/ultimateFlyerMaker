@@ -79,10 +79,50 @@ function safeSend(channel, data) {
   }
 }
 
-/* ---------- Electron window ---------- */
+/* ---------- Electron windows ---------- */
 let mainWindow = null;
+let splashWindow = null;
 let googleSearchWindow = null;
 let forceQuit = false;
+
+function createSplashWindow() {
+  const splashPreloadPath = path.resolve(__dirname, "splashPreload.cjs");
+  const splashHtmlPath = path.resolve(__dirname, "splash.html");
+
+  splashWindow = new BrowserWindow({
+    width: 380,
+    height: 240,
+    frame: false,
+    resizable: false,
+    center: true,
+    show: false,
+    skipTaskbar: true,
+    webPreferences: {
+      preload: fs.existsSync(splashPreloadPath) ? splashPreloadPath : undefined,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  splashWindow.loadFile(splashHtmlPath);
+  splashWindow.once("ready-to-show", () => splashWindow?.show());
+  splashWindow.on("closed", () => { splashWindow = null; });
+}
+
+function closeSplash() {
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.close();
+    splashWindow = null;
+  }
+}
+
+function updateSplash(msg) {
+  try {
+    if (splashWindow && !splashWindow.isDestroyed() && !splashWindow.webContents.isDestroyed()) {
+      splashWindow.webContents.send("splash:status", msg);
+    }
+  } catch (_) {}
+}
 
 function createWindow() {
   const preloadPath = path.resolve(__dirname, "preload.cjs");
@@ -528,6 +568,17 @@ ipcMain.handle("ufm:checkOllamaStatus", async () => {
   }
 });
 
+ipcMain.handle("ufm:clearCutoutCache", async () => {
+  const cutoutDir = path.resolve(__dirname, "../../../exports/cutouts");
+  try {
+    const files = await fs.promises.readdir(cutoutDir);
+    await Promise.all(files.map((f) => fs.promises.unlink(path.join(cutoutDir, f))));
+    return { cleared: files.length };
+  } catch (err) {
+    return { cleared: 0, error: err?.message || String(err) };
+  }
+});
+
 ipcMain.handle("ufm:getQuotaStatus", async () => {
   try {
     const saPath = path.join(
@@ -551,7 +602,8 @@ ipcMain.handle("ufm:getQuotaStatus", async () => {
 function validateEnv() {
   const required = [
     ["DEEPSEEK_API_KEY", "Required for OCR text parsing and discount text input"],
-    ["PYTHON_BIN",       "Required to start the image processing backend"],
+    // PYTHON_BIN is only required in dev; packaged app uses the bundled binary.
+    ...(!app.isPackaged ? [["PYTHON_BIN", "Required to start the image processing backend"]] : []),
   ];
   const missing = required.filter(([key]) => !String(process.env[key] || "").trim());
   if (missing.length > 0) {
@@ -562,6 +614,9 @@ function validateEnv() {
 
 /* ---------- App bootstrap ---------- */
 app.whenReady().then(async () => {
+  // Show splash immediately so the user sees something right away.
+  createSplashWindow();
+
   try {
     // 0️⃣ Validate required environment variables before doing anything else
     validateEnv();
@@ -576,15 +631,18 @@ app.whenReady().then(async () => {
     writeSentinel();
 
     // 1️⃣ Start backend (selector-based)
+    updateSplash("Starting image processing service…");
     const backend = await startBackend("cutout");
 
     // 2️⃣ Wait for backend health
+    updateSplash("Waiting for image processing service to be ready…");
     await waitForBackend(backend);
 
     // 2b. Backend confirmed ready — now start the health watch
     startHealthWatch(backend);
 
     // 3️⃣ Init Firebase (idempotent)
+    updateSplash("Connecting to database…");
     initFirebase();
 
     // 3b. Verify Firestore in background — do not block window from opening
@@ -598,8 +656,12 @@ app.whenReady().then(async () => {
     registerBackendProxyIpc();
 
     // 5️⃣ Wait for Vite dev server then create window (avoids ERR_CONNECTION_REFUSED when run with npm run dev)
+    updateSplash("Loading interface…");
     await waitForVite("127.0.0.1", 5173, 60, 500);
     createWindow();
+
+    // Close splash after window is visible
+    setTimeout(() => closeSplash(), 400);
 
     // 6️⃣ Set up job processor event forwarding to renderer
     jobProcessor.on("progress", (jobId, progress) => {
@@ -613,10 +675,15 @@ app.whenReady().then(async () => {
     });
   } catch (err) {
     log.error("App startup failed:", err);
-    dialog.showErrorBox(
-      "Startup Error",
-      err?.message || "Failed to start application"
-    );
+    closeSplash();
+    await dialog.showMessageBox({
+      type: "error",
+      title: "Ultimate Flyer Maker — Startup Failed",
+      message: "The application could not start.",
+      detail: err?.message || "An unexpected error occurred.",
+      buttons: ["Quit"],
+      defaultId: 0,
+    });
     app.quit();
   }
 });

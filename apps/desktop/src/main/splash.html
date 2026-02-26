@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Starting…</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #111827;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #f9fafb;
+      -webkit-app-region: drag;
+      user-select: none;
+    }
+
+    .logo {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      margin-bottom: 4px;
+    }
+
+    .tagline {
+      font-size: 12px;
+      color: #6b7280;
+      margin-bottom: 36px;
+    }
+
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid rgba(99, 102, 241, 0.2);
+      border-top-color: #6366f1;
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+      margin-bottom: 18px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .status {
+      font-size: 12px;
+      color: #9ca3af;
+      letter-spacing: 0.02em;
+      max-width: 300px;
+      text-align: center;
+      line-height: 1.5;
+      min-height: 36px;
+      transition: opacity 0.2s;
+    }
+  </style>
+</head>
+<body>
+  <div class="logo">Ultimate Flyer Maker</div>
+  <div class="tagline">Grocery flyer creation tool</div>
+  <div class="spinner"></div>
+  <div class="status" id="status">Starting…</div>
+
+  <script>
+    if (window.splash) {
+      window.splash.onStatus((msg) => {
+        document.getElementById("status").textContent = msg;
+      });
+    }
+  </script>
+</body>
+</html>

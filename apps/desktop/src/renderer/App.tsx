@@ -613,7 +613,7 @@ export default function App() {
       try {
         const results = await window.ufm.searchDatabaseByText(title.trim() || zh.trim());
         const best = results?.[0];
-        if (best && best.score > 0.75 && best.publicUrl) {
+        if (best && best.score > 0.5 && best.publicUrl) {
           cutoutPath = best.publicUrl;
         }
       } catch { /* no DB match — proceed without image */ }
@@ -677,11 +677,11 @@ export default function App() {
       try {
         const results = await window.ufm.searchDatabaseByText(item.en || item.zh || "");
         const best = results?.[0];
-        if (best && best.score > 0.75 && best.publicUrl) {
+        if (best && best.score > 0.5 && best.publicUrl) {
           imageUrl = best.publicUrl;
         }
-      } catch {
-        // no match — proceed without image
+      } catch (err) {
+        console.error(`[xlsx-match] search failed for "${item.en || item.zh}":`, err);
       }
 
       // 2. Build synthetic IngestItem

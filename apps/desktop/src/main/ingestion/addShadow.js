@@ -11,9 +11,11 @@ const { createCanvas, loadImage } = canvasPkg;
  */
 function getNonTransparentBbox(data, width, height) {
   let top = -1, bottom = -1, left = width, right = -1;
+  // Use alpha > 1 to skip near-zero rembg artifacts (alpha=1 stray pixels) that would
+  // anchor the crop far above the actual product, creating a large transparent gap.
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      if (data[(y * width + x) * 4 + 3] > 0) {
+      if (data[(y * width + x) * 4 + 3] > 1) {
         if (top === -1) top = y;
         bottom = y;
         if (x < left) left = x;
@@ -40,7 +42,29 @@ export async function addShadowToCutout(cutoutPath) {
   const measureCanvas = createCanvas(img.width, img.height);
   const measureCtx = measureCanvas.getContext("2d");
   measureCtx.drawImage(img, 0, 0);
-  const { data } = measureCtx.getImageData(0, 0, img.width, img.height);
+  const imageData = measureCtx.getImageData(0, 0, img.width, img.height);
+  const { data } = imageData;
+
+  // ── Step 1b: detect rembg failure and erase near-black background pixels ──
+  // When rembg fails (e.g. source had a black background), nearly all pixels are opaque.
+  // In that case, treat near-black pixels as background and make them transparent.
+  let transparentCount = 0;
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] < 10) transparentCount++;
+  }
+  const transparentRatio = transparentCount / (img.width * img.height);
+  let drawSource = img;
+  if (transparentRatio < 0.05) {
+    console.log(`🎨 [addShadow] rembg likely failed (${(transparentRatio * 100).toFixed(1)}% transparent) — erasing near-black background`);
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] + data[i + 1] + data[i + 2] < 60) {
+        data[i + 3] = 0;
+      }
+    }
+    measureCtx.putImageData(imageData, 0, 0);
+    drawSource = measureCanvas;
+  }
+
   const bbox = getNonTransparentBbox(data, img.width, img.height);
 
   // Fall back to full image if bbox detection fails (fully opaque image / unusual format)
@@ -66,7 +90,7 @@ export async function addShadowToCutout(cutoutPath) {
   ctx.shadowOffsetY = SHADOW_OFFSET_Y;
 
   // Draw only the trimmed region at the padded position
-  ctx.drawImage(img, srcX, srcY, srcW, srcH, PADDING, PADDING, srcW, srcH);
+  ctx.drawImage(drawSource, srcX, srcY, srcW, srcH, PADDING, PADDING, srcW, srcH);
 
   // ── Step 3: save ──
   const outputPath = cutoutPath.replace(".cutout.png", ".cutout.shadow.png");

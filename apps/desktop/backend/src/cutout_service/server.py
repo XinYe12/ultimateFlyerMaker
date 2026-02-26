@@ -8,7 +8,26 @@ from pydantic import BaseModel
 import os, sys, subprocess, json, asyncio, tempfile, io
 
 from PIL import Image, ExifTags
-from rembg import remove
+from rembg import remove, new_session
+import threading
+
+# Load the model in a background thread so uvicorn can start and pass the
+# health check immediately (important during the first-time ~1 GB download).
+_rembg_session = None
+_model_ready = threading.Event()
+
+def _load_model():
+    global _rembg_session
+    print("[cutout] loading rembg model: birefnet-general …", flush=True)
+    try:
+        _rembg_session = new_session("birefnet-general")
+        print("[cutout] rembg model ready: birefnet-general", flush=True)
+    except Exception as e:
+        print(f"[cutout] ERROR loading model: {e}", flush=True)
+    finally:
+        _model_ready.set()
+
+threading.Thread(target=_load_model, daemon=True).start()
 
 app = FastAPI()
 ocr_lock = asyncio.Lock()
@@ -74,10 +93,28 @@ async def cutout(file: UploadFile = File(...)):
             print(f"[cutout] PIL cannot open input: {e}")
             return JSONResponse(status_code=400, content={"error": f"Invalid image: {e}"})
 
-        out = remove(data)
-        print(f"[cutout] rembg produced {len(out)} bytes")
+        # Add a white border before rembg so the model doesn't over-aggressively
+        # remove product pixels that touch or are near the image edges/corners.
+        BORDER = 40
+        padded = Image.new("RGB", (src_img.width + BORDER * 2, src_img.height + BORDER * 2), (255, 255, 255))
+        padded.paste(src_img.convert("RGB"), (BORDER, BORDER))
+        pad_buf = io.BytesIO()
+        padded.save(pad_buf, format="PNG")
+        padded_data = pad_buf.getvalue()
 
-        img = Image.open(io.BytesIO(out))
+        # Wait for background model load (handles first-time download gracefully)
+        if not _model_ready.is_set():
+            print("[cutout] waiting for model to finish loading …", flush=True)
+            await asyncio.to_thread(_model_ready.wait, 3600)
+        if _rembg_session is None:
+            return JSONResponse(status_code=503, content={"error": "Model failed to load"})
+
+        out_padded = remove(padded_data, session=_rembg_session)
+        print(f"[cutout] rembg produced {len(out_padded)} bytes")
+
+        # Crop back to the original dimensions (strip the added border)
+        padded_result = Image.open(io.BytesIO(out_padded)).convert("RGBA")
+        img = padded_result.crop((BORDER, BORDER, BORDER + src_img.width, BORDER + src_img.height))
         img = normalize_orientation(img)
 
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:

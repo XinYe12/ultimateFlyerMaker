@@ -319,6 +319,8 @@ export default function DbUploadView({ onBack }: Props) {
   const [quota, setQuota] = useState<QuotaStatus | null>(null);
   const [quotaLoading, setQuotaLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [clearingCache, setClearingCache] = useState(false);
+  const [cacheCleared, setCacheCleared] = useState<number | null>(null);
   const [queuedCount, setQueuedCount] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queueRef = useRef<string[]>([]);
@@ -375,6 +377,18 @@ export default function DbUploadView({ onBack }: Props) {
       if (wait > 0) setTimeout(apply, wait);
       else apply();
     });
+  }, []);
+
+  const handleClearCutoutCache = useCallback(async () => {
+    setClearingCache(true);
+    setCacheCleared(null);
+    try {
+      const res = await window.ufm.clearCutoutCache();
+      setCacheCleared(res.cleared ?? 0);
+      setTimeout(() => setCacheCleared(null), 4000);
+    } finally {
+      setClearingCache(false);
+    }
   }, []);
 
   // Check DB, Ollama, and quota on mount
@@ -659,6 +673,28 @@ export default function DbUploadView({ onBack }: Props) {
           {quota && <QuotaMeter quota={quota} loading={quotaLoading} onClick={refreshQuota} />}
           <ScanNonProductsButton onComplete={refreshDbConnection} />
           <SyncButton onSyncComplete={refreshDbConnection} />
+          <button
+            onClick={handleClearCutoutCache}
+            disabled={clearingCache}
+            title="Delete all cached cutout PNGs from exports/cutouts/"
+            style={{
+              padding: "5px 11px",
+              fontSize: 12,
+              fontWeight: 600,
+              border: "1px solid #dee2e6",
+              borderRadius: 6,
+              cursor: clearingCache ? "default" : "pointer",
+              background: clearingCache ? "#f1f3f5" : "#fff",
+              color: clearingCache ? "#adb5bd" : "#495057",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {clearingCache
+              ? "Clearing…"
+              : cacheCleared !== null
+              ? `Cleared ${cacheCleared} files`
+              : "Clear Cutout Cache"}
+          </button>
           {sessionStats.added > 0 && (
             <Chip label={`+${sessionStats.added} added`} color="#fff" bg="#2F9E44" />
           )}

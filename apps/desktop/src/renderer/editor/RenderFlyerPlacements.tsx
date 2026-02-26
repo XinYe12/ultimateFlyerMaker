@@ -68,7 +68,7 @@ function PlacementCard({ p, item, label }: { p: any; item: any; label: DiscountL
     const el = e.currentTarget;
     if (el.naturalWidth <= 0 || imgInfo) return;
 
-    const SCAN = 200;
+    const SCAN = 500;
     const cv = document.createElement("canvas");
     cv.width = SCAN; cv.height = SCAN;
     const ctx = cv.getContext("2d")!;
@@ -96,10 +96,36 @@ function PlacementCard({ p, item, label }: { p: any; item: any; label: DiscountL
     }
 
     const { naturalWidth: nw, naturalHeight: nh } = el;
+
+    // Precise top-boundary scan: draw only the top TOP_PX natural rows into a SCAN×TOP_PX
+    // canvas (1:1 vertical scale, no vertical compression). For large images the main SCAN
+    // compresses many natural rows per scan row, averaging faint shadow pixels toward zero.
+    // This strip preserves full per-row alpha so shadow bleed at ~y=75 is always detected.
+    const TOP_PX = Math.min(200, nh);
+    let bboxY = top === -1 ? 0 : Math.round(top / SCAN * nh);
+    if (top !== -1) {
+      try {
+        const topCv = document.createElement("canvas");
+        topCv.width = SCAN; topCv.height = TOP_PX;
+        const topCtx = topCv.getContext("2d")!;
+        topCtx.drawImage(el, 0, 0, nw, TOP_PX, 0, 0, SCAN, TOP_PX);
+        const topData = topCtx.getImageData(0, 0, SCAN, TOP_PX).data;
+        // Use alpha > 1 (not > 0) to ignore near-zero rembg artifacts (alpha=1).
+        // The actual shadow bleed from a real product has alpha ≈ 29+ at its edge.
+        for (let y = 0; y < TOP_PX; y++) {
+          let found = false;
+          for (let x = 0; x < SCAN; x++) {
+            if (topData[(y * SCAN + x) * 4 + 3] > 1) { bboxY = y; found = true; break; }
+          }
+          if (found) break;
+        }
+      } catch { /* keep rough estimate */ }
+    }
+
     const bboxX = top === -1 ? 0 : Math.round(left / SCAN * nw);
-    const bboxY = top === -1 ? 0 : Math.round(top / SCAN * nh);
+    const botNat = top === -1 ? nh : Math.round(bottom / SCAN * nh);
     const bboxW = top === -1 ? nw : Math.round((right - left + 1) / SCAN * nw);
-    const bboxH = top === -1 ? nh : Math.round((bottom - top + 1) / SCAN * nh);
+    const bboxH = top === -1 ? nh : botNat - bboxY + 1;
     setImgInfo({ natW: nw, natH: nh, bboxX, bboxY, bboxW, bboxH });
   }, [imgInfo]);
 
