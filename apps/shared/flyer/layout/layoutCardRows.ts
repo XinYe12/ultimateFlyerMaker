@@ -10,6 +10,10 @@ export type CardDef = {
   widthPx: number;
   itemId?: string;
   rowSpan?: number;  // number of rows this card spans (default 1)
+  contentScale?: number;
+  imageScale?: number;
+  titleScale?: number;
+  priceScale?: number;
 };
 
 /**
@@ -119,6 +123,10 @@ export function layoutCardRows({
       y: region.y + card.row * (rowHeight + CARD_GAP),
       width: card.widthPx,
       height: cardHeight,
+      contentScale: card.contentScale,
+      imageScale: card.imageScale,
+      titleScale: card.titleScale,
+      priceScale: card.priceScale,
     });
   }
 

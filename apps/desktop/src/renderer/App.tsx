@@ -46,6 +46,7 @@ export default function App() {
   }[]>([]);
   const [slotOverrides, setSlotOverrides] = useState<Record<number, { x: number; y: number; width: number; height: number }>>({});
   const [cardLayouts, setCardLayouts] = useState<Record<string, CardLayout>>({});
+  const [userRowCounts, setUserRowCounts] = useState<Record<string, number>>({});
   const [dbSearchItemId, setDbSearchItemId] = useState<string | null>(null);
   const [googleSearchItemId, setGoogleSearchItemId] = useState<string | null>(null);
   const [discountDetailsDialog, setDiscountDetailsDialog] = useState<{
@@ -132,6 +133,49 @@ export default function App() {
 
   const canUndoCardLayout = (cardLayoutHistory[department]?.length ?? 0) > 0;
 
+  const handleRowCountChange = useCallback((newRows: number) => {
+    if (newRows < 1) return;
+    const layout = cardLayouts[department];
+    const sortedItemIds = [...(layout ?? [])]
+      .sort((a, b) => a.row - b.row || a.order - b.order)
+      .filter(c => c.itemId)
+      .map(c => c.itemId as string);
+
+    const config = templateConfigRef.current;
+    const page = config ? findPageForDepartment(config, department) : null;
+    const deptDef = page?.departments[department];
+    if (!deptDef || !isCardDepartment(deptDef)) return;
+
+    const newLayout = autoLayoutCards({
+      itemIds: sortedItemIds,
+      regionWidth: deptDef.region.width,
+      targetRows: newRows,
+    });
+
+    // Preserve contentScale, imageScale, titleScale, priceScale from old layout
+    const scaleByItemId = new Map<string, {
+      contentScale?: number; imageScale?: number; titleScale?: number; priceScale?: number;
+    }>();
+    for (const card of (layout ?? [])) {
+      if (card.itemId) {
+        const entry: { contentScale?: number; imageScale?: number; titleScale?: number; priceScale?: number } = {};
+        if (card.contentScale != null) entry.contentScale = card.contentScale;
+        if (card.imageScale != null) entry.imageScale = card.imageScale;
+        if (card.titleScale != null) entry.titleScale = card.titleScale;
+        if (card.priceScale != null) entry.priceScale = card.priceScale;
+        if (Object.keys(entry).length > 0) scaleByItemId.set(card.itemId, entry);
+      }
+    }
+    const newLayoutWithScale = newLayout.map(card =>
+      card.itemId && scaleByItemId.has(card.itemId)
+        ? { ...card, ...scaleByItemId.get(card.itemId) }
+        : card
+    );
+
+    setUserRowCounts(prev => ({ ...prev, [department]: newRows }));
+    setCardLayouts(prev => ({ ...prev, [department]: newLayoutWithScale }));
+  }, [department, cardLayouts]);
+
   // Check if current department is card-based
   const isDeptCardBased = useCallback(() => {
     const config = templateConfigRef.current;
@@ -211,7 +255,7 @@ export default function App() {
       const deptDef = page?.departments[department];
       if (deptDef && isCardDepartment(deptDef)) {
         const allIds = doneItems.map((it: any) => it.id);
-        const newLayout = autoLayoutCards({ itemIds: allIds, regionWidth: deptDef.region.width });
+        const newLayout = autoLayoutCards({ itemIds: allIds, regionWidth: deptDef.region.width, targetRows: userRowCounts[department] });
         setCardLayouts(prev => ({ ...prev, [department]: newLayout }));
       }
     } else if (changed) {
@@ -883,6 +927,8 @@ export default function App() {
                   cardLayout={currentCardLayout}
                   onCardLayoutChange={setCurrentCardLayout}
                   onRemoveFromQueue={removeItemFromQueue}
+                  rowCount={userRowCounts[department]}
+                  onRowCountChange={handleRowCountChange}
                 />
 
                 {dbSearchItemId && (

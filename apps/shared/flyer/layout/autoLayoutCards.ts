@@ -11,6 +11,7 @@ export type CardDef = {
   widthPx: number;
   itemId?: string;
   rowSpan?: number;
+  contentScale?: number;
 };
 
 const DEFAULT_CARDS_PER_ROW = 3;
@@ -25,10 +26,12 @@ export function autoLayoutCards({
   itemIds,
   regionWidth,
   defaultRows,
+  targetRows,
 }: {
   itemIds: string[];
   regionWidth: number;
   defaultRows?: number;
+  targetRows?: number;
 }): CardDef[] {
   const cards: CardDef[] = [];
 
@@ -51,8 +54,8 @@ export function autoLayoutCards({
     return cards;
   }
 
-  // Dynamic row count: ceil(N / 3)
-  const rows = Math.ceil(itemIds.length / DEFAULT_CARDS_PER_ROW);
+  // Dynamic row count: ceil(N / 3), or use targetRows if specified
+  const rows = targetRows ?? Math.ceil(itemIds.length / DEFAULT_CARDS_PER_ROW);
 
   // Distribute items evenly across rows
   let itemIndex = 0;

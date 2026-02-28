@@ -185,6 +185,10 @@ export type CardDef = {
   widthPx: number;   // pixel width (from fraction initially, then drag-adjusted)
   itemId?: string;   // linked IngestItem.id; undefined = empty card
   rowSpan?: number;  // number of rows this card spans (default 1)
+  contentScale?: number;  // visual content scale within card (default 1.0, range 0.3–2.0)
+  imageScale?: number;   // scales product image size independently (default 1.0)
+  titleScale?: number;   // scales title/meta font sizes independently (default 1.0)
+  priceScale?: number;   // scales price font sizes independently (default 1.0)
 };
 
 export type CardLayout = CardDef[];

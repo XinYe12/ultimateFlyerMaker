@@ -56,6 +56,8 @@ export default function EditorCanvas({
   cardLayout,
   onCardLayoutChange,
   onRemoveFromQueue,
+  rowCount,
+  onRowCountChange,
 }: {
   editorQueue: any[];
   templateId: string;
@@ -79,11 +81,14 @@ export default function EditorCanvas({
   cardLayout?: CardLayout | null;
   onCardLayoutChange?: (layout: CardLayout) => void;
   onRemoveFromQueue?: (id: string) => void;
+  rowCount?: number;
+  onRowCountChange?: (rows: number) => void;
 }) {
   const [config, setConfig] = useState<any | null>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   const [addImageModalSlot, setAddImageModalSlot] = useState<number | null>(null);
   const [addImageModalCardId, setAddImageModalCardId] = useState<string | null>(null);
+  const [resizingMode, setResizingMode] = useState(false);
 
   // load template config
   useEffect(() => {
@@ -100,12 +105,28 @@ export default function EditorCanvas({
     }
   }, [items, templateId, department]);
 
+  // Escape to exit resizing mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && resizingMode) setResizingMode(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [resizingMode]);
+
   const page = config ? findPageForDepartment(config, department) : null;
   const region = page?.departments?.[department] ?? null;
   const imagePath = page?.imagePath ?? "";
 
   const isCard = region ? isCardDepartment(region) : false;
   const isSlotted = region ? isSlottedDepartment(region) : false;
+
+  // Exit resizing mode when switching to non-card department
+  useEffect(() => {
+    if (!isCard && resizingMode) setResizingMode(false);
+  }, [isCard, resizingMode]);
+
+  const effectiveRowCount = rowCount ?? (cardLayout ? deriveRowCount(cardLayout) : 3);
 
   // ── Slot drag/resize state (for slot-based departments) ──
   const [activeDrag, setActiveDrag] = useState<{
@@ -130,6 +151,14 @@ export default function EditorCanvas({
     startX: number;
     leftStartWidth: number;
     rightStartWidth: number;
+  } | null>(null);
+
+  // ── Per-element scale drag state ──
+  const [elementScaleDrag, setElementScaleDrag] = useState<{
+    itemId: string;
+    type: 'image' | 'title' | 'price';
+    startY: number;
+    startScale: number;
   } | null>(null);
 
   // ── Merge state ──
@@ -283,6 +312,16 @@ export default function EditorCanvas({
     });
   }, [cardLayout, onCardLayoutChange]);
 
+  const handleElementScaleDragStart = useCallback(
+    (itemId: string, type: 'image' | 'title' | 'price', startScale: number, e: React.MouseEvent) => {
+      if (!onCardLayoutChange) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setElementScaleDrag({ itemId, type, startY: e.clientY, startScale });
+    },
+    [onCardLayoutChange]
+  );
+
   // Global mouse handlers for slot drag/resize
   useEffect(() => {
     if (!activeDrag) return;
@@ -395,6 +434,34 @@ export default function EditorCanvas({
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [dividerDrag, cardLayout, onCardLayoutChange]);
+
+  // Global mouse handlers for per-element scale drag
+  useEffect(() => {
+    if (!elementScaleDrag || !onCardLayoutChange || !cardLayout) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const rect = cardRectsRef.current.find(r => r.itemId === elementScaleDrag.itemId);
+      const refPx = rect ? Math.min(rect.width, rect.height) * PREVIEW_SCALE : 100;
+      const delta = (elementScaleDrag.startY - e.clientY) / refPx; // drag up = larger
+      const newScale = Math.round(
+        Math.min(3.0, Math.max(0.2, elementScaleDrag.startScale + delta)) * 1000
+      ) / 1000;
+      const field = elementScaleDrag.type === 'image' ? 'imageScale'
+        : elementScaleDrag.type === 'title' ? 'titleScale' : 'priceScale';
+      const updated = cardLayout.map(c =>
+        c.itemId === elementScaleDrag.itemId ? { ...c, [field]: newScale } : c
+      );
+      onCardLayoutChange(updated);
+    };
+
+    const handleMouseUp = () => setElementScaleDrag(null);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [elementScaleDrag, cardLayout, onCardLayoutChange]);
 
   // Global swap drag mouse handlers (registered once — uses refs to avoid stale closures)
   useEffect(() => {
@@ -544,7 +611,7 @@ export default function EditorCanvas({
   // ── Swap drag — hold-to-lift detection ──
   const handleCanvasMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !onCardLayoutChange || !scaledCanvasRef.current) return;
-    if (dividerDrag || activeDrag) return; // don't conflict with other drags
+    if (dividerDrag || activeDrag || elementScaleDrag) return; // don't conflict with other drags
 
     const canvasRect = scaledCanvasRef.current.getBoundingClientRect();
     const canvasX = (e.clientX - canvasRect.left) / PREVIEW_SCALE;
@@ -1092,10 +1159,68 @@ export default function EditorCanvas({
       );
     })()}
 
+    {isCard && onRowCountChange && (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        justifyContent: 'center',
+        marginBottom: 6,
+        fontSize: 13,
+        color: '#555',
+      }}>
+        <span>Rows:</span>
+        <button
+          onClick={() => onRowCountChange(Math.max(1, effectiveRowCount - 1))}
+          style={{ width: 24, height: 24, cursor: 'pointer', borderRadius: 4, border: '1px solid #ccc' }}
+        >−</button>
+        <span style={{ minWidth: 20, textAlign: 'center', fontWeight: 600 }}>
+          {effectiveRowCount}
+        </span>
+        <button
+          onClick={() => onRowCountChange(effectiveRowCount + 1)}
+          style={{ width: 24, height: 24, cursor: 'pointer', borderRadius: 4, border: '1px solid #ccc' }}
+        >+</button>
+      </div>
+    )}
+
     <div
       key={page.pageId} // hard reset per page
-      style={{ marginTop: 24, display: "flex", justifyContent: "center" }}
+      style={{ marginTop: 24, display: "flex", justifyContent: "center", position: "relative" }}
     >
+      {/* Exit resizing mode button — top-right, only when resizing */}
+      {isCard && resizingMode && (
+        <button
+          onClick={() => setResizingMode(false)}
+          style={{
+            position: "absolute",
+            top: 8,
+            right: 8,
+            zIndex: 10000,
+            padding: "10px 20px",
+            background: "linear-gradient(135deg, #667eea, #764ba2)",
+            color: "#fff",
+            border: "2px solid rgba(255,255,255,0.9)",
+            borderRadius: 10,
+            cursor: "pointer",
+            fontWeight: 700,
+            fontSize: 14,
+            boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
+            transition: "transform 0.2s, box-shadow 0.2s",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = "scale(1.05)";
+            e.currentTarget.style.boxShadow = "0 6px 16px rgba(0,0,0,0.3)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = "scale(1)";
+            e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.25)";
+          }}
+          title="Exit resizing mode"
+        >
+          ✕ Exit
+        </button>
+      )}
       <div
         ref={scaledCanvasRef}
         style={{
@@ -1155,6 +1280,7 @@ export default function EditorCanvas({
                   items={items}
                   placements={cardPlacements}
                   discountLabels={discountLabels as any}
+                  onElementDragStart={onCardLayoutChange && resizingMode ? handleElementScaleDragStart : undefined}
                 />
               )}
 
@@ -1174,11 +1300,31 @@ export default function EditorCanvas({
                   onGoogleSearch={onGoogleSearch}
                   onEditTitle={onEditTitle}
                   onPickSeriesFlavors={onPickSeriesFlavors}
+                  onEnterResizingMode={() => setResizingMode(true)}
+                  resizingMode={resizingMode}
                   cardMode
                   cardRects={cardRects}
                   cardLayout={cardLayout ?? undefined}
                 />
               </div>
+
+              {/* Card border outlines */}
+              {onCardLayoutChange && cardRects.map((rect) => (
+                <div
+                  key={`scale-overlay-${rect.cardId}`}
+                  style={{
+                    position: "absolute",
+                    left: rect.x,
+                    top: rect.y,
+                    width: rect.width,
+                    height: rect.height,
+                    border: "1px dashed rgba(255,255,255,0.35)",
+                    boxSizing: "border-box",
+                    pointerEvents: "none",
+                    zIndex: 45,
+                  }}
+                />
+              ))}
 
               {/* Divider drag handles + horizontal merge buttons */}
               {onCardLayoutChange && groupDividers.map((d, idx) => {

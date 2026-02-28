@@ -7,4 +7,8 @@ export type FlyerPlacement = {
   y: number
   width: number
   height: number
+  contentScale?: number
+  imageScale?: number
+  titleScale?: number
+  priceScale?: number
 }

@@ -3,7 +3,7 @@
 // PURE TEXT RENDERING - NO PNG LABELS
 // Titles use Maven Pro, Prices use Trade Winds
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef, useLayoutEffect } from "react";
 
 // Helper to parse price display into parts for rendering
 function parsePriceDisplay(display: string) {
@@ -42,6 +42,18 @@ function fitContain(natW: number, natH: number, cellW: number, cellH: number) {
   return { width: Math.round(natW * scale), height: Math.round(natH * scale) };
 }
 
+/** Clamp val to [min, max] and round to nearest integer. */
+function clamp(min: number, val: number, max: number): number {
+  return Math.round(Math.min(Math.max(val, min), max));
+}
+
+/** Grid cols/rows for n images (used for non-diagonal layouts). */
+function getGridDims(n: number): { cols: number; rows: number } {
+  if (n <= 2) return { cols: n, rows: 1 };
+  if (n <= 5) return { cols: 2, rows: Math.ceil(n / 2) };
+  return { cols: 3, rows: Math.ceil(n / 3) };
+}
+
 type DiscountLabel = {
   id: string;
   title: {
@@ -58,11 +70,101 @@ type DiscountLabel = {
   };
 };
 
-function PlacementCard({ p, item, label }: { p: any; item: any; label: DiscountLabel | null }) {
+function GripDot({
+  currentScale,
+  style,
+  onDragStart,
+}: {
+  currentScale: number;
+  style: React.CSSProperties;
+  onDragStart: (e: React.MouseEvent) => void;
+}) {
+  const [active, setActive] = useState(false);
+  const [hover, setHover] = useState(false);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setActive(true);
+    onDragStart(e);
+    const handleUp = () => {
+      setActive(false);
+      window.removeEventListener('mouseup', handleUp);
+    };
+    window.addEventListener('mouseup', handleUp);
+  };
+
+  const fill = Math.min(1, Math.max(0, (currentScale - 0.2) / 2.8));
+  const PURPLE = 'rgba(138, 43, 226, ';
+
+  if (active) {
+    const BAR_W = 22, BAR_H = 90, RADIUS = 11;
+    return (
+      <div
+        style={{
+          position: 'absolute',
+          ...style,
+          width: BAR_W,
+          height: BAR_H,
+          borderRadius: RADIUS,
+          background: `${PURPLE}0.18)`,
+          overflow: 'hidden',
+          cursor: 'ns-resize',
+          zIndex: 200,
+          boxShadow: '0 2px 12px rgba(0,0,0,0.25)',
+        }}
+      >
+        <div style={{
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: `${fill * 100}%`,
+          background: `${PURPLE}0.85)`,
+          borderRadius: RADIUS,
+          transition: 'height 0.05s linear',
+        }} />
+      </div>
+    );
+  }
+
+  const SIZE = hover ? 14 : 12;
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        ...style,
+        width: SIZE,
+        height: SIZE,
+        borderRadius: SIZE / 2,
+        background: hover ? `${PURPLE}1)` : `${PURPLE}0.8)`,
+        cursor: 'ns-resize',
+        zIndex: 100,
+        boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
+        transition: 'width 0.1s, height 0.1s, background 0.1s',
+      }}
+      onMouseDown={handleMouseDown}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    />
+  );
+}
+
+function PlacementCard({
+  p, item, label, onElementDragStart,
+}: {
+  p: any;
+  item: any;
+  label: DiscountLabel | null;
+  onElementDragStart?: (type: 'image' | 'title' | 'price', startScale: number, e: React.MouseEvent) => void;
+}) {
   const [imgInfo, setImgInfo] = useState<{
     natW: number; natH: number;
     bboxX: number; bboxY: number; bboxW: number; bboxH: number;
   } | null>(null);
+
+  // For n=3 multi-image: randomly choose diagonal vs 2+1 grid (decided once per mount)
+  const diagonalRef = useRef<boolean>(Math.random() < 0.5);
 
   const onFirstImgLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
     const el = e.currentTarget;
@@ -166,23 +268,92 @@ function PlacementCard({ p, item, label }: { p: any; item: any; label: DiscountL
   const displaySrcs = imgSrcs ?? (multiQty >= 2 && imgSrc ? Array(multiQty).fill(imgSrc) : null);
 
   // ── image sizing ──
-  // Image zone: 5% top padding from card top, bottom limit = bottom 25% (label zone).
-  // No-label cards use no label zone, so image fills 5% → 100%.
   const SIDE_PAD = 8;
-  const topPad = Math.round(p.height * 0.05);
-  const LABEL_ZONE_H = hasLabel ? Math.round(p.height * 0.25) : 0;
+  const scale = (p.contentScale ?? 1) as number;
+  const imgScale  = (p.imageScale  ?? 1) as number;
+  const titScale  = (p.titleScale  ?? 1) as number;
+  const prcScale  = (p.priceScale  ?? 1) as number;
+  const topPad = Math.round(p.height * 0.05 * scale);
+  const LABEL_ZONE_H = hasLabel ? Math.round(p.height * 0.25 * scale) : 0;
+
+  // ── font sizes ──
+  // All price labels in the same card size should occupy the same width.
+  // Strategy: pick a fixed target width (TARGET_PRICE_W = 42% of card),
+  // then derive priceMainSize so the full label (qty + integer + decimal) fills it exactly.
+  //   qty  at 0.55× font, integer at 1.0×, decimal at 0.5×; each char ≈ CHAR_RATIO × size wide.
+  // This makes "$9.99" and "3/$5.99" produce the same pixel-wide label on equal-sized cards.
+  const CHAR_RATIO = 0.60;
+  const intStr    = priceParts?.integer ?? "0";
+  const decStr    = priceParts?.decimal ?? "";
+  const qtyStr    = priceParts?.type === "MULTI" ? `${priceParts.quantity ?? ""}/` : "";
+  const charUnits = qtyStr.length * 0.55 + intStr.length * 1.0 + decStr.length * 0.5;
+  const TARGET_PRICE_W = p.width * 0.42;
+  const sizeByWidth = TARGET_PRICE_W / (Math.max(1, charUnits) * CHAR_RATIO);
+  // Height cap: prevent font from exceeding card height (safety net for very wide/short cards).
+  const priceMainBase = clamp(16, Math.min(p.height * 0.55, sizeByWidth), 220) * scale * prcScale;
+  const titleMainSize = clamp(13, p.width * 0.034, 22) * scale * titScale;
+  const titleMetaSize = clamp(11, p.width * 0.026, 17) * scale * titScale;
+
+  // ── overlap-based price font scaling ──
+  // Starts at 1; shrunk by useLayoutEffect if price overlaps title.
+  const [priceFontScale, setPriceFontScale] = useState(1);
+  const titleRef = useRef<HTMLDivElement>(null);
+  const priceRef = useRef<HTMLDivElement>(null);
+  // Track which layout inputs we've last adjusted for, to reset + re-measure on change.
+  const adjustKey = `${label?.price.display}|${label?.title.en}|${p.width}|${p.height}|${scale}|${titScale}|${prcScale}`;
+  const prevAdjustKey = useRef('');
+
+  useLayoutEffect(() => {
+    if (adjustKey === prevAdjustKey.current) return;
+    // If scale isn't reset yet, reset it first and wait for the next render to measure.
+    if (priceFontScale !== 1) {
+      setPriceFontScale(1);
+      return;
+    }
+    prevAdjustKey.current = adjustKey;
+    if (!titleRef.current || !priceRef.current) return;
+    const titleRect = titleRef.current.getBoundingClientRect();
+    const priceRect = priceRef.current.getBoundingClientRect();
+    const overlap = titleRect.right - priceRect.left;
+    if (overlap > 2) {
+      const available = priceRect.right - titleRect.right - 4;
+      if (available > 0 && priceRect.width > 0) {
+        setPriceFontScale(Math.max(0.2, available / priceRect.width));
+      }
+    }
+  }, [adjustKey, priceFontScale]);
+
+  const priceMainSize = Math.round(priceMainBase * priceFontScale);
+  const priceDecSize  = Math.round(priceMainSize * 0.50);
+  const priceDecTop   = -Math.round(priceMainSize * 0.20);
+  const priceQtySize  = Math.round(priceMainSize * 0.55);
+  const priceUnitSize = Math.round(priceMainSize * 0.12);
+
   const availW = p.width - SIDE_PAD * 2;
   const availH = p.height - topPad - LABEL_ZONE_H;
   const n = displaySrcs ? displaySrcs.length : 1;
   const GAP = 4;
-  const cellW = n > 1 ? (availW - (n - 1) * GAP) / n : availW;
-  const cellH = availH;
+  const useDiagonal = n === 3 && diagonalRef.current;
+  const { cols, rows } = useDiagonal ? { cols: 1, rows: 1 } : getGridDims(n);
+  // Height-first sizing: constrain by row height, derive natural width from aspect ratio.
+  // This makes horizontal gap between images match vertical GAP (no wide empty cell sides).
+  const maxCellW = cols > 1 ? (availW - (cols - 1) * GAP) / cols : availW;
+  const cellH = useDiagonal
+    ? availH * 0.65
+    : rows > 1 ? (availH - (rows - 1) * GAP) / rows : availH;
+  const cellW = useDiagonal
+    ? availW * 0.65
+    : imgInfo && imgInfo.bboxH > 0
+      ? Math.min(cellH * imgInfo.bboxW / imgInfo.bboxH, maxCellW)
+      : maxCellW;
 
   // Derived render info — null until image loads and bbox is scanned.
   const imgRender = imgInfo ? (() => {
     const { natW, natH, bboxX, bboxY, bboxW, bboxH } = imgInfo;
-    const { width: dispW, height: dispH } = fitContain(bboxW, bboxH, cellW, cellH);
-    const scale = dispW / bboxW;
+    const { width: fitW, height: fitH } = fitContain(bboxW, bboxH, cellW, cellH);
+    const dispW = Math.round(fitW * imgScale);
+    const dispH = Math.round(fitH * imgScale);
+    const sc = dispW / bboxW;
     return {
       wrapperStyle: {
         position: "relative" as const,
@@ -192,10 +363,10 @@ function PlacementCard({ p, item, label }: { p: any; item: any; label: DiscountL
       },
       imgAbsStyle: {
         position: "absolute" as const,
-        width: Math.round(natW * scale),
-        height: Math.round(natH * scale),
-        left: Math.round(-bboxX * scale),
-        top: Math.round(-bboxY * scale),
+        width: Math.round(natW * sc),
+        height: Math.round(natH * sc),
+        left: Math.round(-bboxX * sc),
+        top: Math.round(-bboxY * sc),
         display: "block" as const,
       },
     };
@@ -280,17 +451,15 @@ function PlacementCard({ p, item, label }: { p: any; item: any; label: DiscountL
           {hasLabel && (() => {
             const pp = label!.price.display ? parsePriceDisplay(label!.price.display) : null;
             return (
-              <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-end", padding: "4px", gap: 6, width: "100%" }}>
+              <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", padding: "4px", width: "100%" }}>
                 {(label!.title.en || label!.title.zh) && (
-                  <div className="ufm-title" style={{ flex: "0 0 32%", minWidth: 0 }}>
-                    <div className="ufm-title-main">{label!.title.en.toUpperCase()}</div>
-                  </div>
+                  <div className="ufm-title-main" style={{ fontSize: titleMainSize }}>{label!.title.en.toUpperCase()}</div>
                 )}
                 {pp && (
-                  <div className="ufm-price" style={{ flex: "1 1 0", minWidth: 0, display: "flex", alignItems: "baseline", justifyContent: "center" }}>
-                    {pp.type === "MULTI" && <span className="ufm-price-qty">{pp.quantity}/</span>}
-                    <span className="ufm-price-main">{pp.integer}</span>
-                    {pp.decimal && <span className="ufm-price-decimal">{pp.decimal}</span>}
+                  <div className="ufm-price" style={{ alignItems: "baseline", paddingRight: 4 }}>
+                    {pp.type === "MULTI" && <span className="ufm-price-qty" style={{ fontSize: priceQtySize }}>{pp.quantity}/</span>}
+                    <span className="ufm-price-main" style={{ fontSize: priceMainSize }}>{pp.integer}</span>
+                    {pp.decimal && <span className="ufm-price-decimal" style={{ fontSize: priceDecSize, top: priceDecTop }}>{pp.decimal}</span>}
                   </div>
                 )}
               </div>
@@ -304,87 +473,137 @@ function PlacementCard({ p, item, label }: { p: any; item: any; label: DiscountL
   // Nothing to render at all
   if (!imgSrc && !imgSrcs?.length && !hasLabel) return null;
 
-  // ── Unified layout: image top-centered, labels pinned to bottom ──
+  // ── Layout: full-width image, title bottom-left, price bottom-right ──
   return (
-    <div
-      style={{
+    <div style={{
+      position: "absolute", left: p.x, top: p.y,
+      width: p.width, height: p.height, overflow: "hidden",
+    }}>
+      {/* Image zone — flex rows or diagonal layout */}
+      <div style={{
         position: "absolute",
-        left: p.x,
-        top: p.y,
-        width: p.width,
-        height: p.height,
+        top: topPad, left: SIDE_PAD,
+        width: availW, height: availH,
         overflow: "hidden",
-      }}
-    >
-      {/* Image zone: starts at 5% from top, fills down to label zone boundary */}
-      <div
-        style={{
-          position: "absolute",
-          top: topPad,
-          left: SIDE_PAD,
-          width: availW,
-          height: availH,
-          display: "flex",
-          flexDirection: "row",
-          alignItems: "flex-start",
-          justifyContent: "center",
-          gap: GAP,
-          overflow: "hidden",
-        }}
-      >
+        ...(useDiagonal
+          ? { display: "block" }
+          : displaySrcs && displaySrcs.length > 1
+          ? { display: "flex", flexDirection: "column", gap: GAP }
+          : { display: "flex", flexDirection: "row", alignItems: "flex-start", justifyContent: "center" }
+        ),
+      }}>
         {displaySrcs && displaySrcs.length > 1
-          ? displaySrcs.map((src, idx) => renderImg(src, idx))
+          ? (() => {
+              if (useDiagonal) {
+                const stepX = (availW - cellW) / 2;
+                const stepY = (availH - cellH) / 2;
+                return displaySrcs.map((src, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      position: "absolute",
+                      left: Math.round(idx * stepX),
+                      top: Math.round(idx * stepY),
+                      zIndex: idx + 1,
+                    }}
+                  >
+                    {renderImg(src, idx)}
+                  </div>
+                ));
+              }
+              // Flex rows: split displaySrcs into rows, each row is a centered flex row.
+              // Orphan images (last row with fewer than cols items) auto-center via justifyContent.
+              const rowArrays: string[][] = [];
+              for (let r = 0; r < rows; r++) {
+                rowArrays.push(displaySrcs.slice(r * cols, (r + 1) * cols));
+              }
+              return rowArrays.map((rowImgs, rowIdx) => (
+                <div key={rowIdx} style={{
+                  flex: 1,
+                  display: "flex",
+                  flexDirection: "row",
+                  gap: GAP,
+                  justifyContent: "center",
+                  alignItems: "flex-start",
+                }}>
+                  {rowImgs.map((src, imgIdx) => renderImg(src, rowIdx * cols + imgIdx))}
+                </div>
+              ));
+            })()
           : imgSrc ? renderImg(imgSrc) : null}
+        {/* Image resize grip */}
+        {onElementDragStart && (
+          <GripDot
+            currentScale={imgScale}
+            style={{ bottom: SIDE_PAD + 2, left: "50%", transform: "translateX(-50%)" }}
+            onDragStart={(e) => onElementDragStart('image', imgScale, e)}
+          />
+        )}
       </div>
 
-      {/* Label zone: pinned to bottom, always on top */}
-      {hasLabel && (
-        <div
-          style={{
-            position: "absolute",
-            bottom: 0,
-            left: 0,
-            right: 0,
-            height: LABEL_ZONE_H,
-            zIndex: 10,
-            display: "flex",
-            flexDirection: "row",
-            alignItems: "flex-end",
-            padding: "4px",
-            gap: 6,
-          }}
-        >
-          {(label.title.en || label.title.zh) && (
-            <div className="ufm-title" style={{ flex: "0 0 32%", minWidth: 0 }}>
-              <div className="ufm-title-main">
-                {label.title.en.toUpperCase()}
-              </div>
-              {(label.title.size || label.title.regularPrice) && (
-                <div className="ufm-title-meta">
-                  {label.title.size}
-                  {label.title.regularPrice && (
-                    <> REG: {label.title.regularPrice}</>
-                  )}
-                </div>
-              )}
+      {/* Title — absolute bottom-left, no clipping */}
+      {hasLabel && (label.title.en || label.title.zh) && (
+        <div ref={titleRef} style={{
+          position: "absolute",
+          bottom: SIDE_PAD, left: SIDE_PAD,
+          maxWidth: "50%",
+          display: "flex", flexDirection: "column",
+          justifyContent: "flex-end",
+          zIndex: 10,
+          wordBreak: "break-word",
+        }}>
+          <div className="ufm-title-main" style={{ fontSize: titleMainSize }}>
+            {label.title.en.toUpperCase()}
+          </div>
+          {(label.title.size || label.title.regularPrice) && (
+            <div className="ufm-title-meta" style={{ fontSize: titleMetaSize }}>
+              {label.title.size}
+              {label.title.regularPrice && <> REG: {label.title.regularPrice}</>}
             </div>
           )}
-          {priceParts && (
-            <div className="ufm-price" style={{ flex: "1 1 0", minWidth: 0, display: "flex", alignItems: "baseline", justifyContent: "center" }}>
-              {priceParts.type === "MULTI" && (
-                <span className="ufm-price-qty">{priceParts.quantity}/</span>
-              )}
-              <span className="ufm-price-main">{priceParts.integer}</span>
-              {priceParts.decimal && (
-                <span className="ufm-price-decimal">{priceParts.decimal}</span>
-              )}
-              {priceParts.type === "SINGLE" && priceParts.unit && (
-                <span className="ufm-price-unit">/{priceParts.unit.toUpperCase()}</span>
-              )}
-            </div>
+          {/* Title resize grip */}
+          {onElementDragStart && (
+            <GripDot
+              currentScale={titScale}
+              style={{ right: -20, top: "50%", transform: "translateY(-50%)" }}
+              onDragStart={(e) => onElementDragStart('title', titScale, e)}
+            />
           )}
         </div>
       )}
+
+      {/* Price — absolute bottom-right, no clipping; font scaled down if it overlaps title */}
+      {hasLabel && priceParts && (
+        <div ref={priceRef} style={{
+          position: "absolute",
+          bottom: SIDE_PAD, right: SIDE_PAD,
+          display: "flex",
+          alignItems: "flex-end", justifyContent: "flex-end",
+          zIndex: 10,
+        }}>
+          {/* Price resize grip */}
+          {onElementDragStart && (
+            <GripDot
+              currentScale={prcScale}
+              style={{ left: -20, top: "50%", transform: "translateY(-50%)" }}
+              onDragStart={(e) => onElementDragStart('price', prcScale, e)}
+            />
+          )}
+          <div className="ufm-price" style={{ display: "flex", alignItems: "baseline" }}>
+            {priceParts.type === "MULTI" && (
+              <span className="ufm-price-qty" style={{ fontSize: priceQtySize }}>{priceParts.quantity}/</span>
+            )}
+            <span className="ufm-price-main" style={{ fontSize: priceMainSize }}>{priceParts.integer}</span>
+            {priceParts.decimal && (
+              <span className="ufm-price-decimal" style={{ fontSize: priceDecSize, top: priceDecTop }}>{priceParts.decimal}</span>
+            )}
+            {priceParts.type === "SINGLE" && priceParts.unit && (
+              <span className="ufm-price-unit" style={{ fontSize: priceUnitSize }}>/{priceParts.unit.toUpperCase()}</span>
+            )}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
@@ -393,10 +612,17 @@ export default function RenderFlyerPlacements({
   items,
   placements,
   discountLabels,
+  onElementDragStart,
 }: {
   items: any[];
   placements: any[];
   discountLabels?: DiscountLabel[];
+  onElementDragStart?: (
+    cardId: string,
+    type: 'image' | 'title' | 'price',
+    startScale: number,
+    e: React.MouseEvent
+  ) => void;
 }) {
   if (!Array.isArray(items) || !Array.isArray(placements)) return null;
 
@@ -443,7 +669,19 @@ export default function RenderFlyerPlacements({
         const item = items.find((it: any) => it.id === p.itemId);
         if (!item) return null;
         const label = getLabelForItem(item, p.itemId);
-        return <PlacementCard key={p.itemId} p={p} item={item} label={label} />;
+        const handleElementDrag = onElementDragStart
+          ? (type: 'image' | 'title' | 'price', startScale: number, e: React.MouseEvent) =>
+              onElementDragStart(p.itemId, type, startScale, e)
+          : undefined;
+        return (
+          <PlacementCard
+            key={p.itemId}
+            p={p}
+            item={item}
+            label={label}
+            onElementDragStart={handleElementDrag}
+          />
+        );
       })}
     </>
   );

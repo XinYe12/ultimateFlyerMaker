@@ -39,6 +39,8 @@ type SlotOverlaysProps = {
   onGoogleSearch?: (itemId: string) => void;
   onEditTitle?: (itemId: string) => void;
   onPickSeriesFlavors?: (itemId: string) => void;
+  onEnterResizingMode?: () => void;
+  resizingMode?: boolean;
   // Card mode props
   cardMode?: boolean;
   cardRects?: CardRect[];
@@ -56,6 +58,8 @@ export default function SlotOverlays({
   onGoogleSearch,
   onEditTitle,
   onPickSeriesFlavors,
+  onEnterResizingMode,
+  resizingMode = false,
   cardMode,
   cardRects,
   cardLayout,
@@ -142,6 +146,7 @@ export default function SlotOverlays({
                 alignItems: "center",
                 justifyContent: "center",
                 backgroundColor: cardMode ? "transparent" : "rgba(200, 200, 200, 0.1)",
+                zIndex: 9000,
               }}
             >
               <button
@@ -197,10 +202,10 @@ export default function SlotOverlays({
               top: overlayRect.y,
               width: overlayRect.width,
               height: overlayRect.height,
-              pointerEvents: "auto",
-              zIndex: 20,
+              pointerEvents: resizingMode ? "none" : "auto",
+              zIndex: 9000,
             }}
-            onMouseEnter={() => setHoveredFullSlot(index)}
+            onMouseEnter={() => !resizingMode && setHoveredFullSlot(index)}
             onMouseLeave={() => {
               setHoveredFullSlot(null);
             }}
@@ -217,7 +222,7 @@ export default function SlotOverlays({
                   bottom: 10,
                   left: "50%",
                   transform: "translateX(-50%)",
-                  zIndex: 25,
+                  zIndex: 9001,
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
@@ -269,7 +274,7 @@ export default function SlotOverlays({
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  zIndex: 20,
+                  zIndex: 9001,
                   boxShadow: "0 2px 6px rgba(0,0,0,0.3)",
                   transition: "transform 0.15s",
                 }}
@@ -297,7 +302,7 @@ export default function SlotOverlays({
                   alignItems: "center",
                   justifyContent: "center",
                   gap: 36,
-                  zIndex: 30,
+                  zIndex: 9999,
                   borderRadius: 4,
                 }}
               >
@@ -339,7 +344,7 @@ export default function SlotOverlays({
               </div>
             )}
 
-            {/* Center 70% zone for Replace/Edit hover */}
+            {/* Center 70% zone for Edit hover */}
             <div
               style={{
                 position: "absolute",
@@ -388,77 +393,47 @@ export default function SlotOverlays({
                     Pick Flavors ({flavorCount})
                   </button>
                 )}
+                {/* Single Edit button — opens the edit menu */}
                 <button
                   onClick={() => {
                     setShowReplaceMenu(index);
                     setReplacingItemId(placement.itemId);
                   }}
                   style={{
-                    width: "160px",
-                    height: "160px",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: "16px",
-                  fontWeight: "700",
-                  color: "#fff",
-                  backgroundColor: "var(--color-warning)",
-                  border: "none",
-                  borderRadius: "12px",
-                  cursor: "pointer",
-                  boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
-                  transition: "transform 0.2s, box-shadow 0.2s",
-                  pointerEvents: "auto",
-                  zIndex: 10,
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = "scale(1.08)";
-                  e.currentTarget.style.boxShadow = "0 6px 20px rgba(0,0,0,0.4)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = "scale(1)";
-                  e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.3)";
-                }}
-              >
-                  <div style={{ fontSize: "40px", marginBottom: "8px", lineHeight: 1 }}>🖼️</div>
-                  <div style={{ fontSize: "22px", fontWeight: "700" }}>EDIT PICTURES</div>
+                    width: "80px",
+                    height: "80px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: "12px",
+                    fontWeight: "700",
+                    color: "#fff",
+                    backgroundColor: "var(--color-warning)",
+                    border: "none",
+                    borderRadius: "8px",
+                    cursor: "pointer",
+                    boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+                    transition: "transform 0.2s, box-shadow 0.2s",
+                    pointerEvents: "auto",
+                    zIndex: 9001,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = "scale(1.08)";
+                    e.currentTarget.style.boxShadow = "0 6px 20px rgba(0,0,0,0.4)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = "scale(1)";
+                    e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.3)";
+                  }}
+                >
+                  <div style={{ fontSize: "20px", marginBottom: "4px", lineHeight: 1 }}>✏️</div>
+                  <div style={{ fontSize: "11px", fontWeight: "700" }}>Edit</div>
                 </button>
-                {onEditTitle && (
-                  <button
-                    onClick={() => {
-                      onEditTitle(placement.itemId);
-                    }}
-                    style={{
-                      padding: "20px 36px",
-                      backgroundColor: "var(--color-primary)",
-                      color: "#fff",
-                      border: "none",
-                      borderRadius: 12,
-                      cursor: "pointer",
-                      fontWeight: "700",
-                      fontSize: "22px",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
-                      transition: "transform 0.2s",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.transform = "scale(1.05)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.transform = "scale(1)";
-                    }}
-                  >
-                    <span style={{ fontSize: "28px" }}>✏️</span>
-                    Add discount details
-                  </button>
-                )}
               </div>
             )}
 
-            {/* Replace Source Menu */}
+            {/* Edit Menu */}
             {showReplaceMenu === index && (
               <div
                 style={{
@@ -470,7 +445,7 @@ export default function SlotOverlays({
                   padding: "48px 56px",
                   borderRadius: "16px",
                   boxShadow: "0 12px 48px rgba(0,0,0,0.35)",
-                  zIndex: 100,
+                  zIndex: 9999,
                   minWidth: "680px",
                   color: "white",
                 }}
@@ -488,8 +463,45 @@ export default function SlotOverlays({
                     opacity: 0.95,
                   }}
                 >
-                  Edit Pictures
+                  Edit
                 </div>
+
+                {/* Option: Resize content — enter resizing mode (card-based only) */}
+                {cardMode && onEnterResizingMode && (
+                  <button
+                    onClick={() => {
+                      onEnterResizingMode();
+                      setShowReplaceMenu(null);
+                      setReplacingItemId(null);
+                    }}
+                    style={{
+                      padding: "28px 40px",
+                      background: "rgba(255,255,255,0.2)",
+                      color: "#fff",
+                      border: "1px solid rgba(255,255,255,0.4)",
+                      borderRadius: "14px",
+                      cursor: "pointer",
+                      fontWeight: "600",
+                      fontSize: "24px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "16px",
+                      transition: "background 0.2s, transform 0.2s",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "rgba(255,255,255,0.3)";
+                      e.currentTarget.style.transform = "scale(1.02)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "rgba(255,255,255,0.2)";
+                      e.currentTarget.style.transform = "scale(1)";
+                    }}
+                  >
+                    <span style={{ fontSize: "28px" }}>↔︎</span>
+                    Resize content
+                  </button>
+                )}
 
                 {/* Series flavor toggle — shown when item has multiple staged flavor images */}
                 {(() => {
@@ -544,7 +556,7 @@ export default function SlotOverlays({
                   );
                 })()}
 
-                {/* Option 0: Edit product title */}
+                {/* Option: Add discount details */}
                 {onEditTitle && replacingItemId && (
                   <button
                     onClick={() => {
@@ -581,7 +593,7 @@ export default function SlotOverlays({
                   </button>
                 )}
 
-                {/* Option 1: Google Search */}
+                {/* Option: Google Search */}
                 <button
                   onClick={() => {
                     if (replacingItemId && onGoogleSearch) {
@@ -619,7 +631,7 @@ export default function SlotOverlays({
                   Google Search
                 </button>
 
-                {/* Option 2: Database Results */}
+                {/* Option: Database Results */}
                 <button
                   onClick={() => {
                     if (replacingItemId && onChooseDatabaseResults) {
@@ -660,7 +672,7 @@ export default function SlotOverlays({
                   Database Results
                 </button>
 
-                {/* Option 3: Upload from Local */}
+                {/* Option: Upload from Local */}
                 <button
                   onClick={() => {
                     if (replacingItemId) {
