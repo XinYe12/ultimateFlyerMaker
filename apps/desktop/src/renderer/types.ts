@@ -234,6 +234,14 @@ export type FlyerJob = {
   result?: {
     processedImages: ImageTask[];
     discountLabels: DiscountLabel[];
+    verificationDone?: boolean;
+    verificationProgress?: {
+      currentIdx: number;
+      step: "title" | "image" | "price";
+      flags: number[];
+      approved: [number, string[]][];
+    };
+    departmentLocked?: boolean;
   };
   error?: string;
 

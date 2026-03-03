@@ -42,6 +42,7 @@ export default function EditorCanvas({
   templateId,
   department,
   discountLabels,
+  isLocked,
   onEnqueue,
   onRemove,
   onReplaceImage,
@@ -67,6 +68,7 @@ export default function EditorCanvas({
     title?: { en: string; zh: string; size: string; regularPrice: string };
     price?: { display: string; quantity?: number | null; unit?: string; regular?: string };
   }[];
+  isLocked?: boolean;
   onEnqueue?: (paths: string[], options?: { slotIndex?: number }) => Promise<void>;
   onRemove?: (id: string) => void;
   onReplaceImage?: (itemId: string) => Promise<void>;
@@ -1300,11 +1302,12 @@ export default function EditorCanvas({
                   onGoogleSearch={onGoogleSearch}
                   onEditTitle={onEditTitle}
                   onPickSeriesFlavors={onPickSeriesFlavors}
-                  onEnterResizingMode={() => setResizingMode(true)}
+                  onEnterResizingMode={isLocked ? undefined : () => setResizingMode(true)}
                   resizingMode={resizingMode}
                   cardMode
                   cardRects={cardRects}
                   cardLayout={cardLayout ?? undefined}
+                  isLocked={isLocked}
                 />
               </div>
 
@@ -1594,6 +1597,7 @@ export default function EditorCanvas({
               onGoogleSearch={onGoogleSearch}
               onEditTitle={onEditTitle}
               onPickSeriesFlavors={onPickSeriesFlavors}
+              isLocked={isLocked}
             />
           )}
         </div>

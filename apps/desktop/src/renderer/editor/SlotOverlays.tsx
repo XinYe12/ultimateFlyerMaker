@@ -45,6 +45,7 @@ type SlotOverlaysProps = {
   cardMode?: boolean;
   cardRects?: CardRect[];
   cardLayout?: CardLayout;
+  isLocked?: boolean;
 };
 
 export default function SlotOverlays({
@@ -63,6 +64,7 @@ export default function SlotOverlays({
   cardMode,
   cardRects,
   cardLayout,
+  isLocked = false,
 }: SlotOverlaysProps) {
   const [hoveredSlot, setHoveredSlot] = useState<number | null>(null);
   const [showReplaceMenu, setShowReplaceMenu] = useState<number | null>(null);
@@ -131,6 +133,7 @@ export default function SlotOverlays({
         const isHovered = hoveredSlot === index;
 
         if (isEmpty) {
+          if (isLocked) return null;
           // Empty slot/card: centered overlay with "Add Image" button
           return (
             <div
@@ -202,10 +205,10 @@ export default function SlotOverlays({
               top: overlayRect.y,
               width: overlayRect.width,
               height: overlayRect.height,
-              pointerEvents: resizingMode ? "none" : "auto",
-              zIndex: 9000,
+              pointerEvents: isLocked || resizingMode ? "none" : "auto",
+              zIndex: (showReplaceMenu === index || confirmDeleteSlot === index) ? 9500 : 9000,
             }}
-            onMouseEnter={() => !resizingMode && setHoveredFullSlot(index)}
+            onMouseEnter={() => !resizingMode && !isLocked && setHoveredFullSlot(index)}
             onMouseLeave={() => {
               setHoveredFullSlot(null);
             }}

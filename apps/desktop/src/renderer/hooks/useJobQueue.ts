@@ -273,7 +273,7 @@ export function useJobQueue() {
 
   // Sync current editor items + discount labels back to a drafting job (updates draft in job queue UI)
   const syncJobFromEditorItems = useCallback(
-    (jobId: string, items: IngestItem[], discountLabels?: any[], slotOverrides?: Record<number, { x: number; y: number; width: number; height: number }>, cardLayouts?: Record<string, CardLayout>) => {
+    (jobId: string, items: IngestItem[], discountLabels?: any[], slotOverrides?: Record<number, { x: number; y: number; width: number; height: number }>, cardLayouts?: Record<string, CardLayout>, verificationDone?: boolean, verificationProgress?: any, departmentLocked?: boolean) => {
       const images: ImageTask[] = items.map((item) => ({
         id: item.id,
         path: item.path,
@@ -297,6 +297,9 @@ export function useJobQueue() {
                 result: {
                   processedImages: images,
                   discountLabels: discountLabels ?? j.result?.discountLabels ?? [],
+                  verificationDone: verificationDone ?? j.result?.verificationDone ?? false,
+                  verificationProgress: verificationProgress !== undefined ? verificationProgress : j.result?.verificationProgress,
+                  departmentLocked: departmentLocked ?? j.result?.departmentLocked ?? false,
                 },
                 slotOverrides: slotOverrides ?? j.slotOverrides,
                 cardLayouts: cardLayouts ?? j.cardLayouts,

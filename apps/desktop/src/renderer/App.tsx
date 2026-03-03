@@ -19,6 +19,7 @@ import DbSearchModal from "./editor/DbSearchModal";
 import GoogleSearchModal from "./editor/GoogleSearchModal";
 import DiscountDetailsDialog from "./editor/DiscountDetailsDialog";
 import SeriesFlavorPicker from "./editor/SeriesFlavorPicker";
+import CheckingPanel from "./editor/CheckingPanel";
 import { loadFlyerTemplateConfig, isCardDepartment, findPageForDepartment } from "./editor/loadFlyerTemplateConfig";
 import { clearDepartmentDraft } from "./editor/draftStorage";
 import { autoLayoutCards } from "../../../shared/flyer/layout/autoLayoutCards";
@@ -60,6 +61,11 @@ export default function App() {
   const seriesAutoShownRef = useRef<Set<string>>(new Set());
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showAddProductDialog, setShowAddProductDialog] = useState(false);
+  const [originalDiscounts, setOriginalDiscounts] = useState<any[]>([]);
+  const [showCheckingPanel, setShowCheckingPanel] = useState(false);
+  const [verificationDone, setVerificationDone] = useState(false);
+  const [verificationProgress, setVerificationProgress] = useState<any>(null);
+  const [departmentLocked, setDepartmentLocked] = useState(false);
 
   const [toastState, setToastState] = useState<{ visible: boolean; message: string; variant: "success" | "error" }>({
     visible: false, message: "Draft saved", variant: "success",
@@ -308,6 +314,12 @@ export default function App() {
           } else {
             setDiscountLabels([]);
           }
+          setOriginalDiscounts(
+            jobToLoad.result.processedImages.map((img: any) => img.result?.discount).filter(Boolean)
+          );
+          setVerificationDone(jobToLoad.result?.verificationDone ?? false);
+          setVerificationProgress(jobToLoad.result?.verificationProgress ?? null);
+          setDepartmentLocked(jobToLoad.result?.departmentLocked ?? false);
           setSlotOverrides(jobToLoad.slotOverrides ?? {});
           // Load card layouts from job
           if (jobToLoad.cardLayouts) {
@@ -316,12 +328,20 @@ export default function App() {
         } else {
           loadItems([]);
           setDiscountLabels([]);
+          setOriginalDiscounts([]);
+          setVerificationDone(false);
+          setVerificationProgress(null);
+          setDepartmentLocked(false);
           setSlotOverrides({});
         }
       } else {
         setViewingJob(null);
         loadItems([]);
         setDiscountLabels([]);
+        setOriginalDiscounts([]);
+        setVerificationDone(false);
+        setVerificationProgress(null);
+        setDepartmentLocked(false);
         setSlotOverrides({});
       }
     }
@@ -334,12 +354,12 @@ export default function App() {
       lastViewingJobIdRef.current = viewingJob.id;
       editorSyncRunCount.current = 0;
     }
-    syncJobFromEditorItems(viewingJob.id, editorQueue, discountLabels, slotOverrides, cardLayouts);
+    syncJobFromEditorItems(viewingJob.id, editorQueue, discountLabels, slotOverrides, cardLayouts, verificationDone, verificationProgress, departmentLocked);
     editorSyncRunCount.current += 1;
     if (editorSyncRunCount.current > 1) {
       setToastState({ visible: true, message: "Draft saved", variant: "success" });
     }
-  }, [view, viewingJob, editorQueue, discountLabels, slotOverrides, cardLayouts, syncJobFromEditorItems]);
+  }, [view, viewingJob, editorQueue, discountLabels, slotOverrides, cardLayouts, verificationDone, verificationProgress, departmentLocked, syncJobFromEditorItems]);
 
   // Watch for job failures → show error toast
   useEffect(() => {
@@ -377,6 +397,15 @@ export default function App() {
       setDiscountLabels(job.result.discountLabels);
     }
 
+    // Populate originalDiscounts from job processedImages for verification
+    const discountsFromJob = job.result.processedImages
+      .map((img: any) => img.result?.discount)
+      .filter(Boolean);
+    setOriginalDiscounts(discountsFromJob);
+    setVerificationDone(job.result?.verificationDone ?? false);
+    setVerificationProgress(job.result?.verificationProgress ?? null);
+    setDepartmentLocked(job.result?.departmentLocked ?? false);
+
     setSlotOverrides(job.slotOverrides ?? {});
     if (job.cardLayouts) {
       setCardLayouts(job.cardLayouts);
@@ -406,9 +435,22 @@ export default function App() {
       if (job.result.discountLabels) {
         setDiscountLabels(job.result.discountLabels);
       }
+
+      // Populate originalDiscounts from job processedImages for verification
+      const discountsFromJob = job.result.processedImages
+        .map((img: any) => img.result?.discount)
+        .filter(Boolean);
+      setOriginalDiscounts(discountsFromJob);
+      setVerificationDone(job.result?.verificationDone ?? false);
+      setVerificationProgress(job.result?.verificationProgress ?? null);
+      setDepartmentLocked(job.result?.departmentLocked ?? false);
     } else {
       loadItems([]);
       setDiscountLabels([]);
+      setOriginalDiscounts([]);
+      setVerificationDone(false);
+      setVerificationProgress(null);
+      setDepartmentLocked(false);
     }
 
     setSlotOverrides(job.slotOverrides ?? {});
@@ -724,6 +766,11 @@ export default function App() {
 
   // ---------------- ADD PRODUCT FROM DISCOUNT (XLSX / TEXT) ----------------
   const handleAddProductFromDiscount = async (items: any[]) => {
+    // Persist original parsed items for verification; new additions invalidate prior result
+    setOriginalDiscounts(prev => [...prev, ...items]);
+    setVerificationDone(false);
+    setVerificationProgress(null);
+
     for (const item of items) {
       // 1. DB search for matching image
       let imageUrl: string | undefined;
@@ -798,6 +845,10 @@ export default function App() {
   const handleClearDepartment = () => {
     loadItems([]);
     setDiscountLabels([]);
+    setOriginalDiscounts([]);
+    setVerificationDone(false);
+    setVerificationProgress(null);
+    setDepartmentLocked(false);
     setSlotOverrides({});
     // Clear card layouts for this department
     setCardLayouts(prev => {
@@ -806,6 +857,17 @@ export default function App() {
       return next;
     });
     clearDepartmentDraft(templateId, department);
+  };
+
+  const handleToggleLock = () => {
+    if (departmentLocked) {
+      const ok = confirm("Unlock this department? You will need to re-verify before locking again.");
+      if (!ok) return;
+      setDepartmentLocked(false);
+      setVerificationDone(false);
+    } else {
+      setDepartmentLocked(true);
+    }
   };
 
   const dbSearchInitialQuery = (() => {
@@ -891,30 +953,96 @@ export default function App() {
                     activeDepartment={department}
                     onDepartmentChange={setDepartment}
                     itemCount={editorQueue.length}
-                    onClear={handleClearDepartment}
+                    onClear={departmentLocked ? undefined : handleClearDepartment}
                   />
-                  <button
-                    onClick={() => setShowAddProductDialog(true)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                      padding: "7px 14px",
-                      border: "none",
-                      borderRadius: "var(--radius-sm)",
-                      background: "var(--color-success)",
-                      color: "#fff",
-                      fontWeight: 600,
-                      fontSize: "var(--text-base)",
-                      cursor: "pointer",
-                      fontFamily: "var(--font-sans)",
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = "#237032"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = "var(--color-success)"; }}
-                  >
-                    <span style={{ fontSize: 16, lineHeight: 1, fontWeight: 700 }}>+</span>
-                    Add Product
-                  </button>
+                  {!departmentLocked && (
+                    <button
+                      onClick={() => setShowAddProductDialog(true)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "7px 14px",
+                        border: "none",
+                        borderRadius: "var(--radius-sm)",
+                        background: "var(--color-success)",
+                        color: "#fff",
+                        fontWeight: 600,
+                        fontSize: "var(--text-base)",
+                        cursor: "pointer",
+                        fontFamily: "var(--font-sans)",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "#237032"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "var(--color-success)"; }}
+                    >
+                      <span style={{ fontSize: 16, lineHeight: 1, fontWeight: 700 }}>+</span>
+                      Add Product
+                    </button>
+                  )}
+                  {!departmentLocked && editorQueue.length > 0 && (
+                    <button
+                      onClick={() => {
+                        if (verificationDone) {
+                          setVerificationDone(false);
+                          setVerificationProgress(null);
+                        }
+                        setShowCheckingPanel(true);
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "7px 14px",
+                        border: verificationDone ? "1.5px solid #16a34a" : "none",
+                        borderRadius: "var(--radius-sm)",
+                        background: verificationDone ? "#dcfce7" : "#7c3aed",
+                        color: verificationDone ? "#15803d" : "#fff",
+                        fontWeight: 600,
+                        fontSize: "var(--text-base)",
+                        cursor: "pointer",
+                        fontFamily: "var(--font-sans)",
+                        transition: "background 0.2s, color 0.2s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = verificationDone ? "#bbf7d0" : "#6d28d9";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = verificationDone ? "#dcfce7" : "#7c3aed";
+                      }}
+                      title={verificationDone ? "Verification complete — click to re-verify" : "Verify products"}
+                    >
+                      {verificationDone ? "✓ Verified" : "✓ Verify"}
+                    </button>
+                  )}
+                  {verificationDone && (
+                    <button
+                      onClick={handleToggleLock}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "7px 14px",
+                        border: "none",
+                        borderRadius: "var(--radius-sm)",
+                        background: departmentLocked ? "#dc2626" : "#b45309",
+                        color: "#fff",
+                        fontWeight: 600,
+                        fontSize: "var(--text-base)",
+                        cursor: "pointer",
+                        fontFamily: "var(--font-sans)",
+                        transition: "background 0.2s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = departmentLocked ? "#b91c1c" : "#92400e";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = departmentLocked ? "#dc2626" : "#b45309";
+                      }}
+                      title={departmentLocked ? "Click to unlock this department" : "Lock this department"}
+                    >
+                      {departmentLocked ? "🔒 Locked" : "🔒 Lock Department"}
+                    </button>
+                  )}
                 </div>
 
                 <EditorCanvas
@@ -922,22 +1050,23 @@ export default function App() {
                   templateId={templateId}
                   department={department}
                   discountLabels={discountLabels}
-                  onEnqueue={enqueue}
-                  onRemove={remove}
-                  onReplaceImage={handleReplaceImage}
-                  onRemoveItem={handleRemoveItem}
-                  onChooseDatabaseResults={handleChooseDatabaseResults}
-                  onGoogleSearch={handleChooseGoogleSearch}
-                  onEditTitle={handleOpenDiscountDetailsDialog}
-                  onPickSeriesFlavors={setSeriesPickerItemId}
-                  onAddItem={addItem}
+                  isLocked={departmentLocked}
+                  onEnqueue={departmentLocked ? undefined : enqueue}
+                  onRemove={departmentLocked ? undefined : remove}
+                  onReplaceImage={departmentLocked ? undefined : handleReplaceImage}
+                  onRemoveItem={departmentLocked ? undefined : handleRemoveItem}
+                  onChooseDatabaseResults={departmentLocked ? undefined : handleChooseDatabaseResults}
+                  onGoogleSearch={departmentLocked ? undefined : handleChooseGoogleSearch}
+                  onEditTitle={departmentLocked ? undefined : handleOpenDiscountDetailsDialog}
+                  onPickSeriesFlavors={departmentLocked ? undefined : setSeriesPickerItemId}
+                  onAddItem={departmentLocked ? undefined : addItem}
                   slotOverrides={slotOverrides}
-                  onSlotOverridesChange={setSlotOverrides}
+                  onSlotOverridesChange={departmentLocked ? undefined : setSlotOverrides}
                   cardLayout={currentCardLayout}
-                  onCardLayoutChange={setCurrentCardLayout}
-                  onRemoveFromQueue={removeItemFromQueue}
+                  onCardLayoutChange={departmentLocked ? undefined : setCurrentCardLayout}
+                  onRemoveFromQueue={departmentLocked ? undefined : removeItemFromQueue}
                   rowCount={userRowCounts[department]}
-                  onRowCountChange={handleRowCountChange}
+                  onRowCountChange={departmentLocked ? undefined : handleRowCountChange}
                 />
 
                 {dbSearchItemId && (
@@ -991,6 +1120,18 @@ export default function App() {
                     onClose={() => setShowAddProductDialog(false)}
                     department={department}
                     onAddFromDiscount={handleAddProductFromDiscount}
+                  />
+                )}
+
+                {showCheckingPanel && (
+                  <CheckingPanel
+                    items={editorQueue}
+                    discountLabels={discountLabels}
+                    originalDiscounts={originalDiscounts}
+                    initialProgress={verificationProgress ?? undefined}
+                    onProgressChange={setVerificationProgress}
+                    onClose={() => setShowCheckingPanel(false)}
+                    onComplete={() => { setVerificationDone(true); setVerificationProgress(null); setShowCheckingPanel(false); }}
                   />
                 )}
               </>
