@@ -334,7 +334,9 @@ function PlacementCard({
   const n = displaySrcs ? displaySrcs.length : 1;
   const GAP = 4;
   const useDiagonal = n === 3 && diagonalRef.current;
-  const { cols, rows } = useDiagonal ? { cols: 1, rows: 1 } : getGridDims(n);
+  const { cols, rows } = useDiagonal
+    ? { cols: 1, rows: 1 }
+    : (n === 5 ? { cols: 2, rows: 2 } : getGridDims(n));
   // Height-first sizing: constrain by row height, derive natural width from aspect ratio.
   // This makes horizontal gap between images match vertical GAP (no wide empty cell sides).
   const maxCellW = cols > 1 ? (availW - (cols - 1) * GAP) / cols : availW;
@@ -369,6 +371,22 @@ function PlacementCard({
         top: Math.round(-bboxY * sc),
         display: "block" as const,
       },
+    };
+  })() : null;
+
+  // n=5: center item is N5_OVERLAP× larger than a corner cell
+  const N5_OVERLAP = 1.3;
+  const n5CenterCellW = cellW * N5_OVERLAP;
+  const n5CenterCellH = cellH * N5_OVERLAP;
+  const n5CenterRender = n === 5 && imgInfo ? (() => {
+    const { natW, natH, bboxX, bboxY, bboxW, bboxH } = imgInfo;
+    const { width: fitW, height: fitH } = fitContain(bboxW, bboxH, n5CenterCellW, n5CenterCellH);
+    const dispW = Math.round(fitW * imgScale);
+    const dispH = Math.round(fitH * imgScale);
+    const sc = dispW / bboxW;
+    return {
+      wrapperStyle: { position: "relative" as const, width: dispW, height: dispH, overflow: "hidden" as const, flexShrink: 0 },
+      imgAbsStyle: { position: "absolute" as const, width: Math.round(natW * sc), height: Math.round(natH * sc), left: Math.round(-bboxX * sc), top: Math.round(-bboxY * sc), display: "block" as const },
     };
   })() : null;
 
@@ -435,7 +453,7 @@ function PlacementCard({
             maxHeight: "100%",
           }}>
             {stagedSrcs.map((src: string, idx: number) => (
-              <img key={idx} src={src} alt="" style={{ width: "100%", height: "auto", objectFit: "contain" }} />
+              <img key={idx} src={src} alt="" style={{ width: "100%", aspectRatio: "1 / 1", objectFit: "contain" }} />
             ))}
           </div>
         </div>
@@ -473,12 +491,39 @@ function PlacementCard({
   // Nothing to render at all
   if (!imgSrc && !imgSrcs?.length && !hasLabel) return null;
 
+  // ── Low-confidence detection ──
+  const matchSource = item?.result?.matchSource as string | undefined;
+  const lowConf     = item?.result?.lowConfidence === true;
+  const badgeColor  = matchSource === "none" ? "#e53e3e"
+    : matchSource === "serper" ? "#3182ce"
+    : "#d97706"; // amber = weak DB match
+  const badgeLabel  = matchSource === "none" ? "NO MATCH"
+    : matchSource === "serper" ? "GOOGLE"
+    : "CHECK";
+  const outlineColor = matchSource === "none" ? "#e53e3e"
+    : matchSource === "serper" ? "#3182ce"
+    : "#d97706";
+
   // ── Layout: full-width image, title bottom-left, price bottom-right ──
   return (
     <div style={{
       position: "absolute", left: p.x, top: p.y,
       width: p.width, height: p.height, overflow: "hidden",
+      outline: lowConf ? `2px solid ${outlineColor}` : "none",
+      outlineOffset: "-2px",
     }}>
+      {/* Low-confidence badge */}
+      {lowConf && (
+        <div style={{
+          position: "absolute", top: 4, right: 4,
+          background: badgeColor, color: "white",
+          borderRadius: 4, padding: "2px 6px",
+          fontSize: 10, fontWeight: 700, zIndex: 20,
+          pointerEvents: "none", letterSpacing: "0.05em",
+        }}>
+          {badgeLabel}
+        </div>
+      )}
       {/* Image zone — flex rows or diagonal layout */}
       <div style={{
         position: "absolute",
@@ -486,6 +531,8 @@ function PlacementCard({
         width: availW, height: availH,
         overflow: "hidden",
         ...(useDiagonal
+          ? { display: "block" }
+          : n === 5
           ? { display: "block" }
           : displaySrcs && displaySrcs.length > 1
           ? { display: "flex", flexDirection: "column", gap: GAP }
@@ -495,8 +542,10 @@ function PlacementCard({
         {displaySrcs && displaySrcs.length > 1
           ? (() => {
               if (useDiagonal) {
-                const stepX = (availW - cellW) / 2;
-                const stepY = (availH - cellH) / 2;
+                const renderW = imgRender ? imgRender.wrapperStyle.width  : cellW;
+                const renderH = imgRender ? imgRender.wrapperStyle.height : cellH;
+                const stepX = (availW - renderW) / 2;
+                const stepY = (availH - renderH) / 2;
                 return displaySrcs.map((src, idx) => (
                   <div
                     key={idx}
@@ -511,8 +560,50 @@ function PlacementCard({
                   </div>
                 ));
               }
+              // n=5: 2×2 corners + overlapping center
+              if (n === 5 && !useDiagonal) {
+                const cornerSrcs = [displaySrcs[0], displaySrcs[1], displaySrcs[3], displaySrcs[4]];
+                const centerSrc  = displaySrcs[2];
+
+                const cornerW = imgRender ? imgRender.wrapperStyle.width  : cellW;
+                const cornerH = imgRender ? imgRender.wrapperStyle.height : cellH;
+                const gridW = cornerW * 2 + GAP;
+                const gridH = cornerH * 2 + GAP;
+                const gridLeft = Math.round((availW - gridW) / 2);
+                const gridTop  = Math.round((availH - gridH) / 2);
+                const cornerPositions = [
+                  { left: gridLeft,                top: gridTop },
+                  { left: gridLeft + cornerW + GAP, top: gridTop },
+                  { left: gridLeft,                top: gridTop + cornerH + GAP },
+                  { left: gridLeft + cornerW + GAP, top: gridTop + cornerH + GAP },
+                ];
+
+                const centerW = n5CenterRender ? n5CenterRender.wrapperStyle.width  : n5CenterCellW;
+                const centerH = n5CenterRender ? n5CenterRender.wrapperStyle.height : n5CenterCellH;
+                const centerLeft = Math.round((availW - centerW) / 2);
+                const centerTop  = Math.round((availH - centerH) / 2);
+
+                return (
+                  <>
+                    {cornerSrcs.map((src, i) => (
+                      <div key={i} style={{ position: "absolute", left: cornerPositions[i].left, top: cornerPositions[i].top, zIndex: 1 }}>
+                        {imgRender
+                          ? <div style={imgRender.wrapperStyle}><img style={imgRender.imgAbsStyle} src={src} alt="" /></div>
+                          : <img style={fallbackImgStyle} src={src} alt="" onLoad={i === 0 ? onFirstImgLoad : undefined} />
+                        }
+                      </div>
+                    ))}
+                    <div style={{ position: "absolute", left: centerLeft, top: centerTop, zIndex: 5 }}>
+                      {n5CenterRender
+                        ? <div style={n5CenterRender.wrapperStyle}><img style={n5CenterRender.imgAbsStyle} src={centerSrc} alt="" /></div>
+                        : <img style={fallbackImgStyle} src={centerSrc} alt="" />
+                      }
+                    </div>
+                  </>
+                );
+              }
+
               // Flex rows: split displaySrcs into rows, each row is a centered flex row.
-              // Orphan images (last row with fewer than cols items) auto-center via justifyContent.
               const rowArrays: string[][] = [];
               for (let r = 0; r < rows; r++) {
                 rowArrays.push(displaySrcs.slice(r * cols, (r + 1) * cols));

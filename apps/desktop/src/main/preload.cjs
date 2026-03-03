@@ -140,6 +140,14 @@ contextBridge.exposeInMainWorld("ufm", {
     return () => ipcRenderer.removeListener("ufm:jobError", handler);
   },
 
+  onJobPreflight: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:jobPreflight", handler);
+    return () => ipcRenderer.removeListener("ufm:jobPreflight", handler);
+  },
+
+  openLogFile: () => ipcRenderer.invoke("ufm:openLogFile"),
+
   // ---------- DB BATCH UPLOAD ----------
   startDbBatch: (paths) => ipcRenderer.invoke("ufm:startDbBatch", paths),
   confirmDbImage: (imagePath, action, parsed, embedding) =>
@@ -163,6 +171,8 @@ contextBridge.exposeInMainWorld("ufm", {
     ipcRenderer.on("ufm:dbBatchComplete", handler);
     return () => ipcRenderer.removeListener("ufm:dbBatchComplete", handler);
   },
+
+  deleteDbProduct: (productId) => ipcRenderer.invoke("ufm:deleteDbProduct", productId),
 
   scanNonProducts: () => ipcRenderer.invoke("ufm:scanNonProducts"),
   onScanNonProductsProgress: (callback) => {

@@ -21,7 +21,7 @@ function pickPublicFields(p) {
 function normalize(str = "") {
   return String(str)
     .toLowerCase()
-    .replace(/\d+(kg|g|克|ml|l)/g, "")
+    .replace(/(\d+)(kg|g|克|ml|l)/g, "$1")
     .replace(/[^\p{L}\p{N}\s]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -54,14 +54,34 @@ function buildHaystack(p) {
 }
 
 function scoreTextMatch(queryTokens, hayTokens, p) {
+  // 1. Full-haystack coverage (includes brand, category, size)
   const haySet = new Set(hayTokens);
   let hit = 0;
-  for (const t of queryTokens) {
-    if (haySet.has(t)) hit++;
-  }
-  let score = queryTokens.length ? hit / queryTokens.length : 0;
-  if (p.brand && queryTokens.includes(normalize(p.brand))) score += 0.08;
+  for (const t of queryTokens) if (haySet.has(t)) hit++;
+  const haystackScore = queryTokens.length ? hit / queryTokens.length : 0;
+
+  // 2. Title-only coverage — product name must match (high signal)
+  const titleTokens = tokenize(
+    normalize([p.englishTitle, p.chineseTitle].filter(Boolean).join(" "))
+  );
+  const titleSet = new Set(titleTokens);
+  let titleHit = 0;
+  for (const t of queryTokens) if (titleSet.has(t)) titleHit++;
+  const titleScore = queryTokens.length ? titleHit / queryTokens.length : 0;
+
+  // 3. Bidirectional: how much of the product title is covered by the query
+  //    Low coverage = different product type → should score lower
+  const querySet = new Set(queryTokens);
+  let productHit = 0;
+  for (const t of titleTokens) if (querySet.has(t)) productHit++;
+  const productCoverage = titleTokens.length ? productHit / titleTokens.length : 0;
+
+  // Weighted blend: title match is primary signal
+  let score = 0.55 * titleScore + 0.25 * haystackScore + 0.20 * productCoverage;
+
+  if (p.brand && queryTokens.includes(normalize(p.brand))) score += 0.07;
   if (p.size && queryTokens.includes(normalize(p.size))) score += 0.05;
+
   return Math.min(score, 1);
 }
 
@@ -74,21 +94,34 @@ export function buildSearchTokens(parsed) {
 }
 
 /* ---------- Embedding cache (for image search) ---------- */
-let _embeddingCache = null; // null = stale, array = loaded
+let _embeddingCache = null;     // null = stale, array = loaded
+let _embeddingCacheLoad = null; // in-flight Promise — prevents N concurrent Firestore queries
 
 export function invalidateEmbeddingCache() {
   _embeddingCache = null;
+  _embeddingCacheLoad = null;
 }
 
 async function getEmbeddingCache() {
   if (_embeddingCache) return _embeddingCache;
-  const snapshot = await db
-    .collection(FIRESTORE_COLLECTION)
-    .where("status", "==", "active")
-    .select("id", "englishTitle", "chineseTitle", "brand", "size", "category", "publicUrl", "embedding")
-    .get();
-  _embeddingCache = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-  return _embeddingCache;
+  // If a load is already in flight, reuse it instead of firing another Firestore query
+  if (!_embeddingCacheLoad) {
+    _embeddingCacheLoad = db
+      .collection(FIRESTORE_COLLECTION)
+      .where("status", "==", "active")
+      .select("id", "englishTitle", "chineseTitle", "brand", "size", "category", "publicUrl", "embedding")
+      .get()
+      .then((snapshot) => {
+        _embeddingCache = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+        _embeddingCacheLoad = null;
+        return _embeddingCache;
+      })
+      .catch((err) => {
+        _embeddingCacheLoad = null; // allow retry on next call
+        throw err;
+      });
+  }
+  return _embeddingCacheLoad;
 }
 
 /**
@@ -144,7 +177,7 @@ export async function searchByTextEmbedding(query, limit = 6, minScore = 0.3) {
   return all
     .map((p) => ({
       ...p,
-      score: Array.isArray(p.embedding)
+      score: Array.isArray(p.embedding) && p.embedding.length === queryEmbedding.length
         ? cosineSimilarity(queryEmbedding, p.embedding)
         : 0,
     }))
@@ -154,29 +187,62 @@ export async function searchByTextEmbedding(query, limit = 6, minScore = 0.3) {
     .map(pickPublicFields);
 }
 
+/* ---------- Multi-query helpers ---------- */
+
+function mergeByBestScore(results, limit) {
+  const map = new Map();
+  for (const r of results) {
+    if (!map.has(r.id) || r.score > map.get(r.id).score) map.set(r.id, r);
+  }
+  return [...map.values()].sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+function hybridMerge(embedResults, textResults, limit) {
+  const map = new Map();
+  for (const r of embedResults) map.set(r.id, { ...r, _embedScore: r.score, _textScore: 0 });
+  for (const r of textResults) {
+    if (map.has(r.id)) {
+      map.get(r.id)._textScore = r.score;
+    } else {
+      map.set(r.id, { ...r, _embedScore: 0, _textScore: r.score });
+    }
+  }
+  for (const [, v] of map) {
+    v.score = Number((0.55 * v._embedScore + 0.45 * v._textScore).toFixed(4));
+  }
+  return [...map.values()].sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
 /**
  * Best-effort search for discount item → DB products.
- * Tries semantic (embedding) first; falls back to text tokens if Ollama fails.
- * Query includes en, zh, size for best match.
+ * Runs multi-query text search (en / zh / combined) and semantic embedding in parallel,
+ * then merges results with hybrid scoring.
  * @param {{ en?: string; zh?: string; size?: string }} item - Discount item fields
  * @param {number} limit - Max results (1 for single, N for series)
  * @returns {Promise<Array>} Products with publicUrl, scores
  */
 export async function searchForDiscountItem(item, limit = 6) {
-  const parts = [item?.en, item?.zh, item?.size].filter(Boolean).map(String).map((s) => s.trim());
-  const query = parts.join(" ").trim();
-  if (!query) return [];
+  const enQuery   = (item?.en   || "").trim();
+  const zhQuery   = (item?.zh   || "").trim();
+  const fullQuery = [item?.en, item?.zh, item?.size].filter(Boolean).map(String).map((s) => s.trim()).join(" ").trim();
 
-  const minScore = 0.25;
+  if (!fullQuery && !enQuery && !zhQuery) return [];
 
+  // Run text search for all distinct query variants (parallel)
+  const queries = [...new Set([fullQuery, enQuery, zhQuery].filter(Boolean))];
+  const textResultSets = await Promise.all(
+    queries.map((q) => searchByText(q, limit * 2, 0.15).catch(() => []))
+  );
+  const textMerged = mergeByBestScore(textResultSets.flat(), limit * 2);
+
+  // Run embedding on the most informative query
+  let embedResults = [];
   try {
-    const byEmbed = await searchByTextEmbedding(query, limit, minScore);
-    if (byEmbed.length > 0) return byEmbed;
-  } catch (err) {
-    console.warn("[searchForDiscountItem] Embedding search failed, falling back to text:", err?.message?.slice(0, 60));
-  }
+    embedResults = await searchByTextEmbedding(fullQuery || enQuery, limit * 2, 0.25);
+  } catch { /* ignore — text search covers it */ }
 
-  return searchByText(query, limit, 0.15);
+  // Hybrid merge: weight embedding 0.55, text 0.45
+  return hybridMerge(embedResults, textMerged, limit);
 }
 
 /* ---------- Image search (embedding + cosine similarity) ---------- */

@@ -185,6 +185,22 @@ export default function JobQueueView({ onViewFlyer, onOpenDraft, jobQueueHook, o
         >
           Export Flyer to PDF
         </Button>
+        <button
+          onClick={() => window.ufm.openLogFile()}
+          title="Open the application log file"
+          style={{
+            background: "none",
+            border: "none",
+            color: "var(--color-text-muted)",
+            fontSize: "var(--text-sm)",
+            cursor: "pointer",
+            padding: "4px 8px",
+            opacity: 0.6,
+            textDecoration: "underline",
+          }}
+        >
+          Open Log
+        </button>
       </div>
 
       {/* Job Creation Panel - shown when drafting */}

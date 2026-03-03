@@ -24,7 +24,7 @@ import { waitForBackend } from "./waitForBackend.js";
 import { initFirebase, admin } from "./firebase.js";
 import { registerBackendIpc } from "./ipc/backend.js";
 import { registerBackendProxyIpc } from "./ipc/backendProxy.js";
-import { processDbBatch, getDbStats, checkDbStorageConsistency, fixDbStorageConsistency, confirmSingleImageToDb, scanAndRemoveNonProducts } from "./ipc/batchIngestToDB.js";
+import { processDbBatch, getDbStats, checkDbStorageConsistency, fixDbStorageConsistency, confirmSingleImageToDb, scanAndRemoveNonProducts, deleteProductFromDb } from "./ipc/batchIngestToDB.js";
 import { getQuotaStatus, getLiveQuotaStatus } from "./ipc/quotaTracker.js";
 import { checkOllamaStatus } from "./ingestion/imageEmbeddingService.js";
 import "./net/longFetch.js";
@@ -190,6 +190,13 @@ ipcMain.handle("ufm:didCrashLastRun", () => {
 /* ---------- IPC: request quit (triggers main window close → confirmation dialog) ---------- */
 ipcMain.handle("ufm:requestQuit", () => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+});
+
+/* ---------- IPC: open log file ---------- */
+ipcMain.handle("ufm:openLogFile", async () => {
+  const filePath = log.transports.file.getFile().path;
+  await shell.openPath(filePath);
+  return filePath;
 });
 
 /* ---------- IPC: batch cutout ---------- */
@@ -560,6 +567,11 @@ ipcMain.handle("ufm:scanNonProducts", async () => {
   return { ok: true };
 });
 
+ipcMain.handle("ufm:deleteDbProduct", async (_, productId) => {
+  await deleteProductFromDb(productId);
+  return { ok: true };
+});
+
 ipcMain.handle("ufm:checkOllamaStatus", async () => {
   try {
     return await checkOllamaStatus();
@@ -672,6 +684,9 @@ app.whenReady().then(async () => {
     });
     jobProcessor.on("error", (jobId, error) => {
       safeSend("ufm:jobError", { jobId, error: error?.message || String(error) });
+    });
+    jobProcessor.on("preflight", (jobId, data) => {
+      safeSend("ufm:jobPreflight", { jobId, ...data });
     });
   } catch (err) {
     log.error("App startup failed:", err);

@@ -157,6 +157,12 @@ declare global {
       onDbBatchProgress: (cb: (data: DbBatchProgressEvent) => void) => () => void;
       onDbBatchComplete: (cb: (data: DbBatchCompleteEvent) => void) => () => void;
 
+      onJobPreflight: (cb: (data: { jobId: string; matched: number; total: number; coverage: number }) => void) => () => void;
+
+      openLogFile: () => Promise<string>;
+
+      deleteDbProduct: (productId: string) => Promise<{ ok: boolean; error?: string }>;
+
       scanNonProducts: () => Promise<{ ok: boolean }>;
       onScanNonProductsProgress: (cb: (data: ScanNonProductsProgressEvent) => void) => () => void;
       onScanNonProductsComplete: (cb: (data: ScanNonProductsCompleteEvent) => void) => () => void;

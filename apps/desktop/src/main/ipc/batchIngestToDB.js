@@ -442,6 +442,26 @@ export async function scanAndRemoveNonProducts(emitProgress, emitComplete) {
 }
 
 /**
+ * Permanently delete a single product from Firestore and Firebase Storage.
+ */
+export async function deleteProductFromDb(productId) {
+  const bucket = getStorage().bucket();
+
+  // Delete Firestore doc
+  await db.collection(FIRESTORE_COLLECTION).doc(productId).delete();
+  trackDeletes(1);
+  invalidateEmbeddingCache();
+
+  // Delete Storage files (non-fatal if already gone)
+  try {
+    const [files] = await bucket.getFiles({ prefix: `products/${productId}/` });
+    await Promise.all(files.map((f) => f.delete()));
+  } catch (storageErr) {
+    console.warn("[deleteProductFromDb] Storage delete failed for", productId, storageErr?.message);
+  }
+}
+
+/**
  * Check consistency between Firestore and Firebase Storage.
  *
  * Returns three categories of issues:

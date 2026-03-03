@@ -10,6 +10,17 @@ import { ingestPhoto } from "../ingestion/ingestPhoto.js";
 import { parseDiscountText } from "../ipc/parseDiscountText.js";
 import { parseDiscountXlsx } from "../ipc/parseDiscountXlsx.js";
 import { exportDiscountImages } from "../ipc/exportDiscountImages.js";
+import { serperImageSearch, serperKeysPresent } from "../ingestion/serperImageSearchService.js";
+
+/** Word-level overlap between two strings (0–1). Used to flag wrong-product downloads. */
+function titleWordOverlap(a, b) {
+  const tokA = new Set(String(a || "").toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+  const tokB = new Set(String(b || "").toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+  if (!tokA.size || !tokB.size) return 0;
+  let hits = 0;
+  for (const t of tokA) if (tokB.has(t)) hits++;
+  return hits / Math.max(tokA.size, tokB.size);
+}
 
 export class JobProcessor extends EventEmitter {
   constructor() {
@@ -88,6 +99,25 @@ export class JobProcessor extends EventEmitter {
     if (totalImages === 0 && discountItems.length > 0) {
       const { searchForDiscountItem } = await import("../ingestion/searchService.js");
 
+      // PREFLIGHT: quick search (no download) to estimate DB coverage.
+      // Run in batches of 5 to avoid overwhelming Firestore/Ollama with N parallel queries.
+      let preflightMatched = 0;
+      this.emitProgress(job.id, "Checking DB coverage...", 0, discountItems.length);
+      const PREFLIGHT_BATCH = 5;
+      for (let pi = 0; pi < discountItems.length; pi += PREFLIGHT_BATCH) {
+        await Promise.all(
+          discountItems.slice(pi, pi + PREFLIGHT_BATCH).map(async (di) => {
+            try {
+              const r = await searchForDiscountItem(di, 1);
+              if (r.length > 0 && r[0].score >= 0.30) preflightMatched++;
+            } catch { /* ignore */ }
+          })
+        );
+      }
+      const coverage = Math.round((preflightMatched / discountItems.length) * 100);
+      console.log(`[JobProcessor] Pre-flight: ${preflightMatched}/${discountItems.length} (${coverage}%) estimated DB matches`);
+      this.emit("preflight", job.id, { matched: preflightMatched, total: discountItems.length, coverage });
+
       for (let i = 0; i < discountItems.length; i++) {
         const di = discountItems[i];
         const queryDisplay = [di.en, di.zh, di.size].filter(Boolean).join(" ");
@@ -102,8 +132,14 @@ export class JobProcessor extends EventEmitter {
         );
 
         let result = null;
+        let matchScore = 0;
+        let matchSource = "none";
+        const DB_CONFIDENCE_THRESHOLD = 0.60;
+
         try {
           const matches = await searchForDiscountItem(di, limit);
+          matchScore = matches.length > 0 ? (matches[0].score ?? 0) : 0;
+
           if (matches.length > 0) {
             const cutoutPaths = [];
             let baseResult = null;
@@ -116,36 +152,118 @@ export class JobProcessor extends EventEmitter {
               const safeExt = /^\.(jpg|jpeg|png|gif|webp)$/i.test(ext) ? ext : ".jpg";
               const tempPath = path.join(os.tmpdir(), `ufm-dbsearch-${Date.now()}-${i}-${j}${safeExt}`);
 
-              const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-              if (res.ok) {
-                const ab = await res.arrayBuffer();
-                await fs.promises.writeFile(tempPath, Buffer.from(ab));
-                try {
-                  const single = await ingestPhoto(tempPath);
-                  if (single?.cutoutPath) cutoutPaths.push(single.cutoutPath);
-                  if (!baseResult) baseResult = single;
-                } finally {
-                  fs.promises.unlink(tempPath).catch(() => {});
+              try {
+                const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+                if (res.ok) {
+                  const ab = await res.arrayBuffer();
+                  await fs.promises.writeFile(tempPath, Buffer.from(ab));
+                  try {
+                    const single = await ingestPhoto(tempPath);
+                    if (single?.cutoutPath) cutoutPaths.push(single.cutoutPath);
+                    if (!baseResult) baseResult = single;
+                  } finally {
+                    fs.promises.unlink(tempPath).catch(() => {});
+                  }
                 }
-              }
+              } catch { /* try next match */ }
             }
 
             if (baseResult && cutoutPaths.length > 0) {
+              matchSource = "db";
+              // Title verification: flag low confidence if downloaded product looks wrong
+              const dlTitle = [baseResult?.title?.en, baseResult?.aiTitle?.en].filter(Boolean).join(" ");
+              const expectedTitle = queryDisplay;
+              const overlap = titleWordOverlap(dlTitle, expectedTitle);
+              const lowConfidence = matchScore < 0.40 || overlap < 0.25;
+
               result = {
                 ...baseResult,
                 cutoutPath: cutoutPaths[0],
                 cutoutPaths: cutoutPaths.length > 1 ? cutoutPaths : undefined,
-                // Permanent record of every staged flavor — never overwritten by selection
                 allFlavorPaths: cutoutPaths.length > 1 ? cutoutPaths : undefined,
-                // Stage series items — user must choose which flavors to include
                 pendingFlavorSelection: cutoutPaths.length > 1 ? true : undefined,
+                matchScore,
+                matchSource,
+                lowConfidence,
               };
             } else if (baseResult) {
-              result = baseResult;
+              matchSource = "db";
+              result = { ...baseResult, matchScore, matchSource, lowConfidence: true };
             }
           }
         } catch (err) {
           console.warn(`[JobProcessor] DB search/download failed for "${queryDisplay}":`, err.message);
+        }
+
+        // Fall back to Serper if: (a) no DB result at all, or (b) DB score is below threshold
+        const dbIsPoor = result?.matchSource === "db" && matchScore < DB_CONFIDENCE_THRESHOLD;
+        const needsSerper = !result?.cutoutPath || dbIsPoor;
+
+        if (needsSerper) {
+          const dbFallback = dbIsPoor ? result : null; // preserve low-score DB result in case Serper fails
+          if (dbIsPoor) result = null;                 // reset so Serper can replace
+
+          if (!serperKeysPresent()) {
+            console.log(`[JobProcessor] Serper skipped (no SERPER_API_KEY): "${queryDisplay}"`);
+            if (dbFallback) result = dbFallback;       // restore DB result
+          } else {
+            const reason = !result?.cutoutPath ? "no DB result" : `DB score too low (${matchScore.toFixed(3)})`;
+            this.emitProgress(job.id, `Google image search: "${queryDisplay}"...`, i, discountItems.length);
+            console.log(`[JobProcessor] Trying Serper (${reason}): "${queryDisplay}"`);
+            try {
+              const serperResults = await serperImageSearch(queryDisplay, 4);
+              console.log(`[JobProcessor] Serper returned ${serperResults.length} results for "${queryDisplay}"`);
+              for (const sr of serperResults) {
+                if (!sr.url) continue;
+                let ext;
+                try { ext = path.extname(new URL(sr.url).pathname) || ".jpg"; } catch { ext = ".jpg"; }
+                const safeExt = /^\.(jpg|jpeg|png|gif|webp)$/i.test(ext) ? ext : ".jpg";
+                const tempPath = path.join(os.tmpdir(), `ufm-serper-${Date.now()}-${i}${safeExt}`);
+                try {
+                  const res = await fetch(sr.url, { signal: AbortSignal.timeout(15000) });
+                  if (!res.ok) {
+                    console.log(`[JobProcessor] Serper image HTTP ${res.status}: ${sr.url}`);
+                    continue;
+                  }
+                  const contentType = res.headers.get("content-type") || "";
+                  // Accept image/* and octet-stream (some CDNs don't set correct type)
+                  const isImageLike = contentType.startsWith("image/") || contentType.includes("octet-stream") || contentType === "";
+                  if (!isImageLike) {
+                    console.log(`[JobProcessor] Serper image skipped (content-type: ${contentType}): ${sr.url}`);
+                    continue;
+                  }
+                  const ab = await res.arrayBuffer();
+                  if (ab.byteLength < 5000) continue; // skip tiny files (< 5KB, probably not real images)
+                  await fs.promises.writeFile(tempPath, Buffer.from(ab));
+                  let serperIngestOk = false;
+                  try {
+                    const single = await ingestPhoto(tempPath);
+                    console.log(`[JobProcessor] Serper ingest result: cutoutPath=${single?.cutoutPath ? 'YES' : 'NO'}`);
+                    if (single?.cutoutPath) {
+                      result = { ...single, matchScore: 0, matchSource: "serper", lowConfidence: true };
+                      serperIngestOk = true;
+                    }
+                  } catch (ingestErr) {
+                    console.warn(`[JobProcessor] Serper ingestPhoto failed: ${ingestErr.message}`);
+                  } finally {
+                    if (!serperIngestOk) fs.promises.unlink(tempPath).catch(() => {});
+                  }
+                  if (serperIngestOk) break;
+                } catch (dlErr) {
+                  console.warn(`[JobProcessor] Serper download failed: ${dlErr.message}`);
+                  fs.promises.unlink(tempPath).catch(() => {});
+                }
+              }
+            } catch (err) {
+              console.warn(`[JobProcessor] Serper fallback failed for "${queryDisplay}":`, err.message);
+            }
+
+            // If Serper still failed, restore DB result as last resort
+            if (!result?.cutoutPath && dbFallback?.cutoutPath) {
+              console.log(`[JobProcessor] Serper failed; restoring DB result (score=${matchScore.toFixed(3)}) for "${queryDisplay}"`);
+              result = dbFallback;
+            }
+          }
         }
 
         if (!result) {
@@ -156,6 +274,9 @@ export class JobProcessor extends EventEmitter {
             layout: { size: "SMALL" },
             title: { en: di.en, zh: di.zh, size: di.size },
             llmResult: { items: [] },
+            matchScore: 0,
+            matchSource: "none",
+            lowConfidence: true,
           };
         }
         result.discount = di;

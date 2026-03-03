@@ -19,6 +19,7 @@ type DbUploadItem = {
   id: string;
   path: string;
   status: DbUploadStatus;
+  productId?: string;
   title?: string;
   publicUrl?: string;
   error?: string;
@@ -421,6 +422,7 @@ export default function DbUploadView({ onBack }: Props) {
         return {
           ...item,
           status: u.status ?? item.status,
+          productId: u.productId ?? item.productId,
           title: u.title ?? item.title,
           publicUrl: u.publicUrl ?? item.publicUrl,
           error: u.error ?? item.error,
@@ -443,6 +445,7 @@ export default function DbUploadView({ onBack }: Props) {
           return {
             ...item,
             status: u.status ?? item.status,
+            productId: u.productId ?? item.productId,
             title: u.title ?? item.title,
             publicUrl: u.publicUrl ?? item.publicUrl,
             error: u.error ?? item.error,
@@ -548,12 +551,13 @@ export default function DbUploadView({ onBack }: Props) {
   const pendingCount = items.filter((i) => i.status === "pending").length;
   const doneCount = items.filter((i) => i.status === "done").length;
 
-  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [confirmingIds, setConfirmingIds] = useState<Set<string>>(new Set());
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const handleConfirmAdd = useCallback(
     async (item: DbUploadItem) => {
       if (item.status !== "needs_confirmation" || !item.embedding?.length) return;
-      setConfirmingId(item.id);
+      setConfirmingIds((prev) => new Set(prev).add(item.id));
       try {
         const res = await window.ufm.confirmDbImage(
           item.path,
@@ -565,7 +569,7 @@ export default function DbUploadView({ onBack }: Props) {
           setItems((prev) =>
             prev.map((i) =>
               i.id === item.id
-                ? { ...i, status: "done" as const, title: res.title, publicUrl: res.publicUrl }
+                ? { ...i, status: "done" as const, productId: res.productId, title: res.title, publicUrl: res.publicUrl }
                 : i
             )
           );
@@ -599,7 +603,7 @@ export default function DbUploadView({ onBack }: Props) {
         );
         setSessionStats((s) => ({ ...s, errors: s.errors + 1 }));
       } finally {
-        setConfirmingId(null);
+        setConfirmingIds((prev) => { const s = new Set(prev); s.delete(item.id); return s; });
       }
     },
     [refreshDbConnection]
@@ -614,6 +618,21 @@ export default function DbUploadView({ onBack }: Props) {
     );
     setSessionStats((s) => ({ ...s, skipped: s.skipped + 1 }));
   }, []);
+
+  const handleDeleteProduct = useCallback(async (item: DbUploadItem) => {
+    if (!item.productId) return;
+    if (!confirm(`Delete "${item.title || item.path.split("/").pop()}" from the product library?\n\nThis permanently removes it from Firestore and Firebase Storage.`)) return;
+    setDeletingId(item.id);
+    try {
+      await window.ufm.deleteDbProduct(item.productId);
+      setItems((prev) => prev.map((i) => i.id === item.id ? { ...i, status: "error" as const, error: "Deleted from DB" } : i));
+      refreshDbConnection();
+    } catch (err: any) {
+      alert(`Delete failed: ${err?.message || String(err)}`);
+    } finally {
+      setDeletingId(null);
+    }
+  }, [refreshDbConnection]);
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto", padding: "0 16px 40px" }}>
@@ -953,24 +972,24 @@ export default function DbUploadView({ onBack }: Props) {
                           <button
                             type="button"
                             onClick={() => handleConfirmAdd(item)}
-                            disabled={confirmingId === item.id || !item.embedding?.length}
+                            disabled={confirmingIds.has(item.id) || !item.embedding?.length}
                             style={{
                               padding: "4px 12px",
                               borderRadius: 6,
                               border: "none",
-                              background: confirmingId === item.id ? "#ADB5BD" : "#2F9E44",
+                              background: confirmingIds.has(item.id) ? "#ADB5BD" : "#2F9E44",
                               color: "#fff",
                               fontSize: 12,
                               fontWeight: 600,
-                              cursor: confirmingId === item.id ? "default" : "pointer",
+                              cursor: confirmingIds.has(item.id) ? "default" : "pointer",
                             }}
                           >
-                            {confirmingId === item.id ? "Saving…" : "Add to DB"}
+                            {confirmingIds.has(item.id) ? "Saving…" : "Add to DB"}
                           </button>
                           <button
                             type="button"
                             onClick={() => handleConfirmSkip(item)}
-                            disabled={confirmingId === item.id}
+                            disabled={confirmingIds.has(item.id)}
                             style={{
                               padding: "4px 12px",
                               borderRadius: 6,
@@ -979,10 +998,32 @@ export default function DbUploadView({ onBack }: Props) {
                               color: "#495057",
                               fontSize: 12,
                               fontWeight: 600,
-                              cursor: confirmingId === item.id ? "default" : "pointer",
+                              cursor: confirmingIds.has(item.id) ? "default" : "pointer",
                             }}
                           >
                             Skip
+                          </button>
+                        </div>
+                      ) : item.status === "done" && item.productId ? (
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
+                          <StatusBadge item={item} />
+                          <button
+                            type="button"
+                            disabled={deletingId === item.id}
+                            onClick={() => handleDeleteProduct(item)}
+                            title="Delete from DB"
+                            style={{
+                              padding: "3px 7px",
+                              borderRadius: 5,
+                              border: "1px solid #FFB3B3",
+                              background: deletingId === item.id ? "#F1F3F5" : "#FFF5F5",
+                              color: deletingId === item.id ? "#ADB5BD" : "#C92A2A",
+                              fontSize: 13,
+                              cursor: deletingId === item.id ? "default" : "pointer",
+                              lineHeight: 1,
+                            }}
+                          >
+                            🗑
                           </button>
                         </div>
                       ) : (
