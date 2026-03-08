@@ -104,7 +104,7 @@ export default function App() {
 
   // Listen for job preflight coverage report
   useEffect(() => {
-    const unsub = window.ufm.onJobPreflight(({ matched, total, coverage }) => {
+    const unsub = window.ufm.onJobPreflight(({ matched, total, coverage }: { matched: number; total: number; coverage: number }) => {
       const msg = `DB: ${matched}/${total} matched (${coverage}%). Starting download…`;
       setToastState({ visible: true, message: msg, variant: coverage >= 70 ? "success" : "error" });
     });

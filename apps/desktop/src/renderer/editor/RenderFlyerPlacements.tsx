@@ -242,7 +242,7 @@ function PlacementCard({
   const cardRef = useRef<HTMLDivElement>(null);
   const [titleDrag, setTitleDrag] = useState<{
     active: boolean;
-    hoveredZone: 'vertical' | 'horizontal' | null;
+    hoveredZone: 'vertical' | 'horizontal' | 'top' | null;
   } | null>(null);
 
   // Which sub-image is selected in edit mode (for per-image controls)
