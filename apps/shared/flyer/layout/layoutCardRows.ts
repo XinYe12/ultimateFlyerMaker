@@ -14,6 +14,14 @@ export type CardDef = {
   imageScale?: number;
   titleScale?: number;
   priceScale?: number;
+  imageRotation?: number;
+  imageOffsetX?: number;
+  imageOffsetY?: number;
+  orientation?: 'vertical' | 'horizontal' | 'top';
+  cropLeft?: number;
+  cropRight?: number;
+  cropTop?: number;
+  cropBottom?: number;
 };
 
 /**
@@ -127,6 +135,14 @@ export function layoutCardRows({
       imageScale: card.imageScale,
       titleScale: card.titleScale,
       priceScale: card.priceScale,
+      imageRotation: card.imageRotation,
+      imageOffsetX: card.imageOffsetX,
+      imageOffsetY: card.imageOffsetY,
+      orientation: card.orientation,
+      cropLeft: card.cropLeft,
+      cropRight: card.cropRight,
+      cropTop: card.cropTop,
+      cropBottom: card.cropBottom,
     });
   }
 

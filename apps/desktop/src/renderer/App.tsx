@@ -63,6 +63,7 @@ export default function App() {
   const [showAddProductDialog, setShowAddProductDialog] = useState(false);
   const [originalDiscounts, setOriginalDiscounts] = useState<any[]>([]);
   const [showCheckingPanel, setShowCheckingPanel] = useState(false);
+  const [editMode, setEditMode] = useState(false);
   const [verificationDone, setVerificationDone] = useState(false);
   const [verificationProgress, setVerificationProgress] = useState<any>(null);
   const [departmentLocked, setDepartmentLocked] = useState(false);
@@ -88,6 +89,18 @@ export default function App() {
       if (timeoutId) clearTimeout(timeoutId);
     };
   }, []);
+
+  // Escape key exits edit mode
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setEditMode(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Auto-exit edit mode when switching away from card department
+  useEffect(() => {
+    if (!isDeptCardBased()) setEditMode(false);
+  }, [department]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for job preflight coverage report
   useEffect(() => {
@@ -613,6 +626,18 @@ export default function App() {
     setDiscountDetailsDialog(null);
   };
 
+  // ---------------- ADD ITEM FROM MODAL (generates label if discount data present) ----------------
+  const handleAddItemFromModal = async (item: IngestItem) => {
+    addItem(item);
+    const disc = (item.result?.discount as any);
+    if (disc?.price?.display || disc?.salePrice) {
+      try {
+        const labels = await window.ufm.exportDiscountImages([item]);
+        if (labels?.[0]) setDiscountLabels((prev: any[]) => [...prev, labels[0]]);
+      } catch { /* label render failed — item still added without label */ }
+    }
+  };
+
   // ---------------- REMOVE SINGLE ITEM FROM SLOT/CARD ----------------
   const handleRemoveItem = (id: string) => {
     // For card-based departments: unlink item from its card
@@ -646,6 +671,37 @@ export default function App() {
 
     remove(id);
     setDiscountLabels((prev) => prev.filter((l) => l.id !== id));
+  };
+
+  // ---------------- SUB-IMAGE OVERRIDES ----------------
+  const handleSubImageUpdate = (itemId: string, subIdx: number, patch: { scale?: number; rotation?: number; x?: number; y?: number }) => {
+    const item = editorQueue.find((i: any) => i.id === itemId);
+    if (!item?.result) return;
+    const existing: Array<{ scale?: number; rotation?: number; x?: number; y?: number }> = item.result.subImageOverrides ?? [];
+    const updated = [...existing];
+    while (updated.length <= subIdx) updated.push({});
+    updated[subIdx] = { ...updated[subIdx], ...patch };
+    updateItem(itemId, { result: { ...item.result, subImageOverrides: updated } });
+  };
+
+  const handleDeleteSubImage = (itemId: string, subIdx: number) => {
+    const item = editorQueue.find((i: any) => i.id === itemId);
+    if (!item?.result) return;
+    const paths: string[] | undefined = item.result.cutoutPaths;
+    if (!paths || paths.length <= 1) {
+      handleRemoveItem(itemId);
+      return;
+    }
+    const newPaths = paths.filter((_: string, i: number) => i !== subIdx);
+    const newOverrides = (item.result.subImageOverrides ?? []).filter((_: any, i: number) => i !== subIdx);
+    updateItem(itemId, {
+      result: {
+        ...item.result,
+        cutoutPath: newPaths[0],
+        cutoutPaths: newPaths.length > 1 ? newPaths : undefined,
+        subImageOverrides: newOverrides.length > 0 ? newOverrides : undefined,
+      },
+    });
   };
 
   // Remove item from queue + labels only (no card layout change).
@@ -979,6 +1035,29 @@ export default function App() {
                       Add Product
                     </button>
                   )}
+                  {isDeptCardBased() && !departmentLocked && editorQueue.length > 0 && (
+                    <button
+                      onClick={() => setEditMode(v => !v)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "7px 14px",
+                        border: "none",
+                        borderRadius: "var(--radius-sm)",
+                        background: editMode ? "#4C6EF5" : "#e2e8f0",
+                        color: editMode ? "#fff" : "#374151",
+                        fontWeight: 600,
+                        fontSize: "var(--text-base)",
+                        cursor: "pointer",
+                        fontFamily: "var(--font-sans)",
+                        transition: "background 0.2s, color 0.2s",
+                      }}
+                      title={editMode ? "Exit edit mode (Escape)" : "Enter edit mode to resize elements"}
+                    >
+                      ✏ Edit Mode
+                    </button>
+                  )}
                   {!departmentLocked && editorQueue.length > 0 && (
                     <button
                       onClick={() => {
@@ -988,6 +1067,7 @@ export default function App() {
                         }
                         setShowCheckingPanel(true);
                       }}
+                      disabled={editMode}
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -995,21 +1075,22 @@ export default function App() {
                         padding: "7px 14px",
                         border: verificationDone ? "1.5px solid #16a34a" : "none",
                         borderRadius: "var(--radius-sm)",
-                        background: verificationDone ? "#dcfce7" : "#7c3aed",
-                        color: verificationDone ? "#15803d" : "#fff",
+                        background: editMode ? "#e2e8f0" : verificationDone ? "#dcfce7" : "#7c3aed",
+                        color: editMode ? "#94a3b8" : verificationDone ? "#15803d" : "#fff",
                         fontWeight: 600,
                         fontSize: "var(--text-base)",
-                        cursor: "pointer",
+                        cursor: editMode ? "not-allowed" : "pointer",
                         fontFamily: "var(--font-sans)",
                         transition: "background 0.2s, color 0.2s",
+                        opacity: editMode ? 0.6 : 1,
                       }}
                       onMouseEnter={(e) => {
-                        e.currentTarget.style.background = verificationDone ? "#bbf7d0" : "#6d28d9";
+                        if (!editMode) e.currentTarget.style.background = verificationDone ? "#bbf7d0" : "#6d28d9";
                       }}
                       onMouseLeave={(e) => {
-                        e.currentTarget.style.background = verificationDone ? "#dcfce7" : "#7c3aed";
+                        if (!editMode) e.currentTarget.style.background = verificationDone ? "#dcfce7" : "#7c3aed";
                       }}
-                      title={verificationDone ? "Verification complete — click to re-verify" : "Verify products"}
+                      title={editMode ? "Exit edit mode first" : verificationDone ? "Verification complete — click to re-verify" : "Verify products"}
                     >
                       {verificationDone ? "✓ Verified" : "✓ Verify"}
                     </button>
@@ -1059,7 +1140,8 @@ export default function App() {
                   onGoogleSearch={departmentLocked ? undefined : handleChooseGoogleSearch}
                   onEditTitle={departmentLocked ? undefined : handleOpenDiscountDetailsDialog}
                   onPickSeriesFlavors={departmentLocked ? undefined : setSeriesPickerItemId}
-                  onAddItem={departmentLocked ? undefined : addItem}
+                  onAddItem={departmentLocked ? undefined : handleAddItemFromModal}
+                  editMode={editMode}
                   slotOverrides={slotOverrides}
                   onSlotOverridesChange={departmentLocked ? undefined : setSlotOverrides}
                   cardLayout={currentCardLayout}
@@ -1067,6 +1149,8 @@ export default function App() {
                   onRemoveFromQueue={departmentLocked ? undefined : removeItemFromQueue}
                   rowCount={userRowCounts[department]}
                   onRowCountChange={departmentLocked ? undefined : handleRowCountChange}
+                  onSubImageUpdate={departmentLocked ? undefined : handleSubImageUpdate}
+                  onDeleteSubImage={departmentLocked ? undefined : handleDeleteSubImage}
                 />
 
                 {dbSearchItemId && (

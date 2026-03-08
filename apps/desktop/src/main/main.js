@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeImage } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeImage, session } from "electron";
 import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
@@ -349,12 +349,22 @@ ipcMain.handle("ufm:downloadAndIngestFromUrl", async (_, publicUrl) => {
 
   try {
     console.log(`[downloadAndIngest] fetching: ${url}`);
-    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    // Use Electron's session.fetch so Chromium's network stack (cookies, proxy) is used.
+    // This is required for Google image URLs which reject plain Node.js fetch with 403.
+    const res = await session.defaultSession.fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Referer": "https://www.google.com/",
+      },
+    });
     if (!res.ok) throw new Error(`Download failed: ${res.status}`);
 
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
     console.log(`[downloadAndIngest] content-type: ${contentType}, ext: ${safeExt}`);
-    if (!contentType.startsWith("image/")) {
+    const isImageContentType = contentType.startsWith("image/");
+    const isImageExt = /^\.(jpg|jpeg|png|gif|webp)$/i.test(safeExt);
+    if (!isImageContentType && !isImageExt) {
       throw new Error(
         `URL did not return an image (content-type: ${contentType || "unknown"})`
       );

@@ -59,6 +59,9 @@ export default function EditorCanvas({
   onRemoveFromQueue,
   rowCount,
   onRowCountChange,
+  editMode,
+  onSubImageUpdate,
+  onDeleteSubImage,
 }: {
   editorQueue: any[];
   templateId: string;
@@ -85,12 +88,14 @@ export default function EditorCanvas({
   onRemoveFromQueue?: (id: string) => void;
   rowCount?: number;
   onRowCountChange?: (rows: number) => void;
+  editMode?: boolean;
+  onSubImageUpdate?: (itemId: string, subIdx: number, patch: { scale?: number; rotation?: number; x?: number; y?: number }) => void;
+  onDeleteSubImage?: (itemId: string, subIdx: number) => void;
 }) {
   const [config, setConfig] = useState<any | null>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   const [addImageModalSlot, setAddImageModalSlot] = useState<number | null>(null);
   const [addImageModalCardId, setAddImageModalCardId] = useState<string | null>(null);
-  const [resizingMode, setResizingMode] = useState(false);
 
   // load template config
   useEffect(() => {
@@ -107,26 +112,12 @@ export default function EditorCanvas({
     }
   }, [items, templateId, department]);
 
-  // Escape to exit resizing mode
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && resizingMode) setResizingMode(false);
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [resizingMode]);
-
   const page = config ? findPageForDepartment(config, department) : null;
   const region = page?.departments?.[department] ?? null;
   const imagePath = page?.imagePath ?? "";
 
   const isCard = region ? isCardDepartment(region) : false;
   const isSlotted = region ? isSlottedDepartment(region) : false;
-
-  // Exit resizing mode when switching to non-card department
-  useEffect(() => {
-    if (!isCard && resizingMode) setResizingMode(false);
-  }, [isCard, resizingMode]);
 
   const effectiveRowCount = rowCount ?? (cardLayout ? deriveRowCount(cardLayout) : 3);
 
@@ -159,8 +150,62 @@ export default function EditorCanvas({
   const [elementScaleDrag, setElementScaleDrag] = useState<{
     itemId: string;
     type: 'image' | 'title' | 'price';
+    corner: 'tl' | 'tr' | 'bl' | 'br';
+    startX: number;
     startY: number;
     startScale: number;
+  } | null>(null);
+
+  // ── Per-element rotate drag state ──
+  const [elementRotateDrag, setElementRotateDrag] = useState<{
+    itemId: string;
+    centerX: number;     // image center in screen coords
+    centerY: number;
+    startAngle: number;  // atan2(mouseY - centerY, mouseX - centerX) at drag start
+    startRotation: number;
+  } | null>(null);
+
+  // ── Per-sub-image scale drag state ──
+  const [subImageScaleDrag, setSubImageScaleDrag] = useState<{
+    itemId: string;
+    subIdx: number;
+    corner: 'tl' | 'tr' | 'bl' | 'br';
+    startX: number;
+    startY: number;
+    startScale: number;
+  } | null>(null);
+
+  // ── Per-sub-image rotate drag state ──
+  const [subImageRotateDrag, setSubImageRotateDrag] = useState<{
+    itemId: string;
+    subIdx: number;
+    centerX: number;
+    centerY: number;
+    startAngle: number;
+    startRotation: number;
+  } | null>(null);
+
+  // ── Image pan drag state ──
+  const [imagePanDrag, setImagePanDrag] = useState<{
+    itemId: string;
+    startX: number; startY: number;
+    startOffsetX: number; startOffsetY: number;
+  } | null>(null);
+
+  // ── Sub-image pan drag state ──
+  const [subImagePanDrag, setSubImagePanDrag] = useState<{
+    itemId: string; subIdx: number;
+    startX: number; startY: number;
+    startOffsetX: number; startOffsetY: number;
+  } | null>(null);
+
+  // ── Crop drag state ──
+  const [cropDrag, setCropDrag] = useState<{
+    itemId: string;
+    side: 'left' | 'right' | 'top' | 'bottom';
+    startX: number; startY: number;
+    startValue: number;
+    cardWidth: number; cardHeight: number;
   } | null>(null);
 
   // ── Merge state ──
@@ -315,13 +360,94 @@ export default function EditorCanvas({
   }, [cardLayout, onCardLayoutChange]);
 
   const handleElementScaleDragStart = useCallback(
-    (itemId: string, type: 'image' | 'title' | 'price', startScale: number, e: React.MouseEvent) => {
+    (itemId: string, type: 'image' | 'title' | 'price', corner: 'tl' | 'tr' | 'bl' | 'br', startScale: number, e: React.MouseEvent) => {
       if (!onCardLayoutChange) return;
       e.preventDefault();
       e.stopPropagation();
-      setElementScaleDrag({ itemId, type, startY: e.clientY, startScale });
+      setElementScaleDrag({ itemId, type, corner, startX: e.clientX, startY: e.clientY, startScale });
     },
     [onCardLayoutChange]
+  );
+
+  const handleElementRotateDragStart = useCallback(
+    (itemId: string, startRotation: number, centerX: number, centerY: number, e: React.MouseEvent) => {
+      if (!onCardLayoutChange) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const startAngle = Math.atan2(e.clientY - centerY, e.clientX - centerX);
+      setElementRotateDrag({ itemId, centerX, centerY, startAngle, startRotation });
+    },
+    [onCardLayoutChange]
+  );
+
+  const handleSubImageScaleDragStart = useCallback(
+    (itemId: string, subIdx: number, corner: 'tl' | 'tr' | 'bl' | 'br', startScale: number, e: React.MouseEvent) => {
+      if (!onSubImageUpdate) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setSubImageScaleDrag({ itemId, subIdx, corner, startX: e.clientX, startY: e.clientY, startScale });
+    },
+    [onSubImageUpdate]
+  );
+
+  const handleSubImageRotateDragStart = useCallback(
+    (itemId: string, subIdx: number, startRot: number, cx: number, cy: number, e: React.MouseEvent) => {
+      if (!onSubImageUpdate) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const startAngle = Math.atan2(e.clientY - cy, e.clientX - cx);
+      setSubImageRotateDrag({ itemId, subIdx, centerX: cx, centerY: cy, startAngle, startRotation: startRot });
+    },
+    [onSubImageUpdate]
+  );
+
+  const handleImagePanStart = useCallback(
+    (itemId: string, startOffsetX: number, startOffsetY: number, e: React.MouseEvent) => {
+      if (!onCardLayoutChange) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setImagePanDrag({ itemId, startX: e.clientX, startY: e.clientY, startOffsetX, startOffsetY });
+    },
+    [onCardLayoutChange]
+  );
+
+  const handleSubImagePanStart = useCallback(
+    (itemId: string, subIdx: number, startOffsetX: number, startOffsetY: number, e: React.MouseEvent) => {
+      if (!onSubImageUpdate) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setSubImagePanDrag({ itemId, subIdx, startX: e.clientX, startY: e.clientY, startOffsetX, startOffsetY });
+    },
+    [onSubImageUpdate]
+  );
+
+  const handleOrientationChange = useCallback(
+    (itemId: string, orientation: 'vertical' | 'horizontal' | 'top') => {
+      if (!onCardLayoutChange || !cardLayout) return;
+      const updated = cardLayout.map(c =>
+        c.itemId === itemId ? { ...c, orientation } : c
+      );
+      onCardLayoutChange(updated);
+    },
+    [cardLayout, onCardLayoutChange]
+  );
+
+  const handleCropDragStart = useCallback(
+    (itemId: string, side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds?: { width: number; height: number }) => {
+      if (!onCardLayoutChange) return;
+      e.preventDefault(); e.stopPropagation();
+      const rect = cardRectsRef.current.find(r => r.itemId === itemId);
+      const card = cardLayout?.find(c => c.itemId === itemId);
+      if (!card) return;
+      const w = bounds?.width ?? rect?.width ?? card.widthPx;
+      const h = bounds?.height ?? rect?.height ?? 200;
+      setCropDrag({
+        itemId, side, startX: e.clientX, startY: e.clientY, startValue,
+        cardWidth: w,
+        cardHeight: h,
+      });
+    },
+    [onCardLayoutChange, cardLayout]
   );
 
   // Global mouse handlers for slot drag/resize
@@ -444,9 +570,15 @@ export default function EditorCanvas({
     const handleMouseMove = (e: MouseEvent) => {
       const rect = cardRectsRef.current.find(r => r.itemId === elementScaleDrag.itemId);
       const refPx = rect ? Math.min(rect.width, rect.height) * PREVIEW_SCALE : 100;
-      const delta = (elementScaleDrag.startY - e.clientY) / refPx; // drag up = larger
+      const dx = (e.clientX - elementScaleDrag.startX) / refPx;
+      const dy = (e.clientY - elementScaleDrag.startY) / refPx;
+      const rawDelta =
+        elementScaleDrag.corner === 'br' ? (dx + dy) / 2 :
+        elementScaleDrag.corner === 'tl' ? (-dx - dy) / 2 :
+        elementScaleDrag.corner === 'tr' ? (dx - dy) / 2 :
+        (-dx + dy) / 2; // bl
       const newScale = Math.round(
-        Math.min(3.0, Math.max(0.2, elementScaleDrag.startScale + delta)) * 1000
+        Math.min(3.0, Math.max(0.2, elementScaleDrag.startScale + rawDelta)) * 1000
       ) / 1000;
       const field = elementScaleDrag.type === 'image' ? 'imageScale'
         : elementScaleDrag.type === 'title' ? 'titleScale' : 'priceScale';
@@ -464,6 +596,171 @@ export default function EditorCanvas({
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [elementScaleDrag, cardLayout, onCardLayoutChange]);
+
+  // Global mouse handlers for per-element rotate drag
+  useEffect(() => {
+    if (!elementRotateDrag || !onCardLayoutChange || !cardLayout) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const currentAngle = Math.atan2(
+        e.clientY - elementRotateDrag.centerY,
+        e.clientX - elementRotateDrag.centerX
+      );
+      const angleDelta = currentAngle - elementRotateDrag.startAngle;
+      const newRotation = Math.round(
+        (elementRotateDrag.startRotation + angleDelta * (180 / Math.PI)) * 10
+      ) / 10;
+      const updated = cardLayout.map(c =>
+        c.itemId === elementRotateDrag.itemId ? { ...c, imageRotation: newRotation } : c
+      );
+      onCardLayoutChange(updated);
+    };
+
+    const handleMouseUp = () => setElementRotateDrag(null);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [elementRotateDrag, cardLayout, onCardLayoutChange]);
+
+  // Global mouse handlers for per-sub-image scale drag
+  useEffect(() => {
+    if (!subImageScaleDrag || !onSubImageUpdate) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const rect = cardRectsRef.current.find(r => r.itemId === subImageScaleDrag.itemId);
+      const refPx = rect ? Math.min(rect.width, rect.height) * PREVIEW_SCALE : 100;
+      const dx = (e.clientX - subImageScaleDrag.startX) / refPx;
+      const dy = (e.clientY - subImageScaleDrag.startY) / refPx;
+      const rawDelta =
+        subImageScaleDrag.corner === 'br' ? (dx + dy) / 2 :
+        subImageScaleDrag.corner === 'tl' ? (-dx - dy) / 2 :
+        subImageScaleDrag.corner === 'tr' ? (dx - dy) / 2 :
+        (-dx + dy) / 2; // bl
+      const newScale = Math.round(
+        Math.min(3.0, Math.max(0.2, subImageScaleDrag.startScale + rawDelta)) * 1000
+      ) / 1000;
+      onSubImageUpdate(subImageScaleDrag.itemId, subImageScaleDrag.subIdx, { scale: newScale });
+    };
+
+    const handleMouseUp = () => setSubImageScaleDrag(null);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [subImageScaleDrag, onSubImageUpdate]);
+
+  // Global mouse handlers for per-sub-image rotate drag
+  useEffect(() => {
+    if (!subImageRotateDrag || !onSubImageUpdate) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const currentAngle = Math.atan2(
+        e.clientY - subImageRotateDrag.centerY,
+        e.clientX - subImageRotateDrag.centerX
+      );
+      const angleDelta = currentAngle - subImageRotateDrag.startAngle;
+      const newRotation = Math.round(
+        (subImageRotateDrag.startRotation + angleDelta * (180 / Math.PI)) * 10
+      ) / 10;
+      onSubImageUpdate(subImageRotateDrag.itemId, subImageRotateDrag.subIdx, { rotation: newRotation });
+    };
+
+    const handleMouseUp = () => setSubImageRotateDrag(null);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [subImageRotateDrag, onSubImageUpdate]);
+
+  // Global mouse handlers for image pan drag
+  useEffect(() => {
+    if (!imagePanDrag || !onCardLayoutChange || !cardLayout) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const dx = (e.clientX - imagePanDrag.startX) / PREVIEW_SCALE;
+      const dy = (e.clientY - imagePanDrag.startY) / PREVIEW_SCALE;
+      const newX = Math.round(imagePanDrag.startOffsetX + dx);
+      const newY = Math.round(imagePanDrag.startOffsetY + dy);
+      const updated = cardLayout.map(c =>
+        c.itemId === imagePanDrag.itemId ? { ...c, imageOffsetX: newX, imageOffsetY: newY } : c
+      );
+      onCardLayoutChange(updated);
+    };
+
+    const handleMouseUp = () => setImagePanDrag(null);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [imagePanDrag, cardLayout, onCardLayoutChange]);
+
+  // Global mouse handlers for sub-image pan drag
+  useEffect(() => {
+    if (!subImagePanDrag || !onSubImageUpdate) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const dx = (e.clientX - subImagePanDrag.startX) / PREVIEW_SCALE;
+      const dy = (e.clientY - subImagePanDrag.startY) / PREVIEW_SCALE;
+      onSubImageUpdate(subImagePanDrag.itemId, subImagePanDrag.subIdx, {
+        x: Math.round(subImagePanDrag.startOffsetX + dx),
+        y: Math.round(subImagePanDrag.startOffsetY + dy),
+      });
+    };
+
+    const handleMouseUp = () => setSubImagePanDrag(null);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [subImagePanDrag, onSubImageUpdate]);
+
+  // Global mouse handlers for crop drag
+  useEffect(() => {
+    if (!cropDrag || !onCardLayoutChange || !cardLayout) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const dx = (e.clientX - cropDrag.startX) / PREVIEW_SCALE;
+      const dy = (e.clientY - cropDrag.startY) / PREVIEW_SCALE;
+      const { side, startValue, cardWidth, cardHeight } = cropDrag;
+      const card = cardLayout.find(c => c.itemId === cropDrag.itemId);
+      const cropL = (card?.cropLeft ?? 0) as number;
+      const cropR = (card?.cropRight ?? 0) as number;
+      const cropT = (card?.cropTop ?? 0) as number;
+      const cropB = (card?.cropBottom ?? 0) as number;
+
+      let newValue: number;
+      if (side === 'left')        newValue = Math.max(0, Math.min(startValue + dx,  cardWidth - cropR));
+      else if (side === 'right')  newValue = Math.max(0, Math.min(startValue - dx,  cardWidth - cropL));
+      else if (side === 'top')    newValue = Math.max(0, Math.min(startValue + dy,  cardHeight - cropB));
+      else                        newValue = Math.max(0, Math.min(startValue - dy,  cardHeight - cropT));
+
+      const field = side === 'left' ? 'cropLeft' : side === 'right' ? 'cropRight'
+                  : side === 'top'  ? 'cropTop'  : 'cropBottom';
+      const updated = cardLayout.map(c =>
+        c.itemId === cropDrag.itemId ? { ...c, [field]: Math.round(newValue) } : c
+      );
+      onCardLayoutChange(updated);
+    };
+
+    const handleMouseUp = () => setCropDrag(null);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [cropDrag, cardLayout, onCardLayoutChange]);
 
   // Global swap drag mouse handlers (registered once — uses refs to avoid stale closures)
   useEffect(() => {
@@ -613,7 +910,7 @@ export default function EditorCanvas({
   // ── Swap drag — hold-to-lift detection ──
   const handleCanvasMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !onCardLayoutChange || !scaledCanvasRef.current) return;
-    if (dividerDrag || activeDrag || elementScaleDrag) return; // don't conflict with other drags
+    if (dividerDrag || activeDrag || elementScaleDrag || elementRotateDrag || editMode) return; // don't conflict with other drags
 
     const canvasRect = scaledCanvasRef.current.getBoundingClientRect();
     const canvasX = (e.clientX - canvasRect.left) / PREVIEW_SCALE;
@@ -1097,6 +1394,9 @@ export default function EditorCanvas({
 
   return (
     <>
+    {elementRotateDrag && (
+      <style>{`* { cursor: grabbing !important; }`}</style>
+    )}
     {/* Merge selection dialog */}
     {mergeDialog && (
       <MergeSelectionDialog
@@ -1190,39 +1490,6 @@ export default function EditorCanvas({
       key={page.pageId} // hard reset per page
       style={{ marginTop: 24, display: "flex", justifyContent: "center", position: "relative" }}
     >
-      {/* Exit resizing mode button — top-right, only when resizing */}
-      {isCard && resizingMode && (
-        <button
-          onClick={() => setResizingMode(false)}
-          style={{
-            position: "absolute",
-            top: 8,
-            right: 8,
-            zIndex: 10000,
-            padding: "10px 20px",
-            background: "linear-gradient(135deg, #667eea, #764ba2)",
-            color: "#fff",
-            border: "2px solid rgba(255,255,255,0.9)",
-            borderRadius: 10,
-            cursor: "pointer",
-            fontWeight: 700,
-            fontSize: 14,
-            boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
-            transition: "transform 0.2s, box-shadow 0.2s",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.transform = "scale(1.05)";
-            e.currentTarget.style.boxShadow = "0 6px 16px rgba(0,0,0,0.3)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.transform = "scale(1)";
-            e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.25)";
-          }}
-          title="Exit resizing mode"
-        >
-          ✕ Exit
-        </button>
-      )}
       <div
         ref={scaledCanvasRef}
         style={{
@@ -1282,12 +1549,24 @@ export default function EditorCanvas({
                   items={items}
                   placements={cardPlacements}
                   discountLabels={discountLabels as any}
-                  onElementDragStart={onCardLayoutChange && resizingMode ? handleElementScaleDragStart : undefined}
+                  editMode={editMode}
+                  activeScaleDrag={elementScaleDrag}
+                  onElementDragStart={onCardLayoutChange && editMode ? handleElementScaleDragStart : undefined}
+                  onRotateDragStart={onCardLayoutChange && editMode ? handleElementRotateDragStart : undefined}
+                  onEditTitle={editMode ? onEditTitle : undefined}
+                  onEditPrice={editMode ? onEditTitle : undefined}
+                  onSubImageScaleDragStart={onSubImageUpdate && editMode ? handleSubImageScaleDragStart : undefined}
+                  onSubImageRotateDragStart={onSubImageUpdate && editMode ? handleSubImageRotateDragStart : undefined}
+                  onDeleteSubImage={onDeleteSubImage && editMode ? onDeleteSubImage : undefined}
+                  onImagePanStart={onCardLayoutChange && editMode ? handleImagePanStart : undefined}
+                  onSubImagePanStart={onSubImageUpdate && editMode ? handleSubImagePanStart : undefined}
+                  onOrientationChange={onCardLayoutChange && editMode ? handleOrientationChange : undefined}
+                  onCropDragStart={onCardLayoutChange && editMode ? handleCropDragStart : undefined}
                 />
               )}
 
-              {/* Card overlays (add/replace/edit/delete buttons) — disabled during swap drag */}
-              <div style={{ pointerEvents: swapDrag ? 'none' : 'auto' }}>
+              {/* Card overlays (add/replace/edit/delete buttons) — hidden during editMode or swap drag */}
+              {!editMode && <div style={{ pointerEvents: swapDrag ? 'none' : 'auto' }}>
                 <SlotOverlays
                   slots={cardRects.map(r => ({ x: r.x, y: r.y, width: r.width, height: r.height }))}
                   items={items}
@@ -1302,14 +1581,12 @@ export default function EditorCanvas({
                   onGoogleSearch={onGoogleSearch}
                   onEditTitle={onEditTitle}
                   onPickSeriesFlavors={onPickSeriesFlavors}
-                  onEnterResizingMode={isLocked ? undefined : () => setResizingMode(true)}
-                  resizingMode={resizingMode}
                   cardMode
                   cardRects={cardRects}
                   cardLayout={cardLayout ?? undefined}
                   isLocked={isLocked}
                 />
-              </div>
+              </div>}
 
               {/* Card border outlines */}
               {onCardLayoutChange && cardRects.map((rect) => (
@@ -1347,6 +1624,7 @@ export default function EditorCanvas({
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
+                      pointerEvents: editMode ? 'none' : undefined,
                     }}
                   >
                     {/* Drag handle zone — only for 1:1 equal-height boundaries */}
@@ -1462,6 +1740,7 @@ export default function EditorCanvas({
                     alignItems: "center",
                     justifyContent: "center",
                     cursor: "pointer",
+                    pointerEvents: editMode ? 'none' : undefined,
                   }}
                 >
                   {hoveredVMerge === idx && (
@@ -1501,10 +1780,10 @@ export default function EditorCanvas({
           {/* ═══ SLOT-BASED DEPARTMENT ═══ */}
           {imageSize && isSlotted && effectiveSlots.map((slot: SlotRect, i: number) => {
             const isDragging = activeDrag?.slotIndex === i && activeDrag.thresholdMet;
+            const EDGE = 12; // clickable border strip thickness in px
             return (
               <div
                 key={`slot-${i}`}
-                onMouseDown={onSlotOverridesChange ? (e => handleSlotDragStart(i, e)) : undefined}
                 style={{
                   position: "absolute",
                   left: slot.x,
@@ -1512,13 +1791,32 @@ export default function EditorCanvas({
                   width: slot.width,
                   height: slot.height,
                   border: isDragging ? "2px solid #4C6EF5" : "2px dashed rgba(255,0,0,0.4)",
-                  background: isDragging ? "rgba(76,110,245,0.08)" : "rgba(255,0,0,0.03)",
-                  cursor: onSlotOverridesChange ? (isDragging ? "grabbing" : "grab") : "default",
-                  zIndex: isDragging ? 1000 : undefined,
+                  background: isDragging ? "rgba(76,110,245,0.08)" : "transparent",
+                  zIndex: 10000,
+                  pointerEvents: "none",
                   boxShadow: isDragging ? "0 8px 32px rgba(0,0,0,0.2)" : undefined,
                   boxSizing: "border-box",
                 }}
               >
+                {/* Border edge strips — clickable for move drag */}
+                {onSlotOverridesChange && ([
+                  { key: 'et', style: { top: 0, left: EDGE, right: EDGE, height: EDGE } },
+                  { key: 'eb', style: { bottom: 0, left: EDGE, right: EDGE, height: EDGE } },
+                  { key: 'el', style: { left: 0, top: EDGE, bottom: EDGE, width: EDGE } },
+                  { key: 'er', style: { right: 0, top: EDGE, bottom: EDGE, width: EDGE } },
+                ] as const).map(({ key, style }) => (
+                  <div
+                    key={key}
+                    onMouseDown={e => handleSlotDragStart(i, e)}
+                    style={{
+                      position: 'absolute',
+                      pointerEvents: 'auto',
+                      cursor: isDragging ? 'grabbing' : 'grab',
+                      ...style,
+                    }}
+                  />
+                ))}
+
                 {/* Resize handles on corners */}
                 {onSlotOverridesChange && (['tl','tr','bl','br'] as const).map(corner => (
                   <div
@@ -1531,7 +1829,7 @@ export default function EditorCanvas({
                       background: '#4C6EF5',
                       border: '2px solid white',
                       borderRadius: 3,
-                      zIndex: 10,
+                      pointerEvents: 'auto',
                       cursor: corner === 'tl' || corner === 'br' ? 'nwse-resize' : 'nesw-resize',
                       ...(corner.includes('t') ? { top: -7 } : { bottom: -7 }),
                       ...(corner.includes('l') ? { left: -7 } : { right: -7 }),

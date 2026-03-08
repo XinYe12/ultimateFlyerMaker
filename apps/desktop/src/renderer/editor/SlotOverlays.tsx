@@ -39,8 +39,6 @@ type SlotOverlaysProps = {
   onGoogleSearch?: (itemId: string) => void;
   onEditTitle?: (itemId: string) => void;
   onPickSeriesFlavors?: (itemId: string) => void;
-  onEnterResizingMode?: () => void;
-  resizingMode?: boolean;
   // Card mode props
   cardMode?: boolean;
   cardRects?: CardRect[];
@@ -59,8 +57,6 @@ export default function SlotOverlays({
   onGoogleSearch,
   onEditTitle,
   onPickSeriesFlavors,
-  onEnterResizingMode,
-  resizingMode = false,
   cardMode,
   cardRects,
   cardLayout,
@@ -181,7 +177,7 @@ export default function SlotOverlays({
                 }}
               >
                 <div style={{ fontSize: "40px", marginBottom: "8px", lineHeight: 1 }}>+</div>
-                <div style={{ fontSize: "25px", fontWeight: "700" }}>Add Image</div>
+                <div style={{ fontSize: "25px", fontWeight: "700" }}>Add Product</div>
               </button>
             </div>
           );
@@ -205,10 +201,10 @@ export default function SlotOverlays({
               top: overlayRect.y,
               width: overlayRect.width,
               height: overlayRect.height,
-              pointerEvents: isLocked || resizingMode ? "none" : "auto",
+              pointerEvents: isLocked ? "none" : "auto",
               zIndex: (showReplaceMenu === index || confirmDeleteSlot === index) ? 9500 : 9000,
             }}
-            onMouseEnter={() => !resizingMode && !isLocked && setHoveredFullSlot(index)}
+            onMouseEnter={() => !isLocked && setHoveredFullSlot(index)}
             onMouseLeave={() => {
               setHoveredFullSlot(null);
             }}
@@ -480,43 +476,6 @@ export default function SlotOverlays({
                   Edit
                 </div>
 
-                {/* Option: Resize content — enter resizing mode (card-based only) */}
-                {cardMode && onEnterResizingMode && (
-                  <button
-                    onClick={() => {
-                      onEnterResizingMode();
-                      setShowReplaceMenu(null);
-                      setReplacingItemId(null);
-                    }}
-                    style={{
-                      padding: "28px 40px",
-                      background: "rgba(255,255,255,0.2)",
-                      color: "#fff",
-                      border: "1px solid rgba(255,255,255,0.4)",
-                      borderRadius: "14px",
-                      cursor: "pointer",
-                      fontWeight: "600",
-                      fontSize: "24px",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      gap: "16px",
-                      transition: "background 0.2s, transform 0.2s",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = "rgba(255,255,255,0.3)";
-                      e.currentTarget.style.transform = "scale(1.02)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = "rgba(255,255,255,0.2)";
-                      e.currentTarget.style.transform = "scale(1)";
-                    }}
-                  >
-                    <span style={{ fontSize: "28px" }}>↔︎</span>
-                    Resize content
-                  </button>
-                )}
-
                 {/* Series flavor toggle — shown when item has multiple staged flavor images */}
                 {(() => {
                   const replacingItem = items?.find((it: any) => it.id === replacingItemId);
@@ -603,7 +562,7 @@ export default function SlotOverlays({
                     }}
                   >
                     <span style={{ fontSize: "28px" }}>✏️</span>
-                    Add discount details
+                    Edit Discount Details
                   </button>
                 )}
 

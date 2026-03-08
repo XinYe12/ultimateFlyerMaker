@@ -12,6 +12,12 @@ export type VerificationProgress = {
   approved: [number, string[]][];
 };
 
+type SystemCheckResult = {
+  titleMatch: boolean;
+  priceMatch: boolean;
+  overall: "pass" | "review" | "no-orig";
+};
+
 type CheckingPanelProps = {
   items: any[];              // editorQueue
   discountLabels: any[];     // current rendered labels
@@ -25,6 +31,58 @@ type CheckingPanelProps = {
 const STEPS: Step[] = ["title", "image", "price"];
 const STEP_LABELS: Record<Step, string> = { title: "TITLE", image: "IMAGE", price: "PRICE" };
 
+// ── Pure helpers for system check ──────────────────────────────────────────
+
+function tokenize(str: string): string[] {
+  return str
+    .toLowerCase()
+    .split(/[\s,./\\()\-_:;!?&+]+/)
+    .filter((t) => t.length >= 2);
+}
+
+function extractPrice(str: string): number | null {
+  const m = str.match(/([\d]+\.[\d]+|[\d]+)/);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  return isNaN(n) ? null : n;
+}
+
+function runSystemCheck(
+  items: any[],
+  discountLabels: any[],
+  originalDiscounts: any[]
+): Map<number, SystemCheckResult> {
+  const result = new Map<number, SystemCheckResult>();
+  for (let i = 0; i < items.length; i++) {
+    const label = discountLabels[i];
+    const orig  = originalDiscounts[i];
+    if (orig === undefined || orig === null) {
+      result.set(i, { titleMatch: false, priceMatch: false, overall: "no-orig" });
+      continue;
+    }
+    // Title comparison — token overlap ≥ 50%
+    const edTitle = label?.title
+      ? `${label.title.en ?? ""}${label.title.zh ? ` / ${label.title.zh}` : ""}`
+      : (items[i]?.result?.title?.en ?? "");
+    const orTitle = `${orig.en ?? ""}${orig.zh ? ` / ${orig.zh}` : ""}`;
+    const edTokens = new Set(tokenize(edTitle));
+    const orTokens = tokenize(orTitle);
+    let titleMatch = false;
+    if (edTokens.size > 0 && orTokens.length > 0) {
+      const hits = orTokens.filter((t) => edTokens.has(t)).length;
+      titleMatch = hits / Math.max(edTokens.size, orTokens.length) >= 0.5;
+    } else if (edTokens.size === 0 && orTokens.length === 0) {
+      titleMatch = true;
+    }
+    // Price comparison — numeric within $0.005
+    const edNum = extractPrice(label?.price?.display ?? "");
+    const orNum = extractPrice(orig.price?.display ?? orig.salePrice ?? "");
+    const priceMatch = edNum !== null && orNum !== null && Math.abs(edNum - orNum) <= 0.005;
+    result.set(i, { titleMatch, priceMatch, overall: titleMatch && priceMatch ? "pass" : "review" });
+  }
+  return result;
+}
+
 export default function CheckingPanel({ items, discountLabels, originalDiscounts, initialProgress, onClose, onComplete, onProgressChange }: CheckingPanelProps) {
   const [currentIdx, setCurrentIdx] = useState<number>(() => initialProgress?.currentIdx ?? 0);
   const [step, setStep] = useState<Step>(() => initialProgress?.step ?? "title");
@@ -34,6 +92,7 @@ export default function CheckingPanel({ items, discountLabels, originalDiscounts
     return new Map(initialProgress.approved.map(([k, v]) => [k, new Set(v as Step[])]));
   });
   const [done, setDone] = useState(false);
+  const [systemChecks, setSystemChecks] = useState<Map<number, SystemCheckResult>>(new Map());
 
   // Scroll active item into view in both panels
   const leftListRef = useRef<HTMLDivElement>(null);
@@ -46,6 +105,11 @@ export default function CheckingPanel({ items, discountLabels, originalDiscounts
       if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
     });
   }, [currentIdx]);
+
+  // Run system check once on mount
+  useEffect(() => {
+    setSystemChecks(runSystemCheck(items, discountLabels, originalDiscounts));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (items.length === 0) {
     return (
@@ -224,14 +288,20 @@ export default function CheckingPanel({ items, discountLabels, originalDiscounts
                       <div style={{ fontSize: 11, fontWeight: 600, color: "#0f172a", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{ttl || "—"}</div>
                       <div style={{ fontSize: 11, color: "#64748b" }}>{prc}</div>
                     </div>
-                    {/* Step dots */}
-                    <div style={{ display: "flex", gap: 4, padding: "2px 6px 4px" }}>
+                    {/* Step dots + system check badge */}
+                    <div style={{ display: "flex", gap: 4, padding: "2px 6px 4px", alignItems: "center" }}>
                       {STEPS.map(s => (
                         <div key={s} title={s} style={{
                           width: 8, height: 8, borderRadius: "50%",
                           background: stepsDone.has(s) ? "#16a34a" : flags.has(i) ? "#d97706" : "#cbd5e1",
                         }} />
                       ))}
+                      {systemChecks.get(i)?.overall === "pass" && (
+                        <div style={sysBadgeStyle}>Sys ✓</div>
+                      )}
+                      {systemChecks.get(i)?.overall === "review" && (
+                        <div style={sysFailBadgeStyle}>Sys ✗</div>
+                      )}
                     </div>
                   </div>
                 );
@@ -360,6 +430,11 @@ export default function CheckingPanel({ items, discountLabels, originalDiscounts
               {origTitle.trim() === editorTitle.trim()
                 ? <span style={{ color: "#16a34a" }}>✓ Exact match</span>
                 : <span style={{ color: "#f59e0b" }}>Values differ — check carefully</span>}
+              {systemChecks.has(currentIdx) && (
+                <div style={{ marginTop: 4, fontSize: 12, color: systemChecks.get(currentIdx)!.titleMatch ? "#16a34a" : "#64748b" }}>
+                  {systemChecks.get(currentIdx)!.titleMatch ? "🤖 Title: matched" : "🤖 Title: differs"}
+                </div>
+              )}
             </div>
           )}
           {!noOrig && step === "price" && origPrice && editorPrice && (
@@ -367,6 +442,11 @@ export default function CheckingPanel({ items, discountLabels, originalDiscounts
               {origPrice.trim() === editorPrice.trim()
                 ? <span style={{ color: "#16a34a" }}>✓ Exact match</span>
                 : <span style={{ color: "#f59e0b" }}>Values differ — check carefully</span>}
+              {systemChecks.has(currentIdx) && (
+                <div style={{ marginTop: 4, fontSize: 12, color: systemChecks.get(currentIdx)!.priceMatch ? "#16a34a" : "#64748b" }}>
+                  {systemChecks.get(currentIdx)!.priceMatch ? "🤖 Price: matched" : "🤖 Price: differs"}
+                </div>
+              )}
             </div>
           )}
 
@@ -493,6 +573,30 @@ const flagBadgeStyle: CSSProperties = {
   fontSize: 11,
   fontWeight: 700,
   zIndex: 2,
+};
+
+const sysBadgeStyle: CSSProperties = {
+  background: "#16a34a",
+  color: "#fff",
+  borderRadius: 4,
+  padding: "1px 5px",
+  fontSize: 9,
+  fontWeight: 700,
+  lineHeight: "14px",
+  letterSpacing: "0.04em",
+  flexShrink: 0,
+};
+
+const sysFailBadgeStyle: CSSProperties = {
+  background: "#dc2626",
+  color: "#fff",
+  borderRadius: 4,
+  padding: "1px 5px",
+  fontSize: 9,
+  fontWeight: 700,
+  lineHeight: "14px",
+  letterSpacing: "0.04em",
+  flexShrink: 0,
 };
 
 const inputRowStyle = (isActive: boolean, isFlagged: boolean): CSSProperties => ({

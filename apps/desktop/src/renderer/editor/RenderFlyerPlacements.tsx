@@ -70,98 +70,183 @@ type DiscountLabel = {
   };
 };
 
-function GripDot({
-  currentScale,
-  style,
-  onDragStart,
+const FRAME_CORNERS: Array<['tl' | 'tr' | 'bl' | 'br', React.CSSProperties]> = [
+  ['tl', { top: 2, left: 2, cursor: 'nw-resize' }],
+  ['tr', { top: 2, right: 2, cursor: 'ne-resize' }],
+  ['bl', { bottom: 2, left: 2, cursor: 'sw-resize' }],
+  ['br', { bottom: 2, right: 2, cursor: 'se-resize' }],
+];
+
+// Apple-style rotation dial — frosted glass circle, progress arc, system blue knob.
+// visible=true springs in; visible=false fades/shrinks out.
+function RotationDial({
+  bL, bT, bW, bH, rotation, visible, isDragging, onRotateDragStart,
 }: {
-  currentScale: number;
-  style: React.CSSProperties;
-  onDragStart: (e: React.MouseEvent) => void;
+  bL: number; bT: number; bW: number; bH: number;
+  rotation: number;
+  visible: boolean;
+  isDragging?: boolean;
+  onRotateDragStart: (startRotation: number, centerX: number, centerY: number, e: React.MouseEvent) => void;
 }) {
-  const [active, setActive] = useState(false);
-  const [hover, setHover] = useState(false);
+  const R = 52;           // dial radius
+  const TRACK = R - 14;   // arc / track radius
+  const TIP_R = 10;       // knob radius
+  const PAD = TIP_R + 4;  // space around dial so knob isn't clipped
+  const SIZE = (R + PAD) * 2;
+  const O = SIZE / 2;     // SVG / container center
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    setActive(true);
-    onDragStart(e);
-    const handleUp = () => {
-      setActive(false);
-      window.removeEventListener('mouseup', handleUp);
-    };
-    window.addEventListener('mouseup', handleUp);
-  };
+  // 0° = 12 o'clock; clockwise positive — matches CSS rotate()
+  const rad = (rotation - 90) * Math.PI / 180;
+  const tx = TRACK * Math.cos(rad);
+  const ty = TRACK * Math.sin(rad);
 
-  const fill = Math.min(1, Math.max(0, (currentScale - 0.2) / 2.8));
-  const PURPLE = 'rgba(138, 43, 226, ';
+  // Progress arc: sweep from 12 o'clock to current angle
+  const norm = ((rotation % 360) + 360) % 360;
+  const arcEndX = TRACK * Math.cos((norm - 90) * Math.PI / 180);
+  const arcEndY = TRACK * Math.sin((norm - 90) * Math.PI / 180);
+  const largeArc = norm > 180 ? 1 : 0;
+  const showArc = norm > 0.5 && norm < 359.5;
+  const showFullCircle = norm >= 359.5;
 
-  if (active) {
-    const BAR_W = 22, BAR_H = 90, RADIUS = 11;
-    return (
-      <div
-        style={{
-          position: 'absolute',
-          ...style,
-          width: BAR_W,
-          height: BAR_H,
-          borderRadius: RADIUS,
-          background: `${PURPLE}0.18)`,
-          overflow: 'hidden',
-          cursor: 'ns-resize',
-          zIndex: 200,
-          boxShadow: '0 2px 12px rgba(0,0,0,0.25)',
-        }}
-      >
-        <div style={{
-          position: 'absolute',
-          bottom: 0,
-          left: 0,
-          right: 0,
-          height: `${fill * 100}%`,
-          background: `${PURPLE}0.85)`,
-          borderRadius: RADIUS,
-          transition: 'height 0.05s linear',
-        }} />
-      </div>
-    );
-  }
+  // Image center in card-local coordinates
+  const cx = bL + bW / 2;
+  const cy = bT + bH / 2;
+  const angleDisplay = Math.round(norm);
 
-  const SIZE = hover ? 14 : 12;
   return (
-    <div
-      style={{
+    <div style={{
+      position: 'absolute',
+      left: cx - O,
+      top: cy - O,
+      width: SIZE,
+      height: SIZE,
+      zIndex: 100,
+      pointerEvents: 'none',
+      opacity: visible ? 1 : 0,
+      transform: visible ? 'scale(1)' : 'scale(0.75)',
+      transformOrigin: 'center center',
+      // Spring curve on enter, plain ease on exit
+      transition: visible
+        ? 'opacity 0.18s ease, transform 0.26s cubic-bezier(0.34, 1.56, 0.64, 1)'
+        : 'opacity 0.16s ease, transform 0.16s ease',
+    }}>
+      {/* Frosted glass background — must be HTML div for backdrop-filter to work */}
+      <div style={{
         position: 'absolute',
-        ...style,
-        width: SIZE,
-        height: SIZE,
-        borderRadius: SIZE / 2,
-        background: hover ? `${PURPLE}1)` : `${PURPLE}0.8)`,
-        cursor: 'ns-resize',
-        zIndex: 100,
-        boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
-        transition: 'width 0.1s, height 0.1s, background 0.1s',
-      }}
-      onMouseDown={handleMouseDown}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-    />
+        left: PAD, top: PAD,
+        width: R * 2, height: R * 2,
+        borderRadius: '50%',
+        backdropFilter: 'blur(20px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+        background: 'rgba(255,255,255,0.78)',
+        boxShadow: '0 4px 24px rgba(0,0,0,0.13), 0 1px 3px rgba(0,0,0,0.08), inset 0 0.5px 0 rgba(255,255,255,0.95)',
+        border: '0.5px solid rgba(200,200,200,0.35)',
+      }} />
+      {/* SVG: track ring, progress arc, pivot, knob, label */}
+      <svg width={SIZE} height={SIZE} style={{ position: 'absolute', inset: 0, overflow: 'visible' }}>
+        {/* Subtle track ring */}
+        <circle cx={O} cy={O} r={TRACK}
+          fill="none" stroke="rgba(0,0,0,0.09)" strokeWidth="2"
+          style={{ pointerEvents: 'none' }}
+        />
+        {/* North marker — always visible as 0° reference */}
+        <line x1={O} y1={O - TRACK - 5} x2={O} y2={O - TRACK + 5}
+          stroke="rgba(0,0,0,0.15)" strokeWidth="1.5" strokeLinecap="round"
+          style={{ pointerEvents: 'none' }}
+        />
+        {/* Progress arc — Apple blue sweep */}
+        {showFullCircle && (
+          <circle cx={O} cy={O} r={TRACK}
+            fill="none" stroke="#007AFF" strokeWidth="2.5"
+            style={{ pointerEvents: 'none' }}
+          />
+        )}
+        {showArc && (
+          <path
+            d={`M ${O} ${O - TRACK} A ${TRACK} ${TRACK} 0 ${largeArc} 1 ${O + arcEndX} ${O + arcEndY}`}
+            fill="none" stroke="#007AFF" strokeWidth="2.5" strokeLinecap="round"
+            style={{ pointerEvents: 'none' }}
+          />
+        )}
+        {/* Center pivot dot */}
+        <circle cx={O} cy={O} r={2.5}
+          fill="rgba(0,0,0,0.18)" style={{ pointerEvents: 'none' }}
+        />
+        {/* Draggable knob — THE only interactive element */}
+        <circle
+          cx={O + tx} cy={O + ty} r={TIP_R}
+          fill="#007AFF"
+          style={{
+            pointerEvents: visible ? 'all' : 'none',
+            cursor: isDragging ? 'grabbing' : 'grab',
+            filter: 'drop-shadow(0 2px 6px rgba(0,122,255,0.5))',
+          }}
+          onMouseDown={(e: React.MouseEvent) => {
+            e.stopPropagation();
+            e.preventDefault();
+            const svgEl = (e.currentTarget as SVGElement).closest('svg')!;
+            const rect = svgEl.getBoundingClientRect();
+            onRotateDragStart(rotation, rect.left + rect.width / 2, rect.top + rect.height / 2, e);
+          }}
+        />
+        {/* White center dot on knob */}
+        <circle cx={O + tx} cy={O + ty} r={3.5}
+          fill="white" style={{ pointerEvents: 'none' }}
+        />
+        {/* Angle readout — SF Pro style, centered in dial */}
+        <text
+          x={O} y={O}
+          textAnchor="middle" dominantBaseline="middle"
+          fontSize="13" fontWeight="500"
+          fontFamily="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif"
+          fill="rgba(0,0,0,0.5)"
+          style={{ userSelect: 'none', pointerEvents: 'none' } as React.CSSProperties}
+        >
+          {angleDisplay}°
+        </text>
+      </svg>
+    </div>
   );
 }
 
 function PlacementCard({
-  p, item, label, onElementDragStart,
+  p, item, label, editMode, activeScaleDrag, onElementDragStart, onRotateDragStart, onEditTitle, onEditPrice,
+  onSubImageScaleDragStart, onSubImageRotateDragStart, onDeleteSubImage,
+  onImagePanStart, onSubImagePanStart, onOrientationChange, onCropDragStart,
 }: {
   p: any;
   item: any;
   label: DiscountLabel | null;
-  onElementDragStart?: (type: 'image' | 'title' | 'price', startScale: number, e: React.MouseEvent) => void;
+  editMode?: boolean;
+  activeScaleDrag?: { itemId: string; type: string } | null;
+  onElementDragStart?: (type: 'image' | 'title' | 'price', corner: 'tl' | 'tr' | 'bl' | 'br', startScale: number, e: React.MouseEvent) => void;
+  onRotateDragStart?: (startRotation: number, centerX: number, centerY: number, e: React.MouseEvent) => void;
+  onEditTitle?: () => void;
+  onEditPrice?: () => void;
+  onSubImageScaleDragStart?: (subIdx: number, corner: 'tl' | 'tr' | 'bl' | 'br', startScale: number, e: React.MouseEvent) => void;
+  onSubImageRotateDragStart?: (subIdx: number, startRot: number, cx: number, cy: number, e: React.MouseEvent) => void;
+  onDeleteSubImage?: (subIdx: number) => void;
+  onImagePanStart?: (startOffsetX: number, startOffsetY: number, e: React.MouseEvent) => void;
+  onSubImagePanStart?: (subIdx: number, startOffsetX: number, startOffsetY: number, e: React.MouseEvent) => void;
+  onOrientationChange?: (orientation: 'vertical' | 'horizontal' | 'top') => void;
+  onCropDragStart?: (side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds?: { width: number; height: number }) => void;
 }) {
   const [imgInfo, setImgInfo] = useState<{
     natW: number; natH: number;
     bboxX: number; bboxY: number; bboxW: number; bboxH: number;
   } | null>(null);
+  const [hovered, setHovered] = useState(false);
+  const [rotatingActive, setRotatingActive] = useState(false);
+  // Suppresses spurious click-to-edit after a corner-handle drag ends inside the text div.
+  const suppressClickRef = useRef(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [titleDrag, setTitleDrag] = useState<{
+    active: boolean;
+    hoveredZone: 'vertical' | 'horizontal' | null;
+  } | null>(null);
+
+  // Which sub-image is selected in edit mode (for per-image controls)
+  const [selectedSubIdx, setSelectedSubIdx] = useState<number | null>(null);
 
   // For n=3 multi-image: randomly choose diagonal vs 2+1 grid (decided once per mount)
   const diagonalRef = useRef<boolean>(Math.random() < 0.5);
@@ -231,6 +316,72 @@ function PlacementCard({
     setImgInfo({ natW: nw, natH: nh, bboxX, bboxY, bboxW, bboxH });
   }, [imgInfo]);
 
+  // Set flag on corner-handle mousedown; clear it after mouseup (after click fires).
+  const handleCornerMouseDown = useCallback((
+    type: 'image' | 'title' | 'price',
+    corner: 'tl' | 'tr' | 'bl' | 'br',
+    startScale: number,
+    e: React.MouseEvent,
+  ) => {
+    if (!onElementDragStart) return;
+    e.stopPropagation();
+    e.preventDefault();
+    suppressClickRef.current = true;
+    const onUp = () => {
+      // setTimeout(0) lets the click event fire first, then we clear the flag.
+      setTimeout(() => { suppressClickRef.current = false; }, 0);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mouseup', onUp);
+    onElementDragStart(type, corner, startScale, e);
+  }, [onElementDragStart]);
+
+  const handleTitleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (!editMode || !onOrientationChange) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let active = false;
+    let hoveredZone: 'vertical' | 'horizontal' | 'top' | null = null;
+
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!active && Math.sqrt(dx * dx + dy * dy) < 5) return;
+      const card = cardRef.current;
+      if (!card) return;
+      const rect = card.getBoundingClientRect();
+      const relXPct = (ev.clientX - rect.left) / rect.width * 100;
+      const relYPct = (ev.clientY - rect.top) / rect.height * 100;
+      // Distance to center of each zone (in % of card)
+      // Vertical zone: left:0, bottom:0, width:50%, height:35% → center at (25%, 82.5%)
+      // Horizontal zone: right:0, top:20%, width:45%, height:60% → center at (77.5%, 50%)
+      // Top zone: top:0, left:25%, width:50%, height:30% → center at (50%, 15%)
+      const distV = Math.sqrt(Math.pow(relXPct - 25, 2) + Math.pow(relYPct - 82.5, 2));
+      const distH = Math.sqrt(Math.pow(relXPct - 77.5, 2) + Math.pow(relYPct - 50, 2));
+      const distT = Math.sqrt(Math.pow(relXPct - 50, 2) + Math.pow(relYPct - 15, 2));
+      const minDist = Math.min(distV, distH, distT);
+      hoveredZone = minDist === distT ? 'top' : minDist === distH ? 'horizontal' : 'vertical';
+      active = true;
+      setTitleDrag({ active: true, hoveredZone });
+    };
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      if (active && hoveredZone) {
+        suppressClickRef.current = true;
+        setTimeout(() => { suppressClickRef.current = false; }, 0);
+        onOrientationChange(hoveredZone);
+      }
+      setTitleDrag(null);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [editMode, onOrientationChange]);
+
   // ── source resolution ──
   const isPendingFlavors = item?.result?.pendingFlavorSelection === true;
   const rawPaths = item?.result?.cutoutPaths;
@@ -266,6 +417,8 @@ function PlacementCard({
   const priceParts = label?.price.display ? parsePriceDisplay(label.price.display) : null;
   const multiQty = priceParts?.type === "MULTI" ? parseInt(priceParts.quantity!, 10) : 0;
   const displaySrcs = imgSrcs ?? (multiQty >= 2 && imgSrc ? Array(multiQty).fill(imgSrc) : null);
+  // Price-based duplicates: same single image repeated N times (not distinct variant images)
+  const isPriceDupe = !imgSrcs && multiQty >= 2;
 
   // ── image sizing ──
   const SIDE_PAD = 8;
@@ -273,8 +426,17 @@ function PlacementCard({
   const imgScale  = (p.imageScale  ?? 1) as number;
   const titScale  = (p.titleScale  ?? 1) as number;
   const prcScale  = (p.priceScale  ?? 1) as number;
+  const imgRotation = (p.imageRotation ?? 0) as number;
+  const imgOffsetX  = (p.imageOffsetX  ?? 0) as number;
+  const imgOffsetY  = (p.imageOffsetY  ?? 0) as number;
+  const cropL = (p.cropLeft  ?? 0) as number;
+  const cropR = (p.cropRight ?? 0) as number;
+  const cropT = (p.cropTop   ?? 0) as number;
+  const cropB = (p.cropBottom ?? 0) as number;
+  const hasCrop = cropL > 0 || cropR > 0 || cropT > 0 || cropB > 0;
+
   const topPad = Math.round(p.height * 0.05 * scale);
-  const LABEL_ZONE_H = hasLabel ? Math.round(p.height * 0.25 * scale) : 0;
+  const LABEL_ZONE_H = 0;
 
   // ── font sizes ──
   // All price labels in the same card size should occupy the same width.
@@ -397,21 +559,93 @@ function PlacementCard({
 
   const renderImg = (src: string, idx?: number) => {
     const isFirst = idx === undefined || idx === 0;
+    const isMulti = idx !== undefined;
+    const subOverride = isMulti ? (item?.result?.subImageOverrides?.[idx] ?? {}) : {};
+    const subScale = subOverride.scale ?? 1;
+    const subRotation = subOverride.rotation ?? 0;
+    const subOffsetX = isMulti ? (subOverride.x ?? 0) : imgOffsetX;
+    const subOffsetY = isMulti ? (subOverride.y ?? 0) : imgOffsetY;
+    const totalRotation = imgRotation + subRotation;
+    const transform = `translate(${subOffsetX}px, ${subOffsetY}px) rotate(${totalRotation}deg) scale(${subScale})`;
+
+    // Selection UI lives INSIDE the transformed wrapper so it tracks the image exactly
+    const isSelected = isMulti && editMode && selectedSubIdx === idx;
+    const handleMouseDown = isMulti && editMode
+      ? (e: React.MouseEvent) => {
+          e.stopPropagation();
+          if (selectedSubIdx === idx) {
+            onSubImagePanStart?.(idx, subOverride.x ?? 0, subOverride.y ?? 0, e);
+          } else {
+            setSelectedSubIdx(idx);
+          }
+        }
+      : undefined;
+    const handleClick = isMulti && editMode ? (e: React.MouseEvent) => e.stopPropagation() : undefined;
+
+    const selectionUI = isSelected ? (
+      <>
+        <div style={{ position: 'absolute', inset: -2, border: '2px dashed #F59E0B', borderRadius: 2, pointerEvents: 'none' }} />
+        {(['tl','tr','bl','br'] as const).map(corner => (
+          <div
+            key={corner}
+            onMouseDown={(e: React.MouseEvent) => { e.stopPropagation(); e.preventDefault(); onSubImageScaleDragStart?.(idx, corner, subScale, e); }}
+            style={{
+              position: 'absolute',
+              ...(corner.includes('l') ? { left: -5 } : { right: -5 }),
+              ...(corner.includes('t') ? { top: -5 } : { bottom: -5 }),
+              width: 10, height: 10,
+              background: '#fff', border: '2px solid #F59E0B', borderRadius: 2,
+              cursor: corner === 'tl' || corner === 'br' ? 'nw-resize' : 'ne-resize',
+            }}
+          />
+        ))}
+        <div
+          onMouseDown={(e: React.MouseEvent) => {
+            e.stopPropagation(); e.preventDefault();
+            const parent = (e.currentTarget as HTMLElement).parentElement!;
+            const r = parent.getBoundingClientRect();
+            onSubImageRotateDragStart?.(idx, subRotation, r.left + r.width / 2, r.top + r.height / 2, e);
+          }}
+          style={{ position: 'absolute', left: '50%', bottom: -18, transform: 'translateX(-50%)', width: 12, height: 12, background: '#F59E0B', borderRadius: '50%', border: '2px solid white', cursor: 'grab' }}
+        />
+        {!isPriceDupe && (
+          <div
+            onMouseDown={(e: React.MouseEvent) => { e.stopPropagation(); e.preventDefault(); onDeleteSubImage?.(idx); }}
+            style={{ position: 'absolute', right: -10, top: -10, width: 18, height: 18, background: '#EF4444', borderRadius: '50%', color: 'white', fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', lineHeight: 1 }}
+          >×</div>
+        )}
+      </>
+    ) : null;
+
     if (imgRender) {
       return (
-        <div key={idx} style={imgRender.wrapperStyle}>
-          <img style={imgRender.imgAbsStyle} src={src} alt="" />
+        <div
+          key={idx}
+          onMouseDown={handleMouseDown}
+          onClick={handleClick}
+          style={{
+            position: 'relative', width: imgRender.wrapperStyle.width, height: imgRender.wrapperStyle.height,
+            flexShrink: 0, transform, transformOrigin: 'center center',
+            cursor: isMulti && editMode ? (isSelected ? 'grab' : 'pointer') : undefined,
+          }}
+        >
+          <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', clipPath: !isMulti && hasCrop ? `inset(${cropT}px ${cropR}px ${cropB}px ${cropL}px)` : undefined }}>
+            <img style={imgRender.imgAbsStyle} src={src} alt="" />
+          </div>
+          {selectionUI}
         </div>
       );
     }
     return (
-      <img
+      <div
         key={idx}
-        style={fallbackImgStyle}
-        src={src}
-        alt=""
-        onLoad={isFirst ? onFirstImgLoad : undefined}
-      />
+        onMouseDown={handleMouseDown}
+        onClick={handleClick}
+        style={{ position: 'relative', display: 'inline-block', transform, transformOrigin: 'center center', cursor: isMulti && editMode ? (isSelected ? 'grab' : 'pointer') : undefined }}
+      >
+        <img style={fallbackImgStyle} src={src} alt="" onLoad={isFirst ? onFirstImgLoad : undefined} />
+        {selectionUI}
+      </div>
     );
   };
 
@@ -504,14 +738,279 @@ function PlacementCard({
     : matchSource === "serper" ? "#3182ce"
     : "#d97706";
 
+  // ── Horizontal layout ──
+  if (p.orientation === 'horizontal') {
+    return (
+      <div
+        ref={cardRef}
+        style={{
+          position: "absolute", left: p.x, top: p.y,
+          width: p.width, height: p.height, overflow: "visible",
+          outline: lowConf ? `2px solid ${outlineColor}` : "none",
+          outlineOffset: "-2px",
+        }}
+        onMouseEnter={editMode ? () => setHovered(true) : undefined}
+        onMouseLeave={editMode ? () => setHovered(false) : undefined}
+        onClick={editMode && selectedSubIdx !== null ? () => setSelectedSubIdx(null) : undefined}
+      >
+        {/* Content wrapper — crop applied only to image div below */}
+        <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+        {lowConf && (
+          <div style={{ position: "absolute", top: 4, right: 4, background: badgeColor, color: "white", borderRadius: 4, padding: "2px 6px", fontSize: 10, fontWeight: 700, zIndex: 20, pointerEvents: "none", letterSpacing: "0.05em" }}>
+            {badgeLabel}
+          </div>
+        )}
+        {titleDrag?.active && (
+          <>
+            <div style={{ position: 'absolute', left: 0, bottom: 0, width: '50%', height: '35%', background: titleDrag.hoveredZone === 'vertical' ? 'rgba(34,197,94,0.40)' : 'rgba(34,197,94,0.08)', border: titleDrag.hoveredZone === 'vertical' ? '2px solid #22c55e' : '1px dashed rgba(34,197,94,0.4)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', borderRadius: 4 }}>
+              <span style={{ color: '#15803d', fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', opacity: titleDrag.hoveredZone === 'vertical' ? 1 : 0.4 }}>↕ VERTICAL</span>
+            </div>
+            <div style={{ position: 'absolute', right: 0, top: '20%', width: '45%', height: '60%', background: titleDrag.hoveredZone === 'horizontal' ? 'rgba(34,197,94,0.40)' : 'rgba(34,197,94,0.08)', border: titleDrag.hoveredZone === 'horizontal' ? '2px solid #22c55e' : '1px dashed rgba(34,197,94,0.4)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', borderRadius: 4 }}>
+              <span style={{ color: '#15803d', fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', opacity: titleDrag.hoveredZone === 'horizontal' ? 1 : 0.4 }}>↔ HORIZONTAL</span>
+            </div>
+            <div style={{ position: 'absolute', top: 0, left: '25%', width: '50%', height: '30%', background: titleDrag.hoveredZone === 'top' ? 'rgba(34,197,94,0.40)' : 'rgba(34,197,94,0.08)', border: titleDrag.hoveredZone === 'top' ? '2px solid #22c55e' : '1px dashed rgba(34,197,94,0.4)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', borderRadius: 4 }}>
+              <span style={{ color: '#15803d', fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', opacity: titleDrag.hoveredZone === 'top' ? 1 : 0.4 }}>↑ TOP</span>
+            </div>
+          </>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'row', height: '100%' }}>
+          {/* Left 55% — image; crop applied here only */}
+          <div style={{ width: '55%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+            {imgSrc ? renderImg(imgSrc) : null}
+          </div>
+          {/* Right 45% — title + price */}
+          <div style={{ width: '45%', position: 'relative', overflow: 'hidden' }}>
+            {hasLabel && (label.title.en || label.title.zh) && (
+              <div
+                style={{
+                  position: 'absolute', inset: 0,
+                  display: 'flex', alignItems: 'flex-end', padding: SIDE_PAD,
+                  flexDirection: 'column', justifyContent: 'center',
+                  zIndex: 10, wordBreak: 'break-word', textAlign: 'right',
+                  opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'title') ? 0.5 : 1,
+                  cursor: editMode ? 'pointer' : undefined,
+                }}
+                onMouseDown={handleTitleMouseDown}
+                onClick={editMode ? (e) => { if (suppressClickRef.current) return; onEditTitle?.(); } : undefined}
+              >
+                {editMode && onElementDragStart && hovered && (
+                  <>
+                    <div style={{ position: 'absolute', inset: -4, border: '2px dashed #4C6EF5', pointerEvents: 'none', zIndex: 90, borderRadius: 2 }} />
+                    {FRAME_CORNERS.map(([corner]) => (
+                      <div
+                        key={corner}
+                        onMouseDown={(e) => handleCornerMouseDown('title', corner, titScale, e)}
+                        style={{ position: 'absolute', width: 10, height: 10, background: '#fff', border: '2px solid #4C6EF5', borderRadius: 2, zIndex: 91,
+                          ...(corner.includes('t') ? { top: -4 } : { bottom: -4 }),
+                          ...(corner.includes('l') ? { left: -4 } : { right: -4 }),
+                          cursor: corner === 'tl' || corner === 'br' ? 'nw-resize' : 'ne-resize',
+                        }}
+                      />
+                    ))}
+                  </>
+                )}
+                <div className="ufm-title-main" style={{ fontSize: titleMainSize }}>
+                  {label.title.en.toUpperCase()}
+                </div>
+                {(label.title.size || label.title.regularPrice) && (
+                  <div className="ufm-title-meta" style={{ fontSize: titleMetaSize }}>
+                    {label.title.size}
+                    {label.title.regularPrice && <> REG: {label.title.regularPrice}</>}
+                  </div>
+                )}
+              </div>
+            )}
+            {hasLabel && priceParts && (
+              <div
+                style={{
+                  position: 'absolute', bottom: SIDE_PAD, right: SIDE_PAD,
+                  display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end',
+                  zIndex: 10,
+                  opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'price') ? 0.5 : 1,
+                  cursor: editMode ? 'pointer' : undefined,
+                }}
+                onClick={editMode ? (e) => { if (suppressClickRef.current) return; onEditPrice?.(); } : undefined}
+              >
+                {editMode && onElementDragStart && hovered && (
+                  <>
+                    <div style={{ position: 'absolute', inset: -4, border: '2px dashed #4C6EF5', pointerEvents: 'none', zIndex: 90, borderRadius: 2 }} />
+                    {FRAME_CORNERS.map(([corner]) => (
+                      <div
+                        key={corner}
+                        onMouseDown={(e) => handleCornerMouseDown('price', corner, prcScale, e)}
+                        style={{ position: 'absolute', width: 10, height: 10, background: '#fff', border: '2px solid #4C6EF5', borderRadius: 2, zIndex: 91,
+                          ...(corner.includes('t') ? { top: -4 } : { bottom: -4 }),
+                          ...(corner.includes('l') ? { left: -4 } : { right: -4 }),
+                          cursor: corner === 'tl' || corner === 'br' ? 'nw-resize' : 'ne-resize',
+                        }}
+                      />
+                    ))}
+                  </>
+                )}
+                <div className="ufm-price" style={{ display: 'flex', alignItems: 'baseline' }}>
+                  {priceParts.type === "MULTI" && (
+                    <span className="ufm-price-qty" style={{ fontSize: priceQtySize }}>{priceParts.quantity}/</span>
+                  )}
+                  <span className="ufm-price-main" style={{ fontSize: priceMainSize }}>{priceParts.integer}</span>
+                  {priceParts.decimal && (
+                    <span className="ufm-price-decimal" style={{ fontSize: priceDecSize, top: priceDecTop }}>{priceParts.decimal}</span>
+                  )}
+                  {priceParts.type === "SINGLE" && priceParts.unit && (
+                    <span className="ufm-price-unit" style={{ fontSize: priceUnitSize }}>/{priceParts.unit.toUpperCase()}</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        </div>{/* end content clip wrapper */}
+      </div>
+    );
+  }
+
+  // ── Top layout: title top-center, image centered, price bottom-right ──
+  if (p.orientation === 'top') {
+    return (
+      <div
+        ref={cardRef}
+        style={{
+          position: "absolute", left: p.x, top: p.y,
+          width: p.width, height: p.height, overflow: "visible",
+          outline: lowConf ? `2px solid ${outlineColor}` : "none",
+          outlineOffset: "-2px",
+        }}
+        onMouseEnter={editMode ? () => setHovered(true) : undefined}
+        onMouseLeave={editMode ? () => setHovered(false) : undefined}
+        onClick={editMode && selectedSubIdx !== null ? () => setSelectedSubIdx(null) : undefined}
+      >
+        {/* Content wrapper — crop applied only to image div below */}
+        <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+        {lowConf && (
+          <div style={{ position: "absolute", top: 4, right: 4, background: badgeColor, color: "white", borderRadius: 4, padding: "2px 6px", fontSize: 10, fontWeight: 700, zIndex: 20, pointerEvents: "none", letterSpacing: "0.05em" }}>
+            {badgeLabel}
+          </div>
+        )}
+        {titleDrag?.active && (
+          <>
+            <div style={{ position: 'absolute', left: 0, bottom: 0, width: '50%', height: '35%', background: titleDrag.hoveredZone === 'vertical' ? 'rgba(34,197,94,0.40)' : 'rgba(34,197,94,0.08)', border: titleDrag.hoveredZone === 'vertical' ? '2px solid #22c55e' : '1px dashed rgba(34,197,94,0.4)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', borderRadius: 4 }}>
+              <span style={{ color: '#15803d', fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', opacity: titleDrag.hoveredZone === 'vertical' ? 1 : 0.4 }}>↕ VERTICAL</span>
+            </div>
+            <div style={{ position: 'absolute', right: 0, top: '20%', width: '45%', height: '60%', background: titleDrag.hoveredZone === 'horizontal' ? 'rgba(34,197,94,0.40)' : 'rgba(34,197,94,0.08)', border: titleDrag.hoveredZone === 'horizontal' ? '2px solid #22c55e' : '1px dashed rgba(34,197,94,0.4)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', borderRadius: 4 }}>
+              <span style={{ color: '#15803d', fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', opacity: titleDrag.hoveredZone === 'horizontal' ? 1 : 0.4 }}>↔ HORIZONTAL</span>
+            </div>
+            <div style={{ position: 'absolute', top: 0, left: '25%', width: '50%', height: '30%', background: titleDrag.hoveredZone === 'top' ? 'rgba(34,197,94,0.40)' : 'rgba(34,197,94,0.08)', border: titleDrag.hoveredZone === 'top' ? '2px solid #22c55e' : '1px dashed rgba(34,197,94,0.4)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', borderRadius: 4 }}>
+              <span style={{ color: '#15803d', fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', opacity: titleDrag.hoveredZone === 'top' ? 1 : 0.4 }}>↑ TOP</span>
+            </div>
+          </>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+          {/* Title: top center */}
+          {hasLabel && (label.title.en || label.title.zh) && (
+            <div
+              style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                padding: SIDE_PAD, zIndex: 10, wordBreak: 'break-word', textAlign: 'center',
+                opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'title') ? 0.5 : 1,
+                cursor: editMode ? 'pointer' : undefined,
+              }}
+              onMouseDown={handleTitleMouseDown}
+              onClick={editMode ? (e) => { if (suppressClickRef.current) return; onEditTitle?.(); } : undefined}
+            >
+              {editMode && onElementDragStart && hovered && (
+                <>
+                  <div style={{ position: 'absolute', inset: -4, border: '2px dashed #4C6EF5', pointerEvents: 'none', zIndex: 90, borderRadius: 2 }} />
+                  {FRAME_CORNERS.map(([corner]) => (
+                    <div
+                      key={corner}
+                      onMouseDown={(e) => handleCornerMouseDown('title', corner, titScale, e)}
+                      style={{ position: 'absolute', width: 10, height: 10, background: '#fff', border: '2px solid #4C6EF5', borderRadius: 2, zIndex: 91,
+                        ...(corner.includes('t') ? { top: -4 } : { bottom: -4 }),
+                        ...(corner.includes('l') ? { left: -4 } : { right: -4 }),
+                        cursor: corner === 'tl' || corner === 'br' ? 'nw-resize' : 'ne-resize',
+                      }}
+                    />
+                  ))}
+                </>
+              )}
+              <div className="ufm-title-main" style={{ fontSize: titleMainSize }}>
+                {label.title.en.toUpperCase()}
+              </div>
+              {(label.title.size || label.title.regularPrice) && (
+                <div className="ufm-title-meta" style={{ fontSize: titleMetaSize }}>
+                  {label.title.size}
+                  {label.title.regularPrice && <> REG: {label.title.regularPrice}</>}
+                </div>
+              )}
+            </div>
+          )}
+          {/* Image: centered in remaining flex space; crop applied here only */}
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', minHeight: 0 }}>
+            {imgSrc ? renderImg(imgSrc) : null}
+          </div>
+        </div>
+        {/* Price: absolute bottom-right */}
+        {hasLabel && priceParts && (
+          <div
+            style={{
+              position: 'absolute', bottom: SIDE_PAD, right: SIDE_PAD,
+              display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end',
+              zIndex: 10,
+              opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'price') ? 0.5 : 1,
+              cursor: editMode ? 'pointer' : undefined,
+            }}
+            onClick={editMode ? (e) => { if (suppressClickRef.current) return; onEditPrice?.(); } : undefined}
+          >
+            {editMode && onElementDragStart && hovered && (
+              <>
+                <div style={{ position: 'absolute', inset: -4, border: '2px dashed #4C6EF5', pointerEvents: 'none', zIndex: 90, borderRadius: 2 }} />
+                {FRAME_CORNERS.map(([corner]) => (
+                  <div
+                    key={corner}
+                    onMouseDown={(e) => handleCornerMouseDown('price', corner, prcScale, e)}
+                    style={{ position: 'absolute', width: 10, height: 10, background: '#fff', border: '2px solid #4C6EF5', borderRadius: 2, zIndex: 91,
+                      ...(corner.includes('t') ? { top: -4 } : { bottom: -4 }),
+                      ...(corner.includes('l') ? { left: -4 } : { right: -4 }),
+                      cursor: corner === 'tl' || corner === 'br' ? 'nw-resize' : 'ne-resize',
+                    }}
+                  />
+                ))}
+              </>
+            )}
+            <div className="ufm-price" style={{ display: 'flex', alignItems: 'baseline' }}>
+              {priceParts.type === "MULTI" && (
+                <span className="ufm-price-qty" style={{ fontSize: priceQtySize }}>{priceParts.quantity}/</span>
+              )}
+              <span className="ufm-price-main" style={{ fontSize: priceMainSize }}>{priceParts.integer}</span>
+              {priceParts.decimal && (
+                <span className="ufm-price-decimal" style={{ fontSize: priceDecSize, top: priceDecTop }}>{priceParts.decimal}</span>
+              )}
+              {priceParts.type === "SINGLE" && priceParts.unit && (
+                <span className="ufm-price-unit" style={{ fontSize: priceUnitSize }}>/{priceParts.unit.toUpperCase()}</span>
+              )}
+            </div>
+          </div>
+        )}
+        </div>{/* end content clip wrapper */}
+      </div>
+    );
+  }
+
   // ── Layout: full-width image, title bottom-left, price bottom-right ──
   return (
-    <div style={{
-      position: "absolute", left: p.x, top: p.y,
-      width: p.width, height: p.height, overflow: "hidden",
-      outline: lowConf ? `2px solid ${outlineColor}` : "none",
-      outlineOffset: "-2px",
-    }}>
+    <div
+      ref={cardRef}
+      style={{
+        position: "absolute", left: p.x, top: p.y,
+        width: p.width, height: p.height, overflow: "visible",
+        outline: lowConf ? `2px solid ${outlineColor}` : "none",
+        outlineOffset: "-2px",
+      }}
+      onMouseEnter={editMode ? () => setHovered(true) : undefined}
+      onMouseLeave={editMode ? () => setHovered(false) : undefined}
+      onClick={editMode && selectedSubIdx !== null ? () => setSelectedSubIdx(null) : undefined}
+    >
+      {/* Content wrapper — crop is applied only to image zone below */}
+      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
       {/* Low-confidence badge */}
       {lowConf && (
         <div style={{
@@ -524,12 +1023,33 @@ function PlacementCard({
           {badgeLabel}
         </div>
       )}
-      {/* Image zone — flex rows or diagonal layout */}
-      <div style={{
+      {/* Layout switch drop zones — shown during title drag */}
+      {titleDrag?.active && (
+        <>
+          <div style={{ position: 'absolute', left: 0, bottom: 0, width: '50%', height: '35%', background: titleDrag.hoveredZone === 'vertical' ? 'rgba(34,197,94,0.40)' : 'rgba(34,197,94,0.08)', border: titleDrag.hoveredZone === 'vertical' ? '2px solid #22c55e' : '1px dashed rgba(34,197,94,0.4)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', borderRadius: 4 }}>
+            <span style={{ color: '#15803d', fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', opacity: titleDrag.hoveredZone === 'vertical' ? 1 : 0.4 }}>↕ VERTICAL</span>
+          </div>
+          <div style={{ position: 'absolute', right: 0, top: '20%', width: '45%', height: '60%', background: titleDrag.hoveredZone === 'horizontal' ? 'rgba(34,197,94,0.40)' : 'rgba(34,197,94,0.08)', border: titleDrag.hoveredZone === 'horizontal' ? '2px solid #22c55e' : '1px dashed rgba(34,197,94,0.4)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', borderRadius: 4 }}>
+            <span style={{ color: '#15803d', fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', opacity: titleDrag.hoveredZone === 'horizontal' ? 1 : 0.4 }}>↔ HORIZONTAL</span>
+          </div>
+          <div style={{ position: 'absolute', top: 0, left: '25%', width: '50%', height: '30%', background: titleDrag.hoveredZone === 'top' ? 'rgba(34,197,94,0.40)' : 'rgba(34,197,94,0.08)', border: titleDrag.hoveredZone === 'top' ? '2px solid #22c55e' : '1px dashed rgba(34,197,94,0.4)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', borderRadius: 4 }}>
+            <span style={{ color: '#15803d', fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', opacity: titleDrag.hoveredZone === 'top' ? 1 : 0.4 }}>↑ TOP</span>
+          </div>
+        </>
+      )}
+      {/* Image zone — crop applied here only (not title/price); flex rows or diagonal layout */}
+      <div
+        onMouseDown={editMode && !(displaySrcs && displaySrcs.length > 1) && onImagePanStart
+          ? (e) => { e.stopPropagation(); onImagePanStart(imgOffsetX, imgOffsetY, e); }
+          : undefined}
+        style={{
         position: "absolute",
         top: topPad, left: SIDE_PAD,
         width: availW, height: availH,
         overflow: "hidden",
+        zIndex: 1,
+        cursor: editMode && !(displaySrcs && displaySrcs.length > 1) ? 'grab' : undefined,
+        opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'image') ? 0.5 : 1,
         ...(useDiagonal
           ? { display: "block" }
           : n === 5
@@ -562,8 +1082,8 @@ function PlacementCard({
               }
               // n=5: 2×2 corners + overlapping center
               if (n === 5 && !useDiagonal) {
-                const cornerSrcs = [displaySrcs[0], displaySrcs[1], displaySrcs[3], displaySrcs[4]];
-                const centerSrc  = displaySrcs[2];
+                const cornerIndices = [0, 1, 3, 4];
+                const centerIdx = 2;
 
                 const cornerW = imgRender ? imgRender.wrapperStyle.width  : cellW;
                 const cornerH = imgRender ? imgRender.wrapperStyle.height : cellH;
@@ -585,19 +1105,13 @@ function PlacementCard({
 
                 return (
                   <>
-                    {cornerSrcs.map((src, i) => (
-                      <div key={i} style={{ position: "absolute", left: cornerPositions[i].left, top: cornerPositions[i].top, zIndex: 1 }}>
-                        {imgRender
-                          ? <div style={imgRender.wrapperStyle}><img style={imgRender.imgAbsStyle} src={src} alt="" /></div>
-                          : <img style={fallbackImgStyle} src={src} alt="" onLoad={i === 0 ? onFirstImgLoad : undefined} />
-                        }
+                    {cornerIndices.map((srcIdx, i) => (
+                      <div key={srcIdx} style={{ position: "absolute", left: cornerPositions[i].left, top: cornerPositions[i].top, zIndex: 1 }}>
+                        {renderImg(displaySrcs[srcIdx], srcIdx)}
                       </div>
                     ))}
                     <div style={{ position: "absolute", left: centerLeft, top: centerTop, zIndex: 5 }}>
-                      {n5CenterRender
-                        ? <div style={n5CenterRender.wrapperStyle}><img style={n5CenterRender.imgAbsStyle} src={centerSrc} alt="" /></div>
-                        : <img style={fallbackImgStyle} src={centerSrc} alt="" />
-                      }
+                      {renderImg(displaySrcs[centerIdx], centerIdx)}
                     </div>
                   </>
                 );
@@ -622,14 +1136,6 @@ function PlacementCard({
               ));
             })()
           : imgSrc ? renderImg(imgSrc) : null}
-        {/* Image resize grip */}
-        {onElementDragStart && (
-          <GripDot
-            currentScale={imgScale}
-            style={{ bottom: SIDE_PAD + 2, left: "50%", transform: "translateX(-50%)" }}
-            onDragStart={(e) => onElementDragStart('image', imgScale, e)}
-          />
-        )}
       </div>
 
       {/* Title — absolute bottom-left, no clipping */}
@@ -642,7 +1148,28 @@ function PlacementCard({
           justifyContent: "flex-end",
           zIndex: 10,
           wordBreak: "break-word",
-        }}>
+          opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'title') ? 0.5 : 1,
+          cursor: editMode ? "pointer" : undefined,
+        }}
+        onMouseDown={handleTitleMouseDown}
+        onClick={editMode ? (e) => { if (suppressClickRef.current) return; onEditTitle?.(); } : undefined}
+        >
+          {editMode && onElementDragStart && hovered && (
+            <>
+              <div style={{ position: 'absolute', inset: -4, border: '2px dashed #4C6EF5', pointerEvents: 'none', zIndex: 90, borderRadius: 2 }} />
+              {FRAME_CORNERS.map(([corner]) => (
+                <div
+                  key={corner}
+                  onMouseDown={(e) => handleCornerMouseDown('title', corner, titScale, e)}
+                  style={{ position: 'absolute', width: 10, height: 10, background: '#fff', border: '2px solid #4C6EF5', borderRadius: 2, zIndex: 91,
+                    ...(corner.includes('t') ? { top: -4 } : { bottom: -4 }),
+                    ...(corner.includes('l') ? { left: -4 } : { right: -4 }),
+                    cursor: corner === 'tl' || corner === 'br' ? 'nw-resize' : 'ne-resize',
+                  }}
+                />
+              ))}
+            </>
+          )}
           <div className="ufm-title-main" style={{ fontSize: titleMainSize }}>
             {label.title.en.toUpperCase()}
           </div>
@@ -651,14 +1178,6 @@ function PlacementCard({
               {label.title.size}
               {label.title.regularPrice && <> REG: {label.title.regularPrice}</>}
             </div>
-          )}
-          {/* Title resize grip */}
-          {onElementDragStart && (
-            <GripDot
-              currentScale={titScale}
-              style={{ right: -20, top: "50%", transform: "translateY(-50%)" }}
-              onDragStart={(e) => onElementDragStart('title', titScale, e)}
-            />
           )}
         </div>
       )}
@@ -671,14 +1190,26 @@ function PlacementCard({
           display: "flex",
           alignItems: "flex-end", justifyContent: "flex-end",
           zIndex: 10,
-        }}>
-          {/* Price resize grip */}
-          {onElementDragStart && (
-            <GripDot
-              currentScale={prcScale}
-              style={{ left: -20, top: "50%", transform: "translateY(-50%)" }}
-              onDragStart={(e) => onElementDragStart('price', prcScale, e)}
-            />
+          opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'price') ? 0.5 : 1,
+          cursor: editMode ? "pointer" : undefined,
+        }}
+        onClick={editMode ? (e) => { if (suppressClickRef.current) return; onEditPrice?.(); } : undefined}
+        >
+          {editMode && onElementDragStart && hovered && (
+            <>
+              <div style={{ position: 'absolute', inset: -4, border: '2px dashed #4C6EF5', pointerEvents: 'none', zIndex: 90, borderRadius: 2 }} />
+              {FRAME_CORNERS.map(([corner]) => (
+                <div
+                  key={corner}
+                  onMouseDown={(e) => handleCornerMouseDown('price', corner, prcScale, e)}
+                  style={{ position: 'absolute', width: 10, height: 10, background: '#fff', border: '2px solid #4C6EF5', borderRadius: 2, zIndex: 91,
+                    ...(corner.includes('t') ? { top: -4 } : { bottom: -4 }),
+                    ...(corner.includes('l') ? { left: -4 } : { right: -4 }),
+                    cursor: corner === 'tl' || corner === 'br' ? 'nw-resize' : 'ne-resize',
+                  }}
+                />
+              ))}
+            </>
           )}
           <div className="ufm-price" style={{ display: "flex", alignItems: "baseline" }}>
             {priceParts.type === "MULTI" && (
@@ -695,6 +1226,89 @@ function PlacementCard({
         </div>
       )}
 
+      </div>{/* end content clip wrapper */}
+
+      {/* Image element handles — single dashed border at image frame; crop in image-local coords, border shrinks as user drags */}
+      {editMode && onElementDragStart && !(displaySrcs && displaySrcs.length > 1) && hovered && (() => {
+        const useSingleBounds = imgRender != null && !hasMultiImages;
+        const bW = useSingleBounds ? imgRender!.wrapperStyle.width  : availW;
+        const bH = useSingleBounds ? imgRender!.wrapperStyle.height : availH;
+        const bL = (useSingleBounds ? SIDE_PAD + Math.round((availW - (bW as number)) / 2) : SIDE_PAD) + imgOffsetX;
+        const bT = topPad + imgOffsetY;
+        const EDGE = 4;
+        const cropBounds = { width: bW as number, height: bH as number };
+        const handleCrop = (side: 'left' | 'right' | 'top' | 'bottom', startValue: number) => (e: React.MouseEvent) => {
+          e.stopPropagation();
+          onCropDragStart?.(side, startValue, e, cropBounds);
+        };
+        const borderLeft = bL + cropL;
+        const borderTop = bT + cropT;
+        const borderWidth = Math.max(1, (bW as number) - cropL - cropR);
+        const borderHeight = Math.max(1, (bH as number) - cropT - cropB);
+        return (
+          <div
+            style={{
+              position: 'absolute', left: borderLeft, top: borderTop, width: borderWidth, height: borderHeight,
+              zIndex: 95,
+              transform: imgRotation !== 0 ? `rotate(${imgRotation}deg)` : undefined,
+              transformOrigin: 'center center',
+              pointerEvents: 'none',
+            }}
+          >
+            {/* 4 edges of dashed border — same border shrinks as user drags, no extra component */}
+            {onCropDragStart && (
+              <>
+                <div style={{ position: 'absolute', left: 0, top: 0, width: EDGE, height: '100%', borderLeft: '2px dashed #4C6EF5', cursor: 'ew-resize', zIndex: 90, pointerEvents: 'auto', boxSizing: 'border-box' }} onMouseDown={handleCrop('left', cropL)} />
+                <div style={{ position: 'absolute', right: 0, top: 0, width: EDGE, height: '100%', borderRight: '2px dashed #4C6EF5', cursor: 'ew-resize', zIndex: 90, pointerEvents: 'auto', boxSizing: 'border-box' }} onMouseDown={handleCrop('right', cropR)} />
+                <div style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: EDGE, borderTop: '2px dashed #4C6EF5', cursor: 'ns-resize', zIndex: 90, pointerEvents: 'auto', boxSizing: 'border-box' }} onMouseDown={handleCrop('top', cropT)} />
+                <div style={{ position: 'absolute', left: 0, bottom: 0, width: '100%', height: EDGE, borderBottom: '2px dashed #4C6EF5', cursor: 'ns-resize', zIndex: 90, pointerEvents: 'auto', boxSizing: 'border-box' }} onMouseDown={handleCrop('bottom', cropB)} />
+              </>
+            )}
+            {(['tl','tr','bl','br'] as const).map(corner => (
+              <div
+                key={corner}
+                onMouseDown={(e) => handleCornerMouseDown('image', corner, imgScale, e)}
+                style={{
+                  position: 'absolute',
+                  left: corner.includes('l') ? -5 : undefined,
+                  right: corner.includes('r') ? -5 : undefined,
+                  top: corner.includes('t') ? -5 : undefined,
+                  bottom: corner.includes('b') ? -5 : undefined,
+                  width: 10, height: 10,
+                  background: '#fff', border: '2px solid #4C6EF5', borderRadius: 2, zIndex: 91,
+                  cursor: corner === 'tl' || corner === 'br' ? 'nw-resize' : 'ne-resize',
+                  pointerEvents: 'auto',
+                }}
+              />
+            ))}
+          </div>
+        );
+      })()}
+
+      {/* Rotation dial — outside clip wrapper so it can extend past card bounds in edit mode */}
+      {editMode && onRotateDragStart && !hasMultiImages && (() => {
+        const useSingleBounds = imgRender != null && !hasMultiImages;
+        const bW = (useSingleBounds ? imgRender!.wrapperStyle.width  : availW) as number;
+        const bH = (useSingleBounds ? imgRender!.wrapperStyle.height : availH) as number;
+        const bL = (useSingleBounds ? SIDE_PAD + Math.round((availW - bW) / 2) : SIDE_PAD) + imgOffsetX;
+        const bT = topPad + imgOffsetY;
+        const wrappedRotateDragStart = (startRotation: number, centerX: number, centerY: number, e: React.MouseEvent) => {
+          setRotatingActive(true);
+          const onUp = () => { setRotatingActive(false); window.removeEventListener('mouseup', onUp); };
+          window.addEventListener('mouseup', onUp);
+          onRotateDragStart(startRotation, centerX, centerY, e);
+        };
+        return (
+          <RotationDial
+            bL={bL} bT={bT} bW={bW} bH={bH}
+            rotation={imgRotation}
+            visible={hovered || rotatingActive}
+            isDragging={rotatingActive}
+            onRotateDragStart={wrappedRotateDragStart}
+          />
+        );
+      })()}
+
     </div>
   );
 }
@@ -703,17 +1317,42 @@ export default function RenderFlyerPlacements({
   items,
   placements,
   discountLabels,
+  editMode,
+  activeScaleDrag,
   onElementDragStart,
+  onRotateDragStart,
+  onEditTitle,
+  onEditPrice,
+  onSubImageScaleDragStart,
+  onSubImageRotateDragStart,
+  onDeleteSubImage,
+  onImagePanStart,
+  onSubImagePanStart,
+  onOrientationChange,
+  onCropDragStart,
 }: {
   items: any[];
   placements: any[];
   discountLabels?: DiscountLabel[];
+  editMode?: boolean;
+  activeScaleDrag?: { itemId: string; type: string } | null;
   onElementDragStart?: (
     cardId: string,
     type: 'image' | 'title' | 'price',
+    corner: 'tl' | 'tr' | 'bl' | 'br',
     startScale: number,
     e: React.MouseEvent
   ) => void;
+  onRotateDragStart?: (cardId: string, startRotation: number, centerX: number, centerY: number, e: React.MouseEvent) => void;
+  onEditTitle?: (itemId: string) => void;
+  onEditPrice?: (itemId: string) => void;
+  onSubImageScaleDragStart?: (itemId: string, subIdx: number, corner: 'tl' | 'tr' | 'bl' | 'br', startScale: number, e: React.MouseEvent) => void;
+  onSubImageRotateDragStart?: (itemId: string, subIdx: number, startRot: number, cx: number, cy: number, e: React.MouseEvent) => void;
+  onDeleteSubImage?: (itemId: string, subIdx: number) => void;
+  onImagePanStart?: (itemId: string, startOffsetX: number, startOffsetY: number, e: React.MouseEvent) => void;
+  onSubImagePanStart?: (itemId: string, subIdx: number, startOffsetX: number, startOffsetY: number, e: React.MouseEvent) => void;
+  onOrientationChange?: (itemId: string, orientation: 'vertical' | 'horizontal' | 'top') => void;
+  onCropDragStart?: (itemId: string, side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds?: { width: number; height: number }) => void;
 }) {
   if (!Array.isArray(items) || !Array.isArray(placements)) return null;
 
@@ -761,8 +1400,11 @@ export default function RenderFlyerPlacements({
         if (!item) return null;
         const label = getLabelForItem(item, p.itemId);
         const handleElementDrag = onElementDragStart
-          ? (type: 'image' | 'title' | 'price', startScale: number, e: React.MouseEvent) =>
-              onElementDragStart(p.itemId, type, startScale, e)
+          ? (type: 'image' | 'title' | 'price', corner: 'tl' | 'tr' | 'bl' | 'br', startScale: number, e: React.MouseEvent) =>
+              onElementDragStart(p.itemId, type, corner, startScale, e)
+          : undefined;
+        const handleRotateDrag = onRotateDragStart
+          ? (startRotation: number, centerX: number, centerY: number, e: React.MouseEvent) => onRotateDragStart(p.itemId, startRotation, centerX, centerY, e)
           : undefined;
         return (
           <PlacementCard
@@ -770,7 +1412,33 @@ export default function RenderFlyerPlacements({
             p={p}
             item={item}
             label={label}
+            editMode={editMode}
+            activeScaleDrag={activeScaleDrag}
             onElementDragStart={handleElementDrag}
+            onRotateDragStart={handleRotateDrag}
+            onEditTitle={onEditTitle ? () => onEditTitle(p.itemId) : undefined}
+            onEditPrice={onEditPrice ? () => onEditPrice(p.itemId) : undefined}
+            onSubImageScaleDragStart={onSubImageScaleDragStart
+              ? (subIdx, corner, startScale, e) => onSubImageScaleDragStart(p.itemId, subIdx, corner, startScale, e)
+              : undefined}
+            onSubImageRotateDragStart={onSubImageRotateDragStart
+              ? (subIdx, startRot, cx, cy, e) => onSubImageRotateDragStart(p.itemId, subIdx, startRot, cx, cy, e)
+              : undefined}
+            onDeleteSubImage={onDeleteSubImage
+              ? (subIdx) => onDeleteSubImage(p.itemId, subIdx)
+              : undefined}
+            onImagePanStart={onImagePanStart
+              ? (startOffsetX, startOffsetY, e) => onImagePanStart(p.itemId, startOffsetX, startOffsetY, e)
+              : undefined}
+            onSubImagePanStart={onSubImagePanStart
+              ? (subIdx, startOffsetX, startOffsetY, e) => onSubImagePanStart(p.itemId, subIdx, startOffsetX, startOffsetY, e)
+              : undefined}
+            onOrientationChange={onOrientationChange
+              ? (orientation) => onOrientationChange(p.itemId, orientation)
+              : undefined}
+            onCropDragStart={onCropDragStart
+              ? (side, startValue, e, bounds?) => onCropDragStart(p.itemId, side, startValue, e, bounds)
+              : undefined}
           />
         );
       })}
