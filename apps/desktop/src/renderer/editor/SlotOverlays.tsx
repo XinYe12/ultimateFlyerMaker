@@ -393,57 +393,46 @@ export default function SlotOverlays({
                   </button>
                 )}
                 {/* Single Edit button — opens the edit menu */}
-                {(() => {
-                  const isLowConf = itemForSlot?.result?.lowConfidence === true;
-                  const ms = itemForSlot?.result?.matchSource as string | undefined;
-                  const editBg = ms === "none" ? "#e53e3e"
-                    : ms === "serper" ? "#3182ce"
-                    : isLowConf ? "#d97706"
-                    : "var(--color-warning)";
-                  return (
-                    <button
-                      onClick={() => {
-                        setShowReplaceMenu(index);
-                        setReplacingItemId(placement.itemId);
-                      }}
-                      style={{
-                        width: isLowConf ? "110px" : "80px",
-                        height: "80px",
-                        display: "flex",
-                        flexDirection: "column",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontSize: "12px",
-                        fontWeight: "700",
-                        color: "#fff",
-                        backgroundColor: editBg,
-                        border: "none",
-                        borderRadius: "8px",
-                        cursor: "pointer",
-                        boxShadow: isLowConf ? `0 4px 16px ${editBg}99` : "0 4px 12px rgba(0,0,0,0.3)",
-                        transition: "transform 0.2s, box-shadow 0.2s",
-                        pointerEvents: "auto",
-                        zIndex: 9001,
-                        animation: isLowConf ? "ufm-pulse 1.8s ease-in-out infinite" : undefined,
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.transform = "scale(1.08)";
-                        e.currentTarget.style.boxShadow = "0 6px 20px rgba(0,0,0,0.4)";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.transform = "scale(1)";
-                        e.currentTarget.style.boxShadow = isLowConf ? `0 4px 16px ${editBg}99` : "0 4px 12px rgba(0,0,0,0.3)";
-                      }}
-                    >
-                      <div style={{ fontSize: "20px", marginBottom: "4px", lineHeight: 1 }}>
-                        {isLowConf ? "⚠️" : "✏️"}
-                      </div>
-                      <div style={{ fontSize: "11px", fontWeight: "700" }}>
-                        {ms === "none" ? "Replace!" : ms === "serper" ? "Check" : isLowConf ? "Check" : "Edit"}
-                      </div>
-                    </button>
-                  );
-                })()}
+                <button
+                  onClick={() => {
+                    setShowReplaceMenu(index);
+                    setReplacingItemId(placement.itemId);
+                  }}
+                  style={{
+                    width: "80px",
+                    height: "80px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: "12px",
+                    fontWeight: "700",
+                    color: "#fff",
+                    backgroundColor: "var(--color-warning)",
+                    border: "none",
+                    borderRadius: "8px",
+                    cursor: "pointer",
+                    boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+                    transition: "transform 0.2s, box-shadow 0.2s",
+                    pointerEvents: "auto",
+                    zIndex: 9001,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = "scale(1.08)";
+                    e.currentTarget.style.boxShadow = "0 6px 20px rgba(0,0,0,0.4)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = "scale(1)";
+                    e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.3)";
+                  }}
+                >
+                  <div style={{ fontSize: "20px", marginBottom: "4px", lineHeight: 1 }}>
+                    ✏️
+                  </div>
+                  <div style={{ fontSize: "11px", fontWeight: "700" }}>
+                    Edit
+                  </div>
+                </button>
               </div>
             )}
 

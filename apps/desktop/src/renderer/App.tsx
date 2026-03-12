@@ -674,10 +674,10 @@ export default function App() {
   };
 
   // ---------------- SUB-IMAGE OVERRIDES ----------------
-  const handleSubImageUpdate = (itemId: string, subIdx: number, patch: { scale?: number; rotation?: number; x?: number; y?: number }) => {
+  const handleSubImageUpdate = (itemId: string, subIdx: number, patch: { scale?: number; rotation?: number; x?: number; y?: number; cropLeft?: number; cropRight?: number; cropTop?: number; cropBottom?: number }) => {
     const item = editorQueue.find((i: any) => i.id === itemId);
     if (!item?.result) return;
-    const existing: Array<{ scale?: number; rotation?: number; x?: number; y?: number }> = item.result.subImageOverrides ?? [];
+    const existing: Array<{ scale?: number; rotation?: number; x?: number; y?: number; cropLeft?: number; cropRight?: number; cropTop?: number; cropBottom?: number }> = item.result.subImageOverrides ?? [];
     const updated = [...existing];
     while (updated.length <= subIdx) updated.push({});
     updated[subIdx] = { ...updated[subIdx], ...patch };
@@ -944,6 +944,25 @@ export default function App() {
       ?? (item?.result?.aiTitle as any)?.en ?? "";
   })();
 
+  // Effective row count for the toolbar rows control
+  const effectiveRowCount = currentCardLayout && currentCardLayout.length > 0
+    ? Math.max(...currentCardLayout.map((c) => c.row)) + 1
+    : (userRowCounts[department] ?? 1);
+
+  const toolbarBtnBase: React.CSSProperties = {
+    display: "flex", alignItems: "center", gap: 6,
+    height: 32, padding: "0 12px",
+    border: "none", borderRadius: "var(--radius-sm)",
+    fontWeight: 600, fontSize: 13,
+    cursor: "pointer", fontFamily: "var(--font-sans)",
+    whiteSpace: "nowrap",
+  };
+  const rowBtnStyle: React.CSSProperties = {
+    width: 26, height: 26, cursor: "pointer",
+    borderRadius: 4, border: "1px solid #d1d5db",
+    background: "#f9fafb", fontSize: 14, fontWeight: 600,
+  };
+
   // ---------------- RENDER ----------------
   return (
     <ErrorBoundary>
@@ -1000,8 +1019,17 @@ export default function App() {
 
             {viewingJob && (
               <>
-                {/* Editor toolbar: department picker + add product */}
-                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 0 12px", position: "relative" }}>
+                {/* Primary toolbar */}
+                <div style={{
+                  display: "flex", alignItems: "center",
+                  background: "#fff",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: "var(--radius-md)",
+                  padding: "6px 10px",
+                  gap: 4,
+                  marginBottom: 12,
+                }}>
+                  {/* Left: department picker */}
                   <EditorSidebar
                     isOpen={sidebarOpen}
                     onToggle={() => setSidebarOpen((o) => !o)}
@@ -1011,23 +1039,15 @@ export default function App() {
                     itemCount={editorQueue.length}
                     onClear={departmentLocked ? undefined : handleClearDepartment}
                   />
+
+                  {/* Separator */}
+                  {!departmentLocked && <div style={{ width: 1, height: 20, background: "var(--color-border)", margin: "0 6px" }} />}
+
+                  {/* Action buttons */}
                   {!departmentLocked && (
                     <button
                       onClick={() => setShowAddProductDialog(true)}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                        padding: "7px 14px",
-                        border: "none",
-                        borderRadius: "var(--radius-sm)",
-                        background: "var(--color-success)",
-                        color: "#fff",
-                        fontWeight: 600,
-                        fontSize: "var(--text-base)",
-                        cursor: "pointer",
-                        fontFamily: "var(--font-sans)",
-                      }}
+                      style={{ ...toolbarBtnBase, background: "var(--color-success)", color: "#fff" }}
                       onMouseEnter={(e) => { e.currentTarget.style.background = "#237032"; }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = "var(--color-success)"; }}
                     >
@@ -1035,94 +1055,103 @@ export default function App() {
                       Add Product
                     </button>
                   )}
-                  {isDeptCardBased() && !departmentLocked && editorQueue.length > 0 && (
-                    <button
-                      onClick={() => setEditMode(v => !v)}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                        padding: "7px 14px",
-                        border: "none",
-                        borderRadius: "var(--radius-sm)",
-                        background: editMode ? "#4C6EF5" : "#e2e8f0",
-                        color: editMode ? "#fff" : "#374151",
-                        fontWeight: 600,
-                        fontSize: "var(--text-base)",
-                        cursor: "pointer",
-                        fontFamily: "var(--font-sans)",
-                        transition: "background 0.2s, color 0.2s",
-                      }}
-                      title={editMode ? "Exit edit mode (Escape)" : "Enter edit mode to resize elements"}
-                    >
-                      ✏ Edit Mode
-                    </button>
-                  )}
                   {!departmentLocked && editorQueue.length > 0 && (
-                    <button
-                      onClick={() => {
-                        if (verificationDone) {
-                          setVerificationDone(false);
-                          setVerificationProgress(null);
-                        }
-                        setShowCheckingPanel(true);
-                      }}
-                      disabled={editMode}
-                      style={{
+                    isDeptCardBased() ? (
+                      <div style={{
                         display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                        padding: "7px 14px",
-                        border: verificationDone ? "1.5px solid #16a34a" : "none",
-                        borderRadius: "var(--radius-sm)",
-                        background: editMode ? "#e2e8f0" : verificationDone ? "#dcfce7" : "#7c3aed",
-                        color: editMode ? "#94a3b8" : verificationDone ? "#15803d" : "#fff",
-                        fontWeight: 600,
-                        fontSize: "var(--text-base)",
-                        cursor: editMode ? "not-allowed" : "pointer",
-                        fontFamily: "var(--font-sans)",
-                        transition: "background 0.2s, color 0.2s",
-                        opacity: editMode ? 0.6 : 1,
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!editMode) e.currentTarget.style.background = verificationDone ? "#bbf7d0" : "#6d28d9";
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!editMode) e.currentTarget.style.background = verificationDone ? "#dcfce7" : "#7c3aed";
-                      }}
-                      title={editMode ? "Exit edit mode first" : verificationDone ? "Verification complete — click to re-verify" : "Verify products"}
-                    >
-                      {verificationDone ? "✓ Verified" : "✓ Verify"}
-                    </button>
+                        background: "#f0f1f3",
+                        borderRadius: 8,
+                        padding: 3,
+                        gap: 2,
+                      }}>
+                        <button
+                          onClick={() => setEditMode(v => !v)}
+                          style={{
+                            height: 26, padding: "0 12px",
+                            border: "none", borderRadius: 6,
+                            background: editMode ? "#fff" : "transparent",
+                            boxShadow: editMode ? "0 1px 3px rgba(0,0,0,0.15)" : "none",
+                            color: editMode ? "#2563eb" : "#6b7280",
+                            fontWeight: 600, fontSize: 13,
+                            cursor: "pointer", fontFamily: "var(--font-sans)",
+                            whiteSpace: "nowrap",
+                            transition: "background 0.15s, color 0.15s, box-shadow 0.15s",
+                          }}
+                          title={editMode ? "Exit edit mode (Escape)" : "Enter edit mode to resize elements"}
+                        >
+                          ✏ Edit Mode
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (editMode) return;
+                            if (verificationDone) {
+                              setVerificationDone(false);
+                              setVerificationProgress(null);
+                            }
+                            setShowCheckingPanel(true);
+                          }}
+                          style={{
+                            height: 26, padding: "0 12px",
+                            border: "none", borderRadius: 6,
+                            background: !editMode && verificationDone ? "#fff" : "transparent",
+                            boxShadow: !editMode && verificationDone ? "0 1px 3px rgba(0,0,0,0.15)" : "none",
+                            color: editMode ? "#9ca3af" : verificationDone ? "#15803d" : "#6b7280",
+                            fontWeight: 600, fontSize: 13,
+                            cursor: editMode ? "not-allowed" : "pointer",
+                            fontFamily: "var(--font-sans)",
+                            whiteSpace: "nowrap",
+                            transition: "background 0.15s, color 0.15s, box-shadow 0.15s",
+                          }}
+                          title={editMode ? "Exit edit mode first" : verificationDone ? "Verification complete — click to re-verify" : "Verify products"}
+                        >
+                          {verificationDone ? "✓ Verified" : "✓ Verify"}
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          if (verificationDone) {
+                            setVerificationDone(false);
+                            setVerificationProgress(null);
+                          }
+                          setShowCheckingPanel(true);
+                        }}
+                        style={{
+                          ...toolbarBtnBase,
+                          border: verificationDone ? "1.5px solid #16a34a" : "none",
+                          background: verificationDone ? "#dcfce7" : "#7c3aed",
+                          color: verificationDone ? "#15803d" : "#fff",
+                          transition: "background 0.2s, color 0.2s",
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = verificationDone ? "#bbf7d0" : "#6d28d9"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = verificationDone ? "#dcfce7" : "#7c3aed"; }}
+                        title={verificationDone ? "Verification complete — click to re-verify" : "Verify products"}
+                      >
+                        {verificationDone ? "✓ Verified" : "✓ Verify"}
+                      </button>
+                    )
                   )}
                   {verificationDone && (
                     <button
                       onClick={handleToggleLock}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                        padding: "7px 14px",
-                        border: "none",
-                        borderRadius: "var(--radius-sm)",
-                        background: departmentLocked ? "#dc2626" : "#b45309",
-                        color: "#fff",
-                        fontWeight: 600,
-                        fontSize: "var(--text-base)",
-                        cursor: "pointer",
-                        fontFamily: "var(--font-sans)",
-                        transition: "background 0.2s",
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background = departmentLocked ? "#b91c1c" : "#92400e";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = departmentLocked ? "#dc2626" : "#b45309";
-                      }}
+                      style={{ ...toolbarBtnBase, background: departmentLocked ? "#dc2626" : "#b45309", color: "#fff", transition: "background 0.2s" }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = departmentLocked ? "#b91c1c" : "#92400e"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = departmentLocked ? "#dc2626" : "#b45309"; }}
                       title={departmentLocked ? "Click to unlock this department" : "Lock this department"}
                     >
                       {departmentLocked ? "🔒 Locked" : "🔒 Lock Department"}
                     </button>
+                  )}
+
+                  {/* Right: Rows control */}
+                  {isDeptCardBased() && !departmentLocked && editorQueue.length > 0 && (
+                    <>
+                      <div style={{ width: 1, height: 20, background: "var(--color-border)", margin: "0 6px" }} />
+                      <span style={{ fontSize: 13, color: "#555", whiteSpace: "nowrap" }}>Rows:</span>
+                      <button onClick={() => handleRowCountChange(Math.max(1, effectiveRowCount - 1))} style={rowBtnStyle}>−</button>
+                      <span style={{ minWidth: 18, textAlign: "center", fontSize: 13, fontWeight: 600 }}>{effectiveRowCount}</span>
+                      <button onClick={() => handleRowCountChange(effectiveRowCount + 1)} style={rowBtnStyle}>+</button>
+                    </>
                   )}
                 </div>
 
@@ -1216,6 +1245,9 @@ export default function App() {
                     onProgressChange={setVerificationProgress}
                     onClose={() => setShowCheckingPanel(false)}
                     onComplete={() => { setVerificationDone(true); setVerificationProgress(null); setShowCheckingPanel(false); }}
+                    onReplaceImage={handleReplaceImage}
+                    onSearchReplace={handleSearchReplace}
+                    onSaveDiscountDetails={handleSaveDiscountDetails}
                   />
                 )}
               </>

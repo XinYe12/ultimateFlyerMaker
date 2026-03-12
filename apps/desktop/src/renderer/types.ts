@@ -44,7 +44,7 @@ export type IngestResult = {
   /** True when item is a series and user has not yet chosen which flavors to include */
   pendingFlavorSelection?: boolean;
   /** Per-sub-image overrides; index matches cutoutPaths[]. Not used for price-based duplicates. */
-  subImageOverrides?: Array<{ scale?: number; rotation?: number; x?: number; y?: number }>;
+  subImageOverrides?: Array<{ scale?: number; rotation?: number; x?: number; y?: number; cropLeft?: number; cropRight?: number; cropTop?: number; cropBottom?: number }>;
   layout: { size: string };
   titleImagePath?: string;
   priceImagePath?: string;
@@ -199,6 +199,11 @@ export type CardDef = {
   cropRight?: number;   // px inset from right edge
   cropTop?: number;     // px inset from top edge
   cropBottom?: number;  // px inset from bottom edge
+  titleFontFamily?: string;
+  titleColor?: string;
+  titleItalic?: boolean;
+  priceFontFamily?: string;
+  priceColor?: string;
 };
 
 export type CardLayout = CardDef[];

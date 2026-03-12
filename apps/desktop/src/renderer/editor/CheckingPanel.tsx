@@ -2,6 +2,8 @@
 // ROLE: Full-screen overlay for item-by-item verification (title → image → price)
 
 import { useState, useEffect, useRef, CSSProperties } from "react";
+import DbSearchModal from "./DbSearchModal";
+import GoogleSearchModal from "./GoogleSearchModal";
 
 type Step = "title" | "image" | "price";
 
@@ -26,6 +28,9 @@ type CheckingPanelProps = {
   onClose: () => void;
   onComplete: (flaggedIndices: number[]) => void;
   onProgressChange: (progress: VerificationProgress) => void;
+  onReplaceImage?: (itemId: string) => void;
+  onSearchReplace?: (itemId: string, data: { path: string; result: any }) => void;
+  onSaveDiscountDetails?: (itemId: string, en: string, regularPrice: string, salePrice: string) => void;
 };
 
 const STEPS: Step[] = ["title", "image", "price"];
@@ -83,7 +88,18 @@ function runSystemCheck(
   return result;
 }
 
-export default function CheckingPanel({ items, discountLabels, originalDiscounts, initialProgress, onClose, onComplete, onProgressChange }: CheckingPanelProps) {
+export default function CheckingPanel({
+  items,
+  discountLabels,
+  originalDiscounts,
+  initialProgress,
+  onClose,
+  onComplete,
+  onProgressChange,
+  onReplaceImage,
+  onSearchReplace,
+  onSaveDiscountDetails,
+}: CheckingPanelProps) {
   const [currentIdx, setCurrentIdx] = useState<number>(() => initialProgress?.currentIdx ?? 0);
   const [step, setStep] = useState<Step>(() => initialProgress?.step ?? "title");
   const [flags, setFlags] = useState<Set<number>>(() => new Set(initialProgress?.flags ?? []));
@@ -93,6 +109,15 @@ export default function CheckingPanel({ items, discountLabels, originalDiscounts
   });
   const [done, setDone] = useState(false);
   const [systemChecks, setSystemChecks] = useState<Map<number, SystemCheckResult>>(new Map());
+
+  // Modal state for DB/Google modals rendered inside the panel
+  const [dbSearchItemId, setDbSearchItemId] = useState<string | null>(null);
+  const [googleSearchItemId, setGoogleSearchItemId] = useState<string | null>(null);
+
+  // Inline edit state
+  const [editTitle, setEditTitle] = useState<{ en: string; zh: string; size: string; regularPrice: string } | null>(null);
+  const [editSalePrice, setEditSalePrice] = useState<string>("");
+  const [editRegularPrice, setEditRegularPrice] = useState<string>("");
 
   // Scroll active item into view in both panels
   const leftListRef = useRef<HTMLDivElement>(null);
@@ -105,6 +130,30 @@ export default function CheckingPanel({ items, discountLabels, originalDiscounts
       if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
     });
   }, [currentIdx]);
+
+  // Re-initialize edit state when item or step changes
+  useEffect(() => {
+    const item = items[currentIdx];
+    const label = discountLabels[currentIdx];
+    if (step === "title") {
+      setEditTitle({
+        en: label?.title?.en ?? item?.result?.title?.en ?? "",
+        zh: label?.title?.zh ?? item?.result?.title?.zh ?? "",
+        size: label?.title?.size ?? item?.result?.title?.size ?? "",
+        regularPrice: label?.title?.regularPrice ?? label?.price?.regular ?? item?.result?.title?.regularPrice ?? item?.result?.discount?.regularPrice ?? "",
+      });
+    } else if (step === "price") {
+      const priceDisplay = label?.price?.display ?? item?.result?.discount?.salePrice ?? "";
+      setEditSalePrice(priceDisplay);
+      setEditRegularPrice(
+        label?.title?.regularPrice
+        ?? label?.price?.regular
+        ?? item?.result?.title?.regularPrice
+        ?? item?.result?.discount?.regularPrice
+        ?? ""
+      );
+    }
+  }, [currentIdx, step]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Run system check once on mount
   useEffect(() => {
@@ -126,6 +175,12 @@ export default function CheckingPanel({ items, discountLabels, originalDiscounts
   }
 
   const totalItems = items.length;
+
+  // Helper to get query string for a given item
+  const getQueryForItem = (itemId: string): string => {
+    const it = items.find((x: any) => x.id === itemId);
+    return it?.result?.discount?.en ?? it?.result?.title?.en ?? "";
+  };
 
   // Pure computation — returns next position without touching state
   const computeAdvance = (idx: number, currentStep: Step): { nextIdx: number; nextStep: Step; isDone: boolean } => {
@@ -238,6 +293,31 @@ export default function CheckingPanel({ items, discountLabels, originalDiscounts
 
   const origTitle = noOrig ? null : `${orig.en ?? ""}${orig.zh ? ` / ${orig.zh}` : ""}`;
   const origPrice = noOrig ? null : (orig.price?.display ?? orig.salePrice ?? "—");
+
+  // Title save: check if anything changed
+  const titleChanged = editTitle !== null && (
+    editTitle.en !== (label?.title?.en ?? item?.result?.title?.en ?? "") ||
+    editTitle.zh !== (label?.title?.zh ?? item?.result?.title?.zh ?? "") ||
+    editTitle.size !== (label?.title?.size ?? item?.result?.title?.size ?? "") ||
+    editTitle.regularPrice !== (label?.title?.regularPrice ?? label?.price?.regular ?? item?.result?.title?.regularPrice ?? item?.result?.discount?.regularPrice ?? "")
+  );
+
+  const handleSaveTitle = () => {
+    if (!editTitle || !item) return;
+    const existingSalePrice = label?.price?.display ?? item?.result?.discount?.salePrice ?? "";
+    onSaveDiscountDetails?.(item.id, editTitle.en, editTitle.regularPrice, existingSalePrice);
+  };
+
+  // Price save: check if anything changed
+  const originalSalePrice = label?.price?.display ?? item?.result?.discount?.salePrice ?? "";
+  const originalRegularPrice = label?.title?.regularPrice ?? label?.price?.regular ?? item?.result?.title?.regularPrice ?? item?.result?.discount?.regularPrice ?? "";
+  const priceChanged = editSalePrice !== originalSalePrice || editRegularPrice !== originalRegularPrice;
+
+  const handleSavePrice = () => {
+    if (!item) return;
+    const existingEn = label?.title?.en ?? item?.result?.title?.en ?? "";
+    onSaveDiscountDetails?.(item.id, existingEn, editRegularPrice, editSalePrice);
+  };
 
   return (
     <div style={overlayStyle} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -354,35 +434,123 @@ export default function CheckingPanel({ items, discountLabels, originalDiscounts
             {/* Editor side */}
             <div style={compareCardStyle}>
               <div style={compareLabelStyle}>Editor</div>
-              {step === "title" && (
-                <div style={{ textAlign: "center" }}>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", marginBottom: 8 }}>{label?.title?.en ?? item?.result?.title?.en ?? <em style={{ color: "#94a3b8" }}>No title</em>}</div>
-                  {(label?.title?.zh || item?.result?.title?.zh) && (
-                    <div style={{ fontSize: 16, color: "#475569", marginBottom: 6 }}>{label?.title?.zh ?? item?.result?.title?.zh}</div>
-                  )}
-                  {(label?.title?.size || item?.result?.title?.size) && (
-                    <div style={{ fontSize: 13, color: "#94a3b8" }}>{label?.title?.size ?? item?.result?.title?.size}</div>
+              {step === "title" && editTitle !== null && (
+                <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div>
+                    <label style={editLabelStyle}>English</label>
+                    <input
+                      value={editTitle.en}
+                      onChange={(e) => setEditTitle({ ...editTitle, en: e.target.value })}
+                      style={editInputStyle}
+                      placeholder="English title"
+                    />
+                  </div>
+                  <div>
+                    <label style={editLabelStyle}>Chinese (optional)</label>
+                    <input
+                      value={editTitle.zh}
+                      onChange={(e) => setEditTitle({ ...editTitle, zh: e.target.value })}
+                      style={editInputStyle}
+                      placeholder="中文名称"
+                    />
+                  </div>
+                  <div>
+                    <label style={editLabelStyle}>Size (optional)</label>
+                    <input
+                      value={editTitle.size}
+                      onChange={(e) => setEditTitle({ ...editTitle, size: e.target.value })}
+                      style={editInputStyle}
+                      placeholder="e.g. 500g"
+                    />
+                  </div>
+                  <div>
+                    <label style={editLabelStyle}>Regular price</label>
+                    <input
+                      value={editTitle.regularPrice}
+                      onChange={(e) => setEditTitle({ ...editTitle, regularPrice: e.target.value })}
+                      style={editInputStyle}
+                      placeholder="e.g. 4.99"
+                    />
+                  </div>
+                  {titleChanged && onSaveDiscountDetails && (
+                    <button onClick={handleSaveTitle} style={{ ...btnBase("#7c3aed"), marginTop: 4, fontSize: 13, padding: "8px 16px" }}>
+                      Save ✓
+                    </button>
                   )}
                 </div>
               )}
               {step === "image" && (
-                <div style={{ textAlign: "center" }}>
+                <div style={{ textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
                   {cutoutPath ? (
                     <img
                       src={cutoutPath.startsWith("http") ? cutoutPath : `file://${cutoutPath}`}
-                      style={{ maxWidth: 300, maxHeight: 260, objectFit: "contain" }}
+                      style={{ maxWidth: 300, maxHeight: 220, objectFit: "contain" }}
                       alt="Product"
                     />
                   ) : (
                     <div style={{ color: "#94a3b8", fontStyle: "italic" }}>No image available</div>
                   )}
+                  {/* Image replacement buttons */}
+                  {(onReplaceImage || onSearchReplace) && (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+                      {onReplaceImage && (
+                        <button
+                          onClick={() => onReplaceImage(item.id)}
+                          style={imgReplaceBtnStyle}
+                          title="Upload local file"
+                        >
+                          📁 Local
+                        </button>
+                      )}
+                      {onSearchReplace && (
+                        <button
+                          onClick={() => setDbSearchItemId(item.id)}
+                          style={imgReplaceBtnStyle}
+                          title="Search product database"
+                        >
+                          💾 Database
+                        </button>
+                      )}
+                      {onSearchReplace && (
+                        <button
+                          onClick={() => setGoogleSearchItemId(item.id)}
+                          style={imgReplaceBtnStyle}
+                          title="Search Google Images"
+                        >
+                          🔍 Google
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
               {step === "price" && (
-                <div style={{ textAlign: "center" }}>
-                  <div style={{ fontSize: 28, fontWeight: 700, color: "#0f172a" }}>{editorPrice}</div>
-                  {label?.title?.regularPrice && (
-                    <div style={{ fontSize: 14, color: "#94a3b8", marginTop: 8 }}>Reg: {label.title.regularPrice}</div>
+                <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div>
+                    <label style={editLabelStyle}>Sale price</label>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 18, color: "#475569" }}>$</span>
+                      <input
+                        value={editSalePrice}
+                        onChange={(e) => setEditSalePrice(e.target.value)}
+                        style={{ ...editInputStyle, fontSize: 20, fontWeight: 700 }}
+                        placeholder="9.99"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label style={editLabelStyle}>Regular price</label>
+                    <input
+                      value={editRegularPrice}
+                      onChange={(e) => setEditRegularPrice(e.target.value)}
+                      style={editInputStyle}
+                      placeholder="e.g. 12.99"
+                    />
+                  </div>
+                  {priceChanged && onSaveDiscountDetails && (
+                    <button onClick={handleSavePrice} style={{ ...btnBase("#7c3aed"), marginTop: 4, fontSize: 13, padding: "8px 16px" }}>
+                      Save ✓
+                    </button>
                   )}
                 </div>
               )}
@@ -479,6 +647,31 @@ export default function CheckingPanel({ items, discountLabels, originalDiscounts
           </div>
         </div>
       </div>
+
+      {/* ── Modals rendered above the panel (z-index: 21000) ── */}
+      {dbSearchItemId && onSearchReplace && (
+        <DbSearchModal
+          itemId={dbSearchItemId}
+          initialQuery={getQueryForItem(dbSearchItemId)}
+          onReplace={(id, data) => { onSearchReplace(id, data); setDbSearchItemId(null); }}
+          onClose={() => setDbSearchItemId(null)}
+          zIndex={21000}
+        />
+      )}
+      {googleSearchItemId && onSearchReplace && (
+        <GoogleSearchModal
+          itemId={googleSearchItemId}
+          initialQuery={getQueryForItem(googleSearchItemId)}
+          currentImageSrc={(() => {
+            const it = items.find((x: any) => x.id === googleSearchItemId);
+            const src = it?.result?.cutoutPath ?? it?.result?.inputPath;
+            return src ? (src.startsWith("http") ? src : `file://${src}`) : undefined;
+          })()}
+          onReplace={(id, data) => { onSearchReplace(id, data); setGoogleSearchItemId(null); }}
+          onClose={() => setGoogleSearchItemId(null)}
+          zIndex={21000}
+        />
+      )}
     </div>
   );
 }
@@ -648,6 +841,40 @@ const compareLabelStyle: CSSProperties = {
   letterSpacing: "0.08em",
   marginBottom: 8,
   alignSelf: "flex-start",
+};
+
+const editLabelStyle: CSSProperties = {
+  display: "block",
+  fontSize: 10,
+  fontWeight: 600,
+  color: "#94a3b8",
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
+  marginBottom: 3,
+};
+
+const editInputStyle: CSSProperties = {
+  width: "100%",
+  padding: "7px 10px",
+  fontSize: 14,
+  border: "1px solid #cbd5e1",
+  borderRadius: 6,
+  fontFamily: "inherit",
+  background: "#fff",
+  color: "#0f172a",
+  boxSizing: "border-box",
+};
+
+const imgReplaceBtnStyle: CSSProperties = {
+  padding: "6px 12px",
+  fontSize: 12,
+  fontWeight: 600,
+  border: "1px solid #cbd5e1",
+  borderRadius: 6,
+  background: "#f8fafc",
+  cursor: "pointer",
+  color: "#475569",
+  fontFamily: "inherit",
 };
 
 function btnBase(bg: string): CSSProperties {

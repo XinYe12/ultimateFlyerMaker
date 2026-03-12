@@ -6,9 +6,10 @@ type Props = {
   initialQuery: string;
   onReplace: (itemId: string, data: { path: string; result: any }) => void;
   onClose: () => void;
+  zIndex?: number;
 };
 
-export default function DbSearchModal({ itemId, initialQuery, onReplace, onClose }: Props) {
+export default function DbSearchModal({ itemId, initialQuery, onReplace, onClose, zIndex = 10000 }: Props) {
   const [searchQuery, setSearchQuery] = useState(initialQuery);
   const [results, setResults] = useState<DbSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -67,7 +68,7 @@ export default function DbSearchModal({ itemId, initialQuery, onReplace, onClose
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        zIndex: 10000,
+        zIndex,
       }}
       onClick={() => !replacing && onClose()}
     >

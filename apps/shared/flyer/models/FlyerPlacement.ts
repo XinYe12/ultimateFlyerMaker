@@ -19,4 +19,9 @@ export type FlyerPlacement = {
   cropRight?: number
   cropTop?: number
   cropBottom?: number
+  titleFontFamily?: string
+  titleColor?: string
+  titleItalic?: boolean
+  priceFontFamily?: string
+  priceColor?: string
 }

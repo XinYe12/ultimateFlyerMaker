@@ -26,6 +26,7 @@ const TAB_LABELS: { id: Tab; label: string; icon: string }[] = [
 ];
 
 const DB_RESULT_LIMIT = 3;
+const DB_SEARCH_TIMEOUT_MS = 10000;
 
 function formatPriceDisplay(raw: string): string {
   const trimmed = raw.trim();
@@ -105,9 +106,18 @@ export default function AddImageModal({ slotIndex, onLocalFile, onItemReady, onC
     setDbResults([]);
     setSearchedOnce(false);
     setStagedItems([]);
+    const TIMEOUT_SENTINEL = Symbol("db-search-timeout");
     try {
-      const dbRes = await window.ufm.searchDatabaseByText(query);
-      setDbResults((dbRes ?? []).slice(0, DB_RESULT_LIMIT));
+      const dbPromise = window.ufm.searchDatabaseByText(query);
+      const timeoutPromise = new Promise<symbol>((resolve) =>
+        setTimeout(() => resolve(TIMEOUT_SENTINEL), DB_SEARCH_TIMEOUT_MS)
+      );
+      const result = await Promise.race([dbPromise, timeoutPromise]);
+      if (result === TIMEOUT_SENTINEL) {
+        setDbResults([]);
+      } else {
+        setDbResults((result ?? []).slice(0, DB_RESULT_LIMIT));
+      }
       setWebviewUrl(buildGoogleUrl(query));
       setSearchedOnce(true);
     } catch (err) {

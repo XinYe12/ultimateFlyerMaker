@@ -22,6 +22,11 @@ export type CardDef = {
   cropRight?: number;
   cropTop?: number;
   cropBottom?: number;
+  titleFontFamily?: string;
+  titleColor?: string;
+  titleItalic?: boolean;
+  priceFontFamily?: string;
+  priceColor?: string;
 };
 
 /**
@@ -143,6 +148,11 @@ export function layoutCardRows({
       cropRight: card.cropRight,
       cropTop: card.cropTop,
       cropBottom: card.cropBottom,
+      titleFontFamily: card.titleFontFamily,
+      titleColor: card.titleColor,
+      titleItalic: card.titleItalic,
+      priceFontFamily: card.priceFontFamily,
+      priceColor: card.priceColor,
     });
   }
 

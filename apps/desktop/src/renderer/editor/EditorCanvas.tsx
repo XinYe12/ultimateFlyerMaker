@@ -15,6 +15,7 @@ import { layoutCardRows, computeCardRects, deriveRowCount, CARD_GAP, CARD_BG } f
 import { saveDepartmentDraft } from "./draftStorage";
 import { IngestItem, CardDef, CardLayout } from "../types";
 import MergeSelectionDialog, { MergeCandidate } from "./MergeSelectionDialog";
+import FontToolbar from "./FontToolbar";
 
 const PREVIEW_SCALE = 0.5;
 const MIN_CARD_WIDTH = 150;
@@ -89,13 +90,14 @@ export default function EditorCanvas({
   rowCount?: number;
   onRowCountChange?: (rows: number) => void;
   editMode?: boolean;
-  onSubImageUpdate?: (itemId: string, subIdx: number, patch: { scale?: number; rotation?: number; x?: number; y?: number }) => void;
+  onSubImageUpdate?: (itemId: string, subIdx: number, patch: { scale?: number; rotation?: number; x?: number; y?: number; cropLeft?: number; cropRight?: number; cropTop?: number; cropBottom?: number }) => void;
   onDeleteSubImage?: (itemId: string, subIdx: number) => void;
 }) {
   const [config, setConfig] = useState<any | null>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   const [addImageModalSlot, setAddImageModalSlot] = useState<number | null>(null);
   const [addImageModalCardId, setAddImageModalCardId] = useState<string | null>(null);
+  const [fontTarget, setFontTarget] = useState<{ itemId: string; element: 'title' | 'price' } | null>(null);
 
   // load template config
   useEffect(() => {
@@ -104,6 +106,8 @@ export default function EditorCanvas({
 
   // editorQueue is already glued content
   const items = editorQueue;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
 
   // persist draft
   useEffect(() => {
@@ -119,7 +123,6 @@ export default function EditorCanvas({
   const isCard = region ? isCardDepartment(region) : false;
   const isSlotted = region ? isSlottedDepartment(region) : false;
 
-  const effectiveRowCount = rowCount ?? (cardLayout ? deriveRowCount(cardLayout) : 3);
 
   // ── Slot drag/resize state (for slot-based departments) ──
   const [activeDrag, setActiveDrag] = useState<{
@@ -206,6 +209,16 @@ export default function EditorCanvas({
     startX: number; startY: number;
     startValue: number;
     cardWidth: number; cardHeight: number;
+  } | null>(null);
+
+  // ── Sub-image crop drag state (for multi-buy / multi-flavor) ──
+  const [subImageCropDrag, setSubImageCropDrag] = useState<{
+    itemId: string;
+    subIdx: number;
+    side: 'left' | 'right' | 'top' | 'bottom';
+    startX: number; startY: number;
+    startValue: number;
+    imgWidth: number; imgHeight: number;
   } | null>(null);
 
   // ── Merge state ──
@@ -432,6 +445,17 @@ export default function EditorCanvas({
     [cardLayout, onCardLayoutChange]
   );
 
+  const handleFontUpdate = useCallback(
+    (updates: Partial<Pick<CardDef, 'titleFontFamily' | 'titleColor' | 'titleItalic' | 'priceFontFamily' | 'priceColor'>>) => {
+      if (!fontTarget || !cardLayout || !onCardLayoutChange) return;
+      const updated = cardLayout.map(c =>
+        c.itemId === fontTarget.itemId ? { ...c, ...updates } : c
+      );
+      onCardLayoutChange(updated);
+    },
+    [fontTarget, cardLayout, onCardLayoutChange]
+  );
+
   const handleCropDragStart = useCallback(
     (itemId: string, side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds?: { width: number; height: number }) => {
       if (!onCardLayoutChange) return;
@@ -448,6 +472,18 @@ export default function EditorCanvas({
       });
     },
     [onCardLayoutChange, cardLayout]
+  );
+
+  const handleSubImageCropDragStart = useCallback(
+    (itemId: string, subIdx: number, side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds: { width: number; height: number }) => {
+      if (!onSubImageUpdate) return;
+      e.preventDefault(); e.stopPropagation();
+      setSubImageCropDrag({
+        itemId, subIdx, side, startX: e.clientX, startY: e.clientY, startValue,
+        imgWidth: bounds.width, imgHeight: bounds.height,
+      });
+    },
+    [onSubImageUpdate]
   );
 
   // Global mouse handlers for slot drag/resize
@@ -761,6 +797,41 @@ export default function EditorCanvas({
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [cropDrag, cardLayout, onCardLayoutChange]);
+
+  // Global sub-image crop drag handlers
+  useEffect(() => {
+    if (!subImageCropDrag || !onSubImageUpdate) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const item = itemsRef.current.find((i: any) => i.id === subImageCropDrag.itemId);
+      const subOverride = item?.result?.subImageOverrides?.[subImageCropDrag.subIdx] ?? {};
+      const dx = (e.clientX - subImageCropDrag.startX) / PREVIEW_SCALE;
+      const dy = (e.clientY - subImageCropDrag.startY) / PREVIEW_SCALE;
+      const { side, startValue, imgWidth, imgHeight } = subImageCropDrag;
+      const cropL = (subOverride.cropLeft ?? 0) as number;
+      const cropR = (subOverride.cropRight ?? 0) as number;
+      const cropT = (subOverride.cropTop ?? 0) as number;
+      const cropB = (subOverride.cropBottom ?? 0) as number;
+
+      let newValue: number;
+      if (side === 'left')        newValue = Math.max(0, Math.min(startValue + dx,  imgWidth - cropR));
+      else if (side === 'right')  newValue = Math.max(0, Math.min(startValue - dx,  imgWidth - cropL));
+      else if (side === 'top')    newValue = Math.max(0, Math.min(startValue + dy,  imgHeight - cropB));
+      else                        newValue = Math.max(0, Math.min(startValue - dy,  imgHeight - cropT));
+
+      const field = side === 'left' ? 'cropLeft' : side === 'right' ? 'cropRight'
+                  : side === 'top'  ? 'cropTop'  : 'cropBottom';
+      onSubImageUpdate(subImageCropDrag.itemId, subImageCropDrag.subIdx, { [field]: Math.round(newValue) });
+    };
+
+    const handleMouseUp = () => setSubImageCropDrag(null);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [subImageCropDrag, onSubImageUpdate]);
 
   // Global swap drag mouse handlers (registered once — uses refs to avoid stale closures)
   useEffect(() => {
@@ -1461,34 +1532,30 @@ export default function EditorCanvas({
       );
     })()}
 
-    {isCard && onRowCountChange && (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        justifyContent: 'center',
-        marginBottom: 6,
-        fontSize: 13,
-        color: '#555',
-      }}>
-        <span>Rows:</span>
-        <button
-          onClick={() => onRowCountChange(Math.max(1, effectiveRowCount - 1))}
-          style={{ width: 24, height: 24, cursor: 'pointer', borderRadius: 4, border: '1px solid #ccc' }}
-        >−</button>
-        <span style={{ minWidth: 20, textAlign: 'center', fontWeight: 600 }}>
-          {effectiveRowCount}
-        </span>
-        <button
-          onClick={() => onRowCountChange(effectiveRowCount + 1)}
-          style={{ width: 24, height: 24, cursor: 'pointer', borderRadius: 4, border: '1px solid #ccc' }}
-        >+</button>
-      </div>
-    )}
+    {/* Font toolbar — shown when a title/price text is clicked in edit mode */}
+    {fontTarget && (() => {
+      const targetCard = cardLayout?.find(c => c.itemId === fontTarget.itemId);
+      const currentFont = fontTarget.element === 'title' ? targetCard?.titleFontFamily : targetCard?.priceFontFamily;
+      const currentColor = fontTarget.element === 'title' ? targetCard?.titleColor : targetCard?.priceColor;
+      const currentItalic = fontTarget.element === 'title' ? targetCard?.titleItalic : undefined;
+      return (
+        <FontToolbar
+          target={fontTarget}
+          currentFont={currentFont}
+          currentColor={currentColor}
+          currentItalic={currentItalic}
+          onFontChange={(family) => handleFontUpdate(fontTarget.element === 'title' ? { titleFontFamily: family || undefined } : { priceFontFamily: family || undefined })}
+          onColorChange={(color) => handleFontUpdate(fontTarget.element === 'title' ? { titleColor: color } : { priceColor: color })}
+          onItalicToggle={() => handleFontUpdate({ titleItalic: !currentItalic })}
+          onClose={() => setFontTarget(null)}
+        />
+      );
+    })()}
 
     <div
       key={page.pageId} // hard reset per page
       style={{ marginTop: 24, display: "flex", justifyContent: "center", position: "relative" }}
+      onClick={() => { if (fontTarget) setFontTarget(null); }}
     >
       <div
         ref={scaledCanvasRef}
@@ -1553,8 +1620,8 @@ export default function EditorCanvas({
                   activeScaleDrag={elementScaleDrag}
                   onElementDragStart={onCardLayoutChange && editMode ? handleElementScaleDragStart : undefined}
                   onRotateDragStart={onCardLayoutChange && editMode ? handleElementRotateDragStart : undefined}
-                  onEditTitle={editMode ? onEditTitle : undefined}
-                  onEditPrice={editMode ? onEditTitle : undefined}
+                  onEditTitle={editMode ? (itemId) => setFontTarget({ itemId, element: 'title' }) : undefined}
+                  onEditPrice={editMode ? (itemId) => setFontTarget({ itemId, element: 'price' }) : undefined}
                   onSubImageScaleDragStart={onSubImageUpdate && editMode ? handleSubImageScaleDragStart : undefined}
                   onSubImageRotateDragStart={onSubImageUpdate && editMode ? handleSubImageRotateDragStart : undefined}
                   onDeleteSubImage={onDeleteSubImage && editMode ? onDeleteSubImage : undefined}
@@ -1562,6 +1629,7 @@ export default function EditorCanvas({
                   onSubImagePanStart={onSubImageUpdate && editMode ? handleSubImagePanStart : undefined}
                   onOrientationChange={onCardLayoutChange && editMode ? handleOrientationChange : undefined}
                   onCropDragStart={onCardLayoutChange && editMode ? handleCropDragStart : undefined}
+                  onSubImageCropDragStart={onSubImageUpdate && editMode ? handleSubImageCropDragStart : undefined}
                 />
               )}
 
@@ -1606,7 +1674,7 @@ export default function EditorCanvas({
                 />
               ))}
 
-              {/* Divider drag handles + horizontal merge buttons */}
+              {/* Divider drag handles + horizontal merge buttons — zIndex above card content (100) so handles stay clickable */}
               {onCardLayoutChange && groupDividers.map((d, idx) => {
                 const is1to1 = d.leftCardIds.length === 1 && d.rightCardIds.length === 1;
                 return (
@@ -1620,11 +1688,11 @@ export default function EditorCanvas({
                       top: d.y,
                       width: 20,
                       height: d.height,
-                      zIndex: 50,
+                      zIndex: 150,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      pointerEvents: editMode ? 'none' : undefined,
+                      pointerEvents: "auto",
                     }}
                   >
                     {/* Drag handle zone — only for 1:1 equal-height boundaries */}

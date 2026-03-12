@@ -7,6 +7,7 @@ type Props = {
   currentImageSrc?: string;
   onReplace: (itemId: string, data: { path: string; result: any }) => void;
   onClose: () => void;
+  zIndex?: number;
 };
 
 function buildGoogleUrl(rawQuery: string, contextOn: boolean) {
@@ -22,7 +23,7 @@ function buildGoogleUrl(rawQuery: string, contextOn: boolean) {
   return `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(q)}`;
 }
 
-export default function GoogleSearchModal({ itemId, initialQuery, currentImageSrc, onReplace, onClose }: Props) {
+export default function GoogleSearchModal({ itemId, initialQuery, currentImageSrc, onReplace, onClose, zIndex = 10000 }: Props) {
   const [searchQuery, setSearchQuery] = useState(initialQuery);
   const [groceryContext, setGroceryContext] = useState(false);
   const [dropActive, setDropActive] = useState(false);
@@ -94,7 +95,7 @@ export default function GoogleSearchModal({ itemId, initialQuery, currentImageSr
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        zIndex: 10000,
+        zIndex,
       }}
       onClick={() => !processing && onClose()}
     >
