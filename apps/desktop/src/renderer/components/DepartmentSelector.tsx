@@ -13,6 +13,7 @@ const DEPARTMENT_LABELS: Record<string, string> = {
   vegetable: "Vegetable",
   hot_sale: "Hot Sale",
   produce: "Produce",
+  cosmetics: "Cosmetics",
 };
 
 export default function DepartmentSelector({

@@ -15,7 +15,7 @@ import { layoutCardRows, computeCardRects, deriveRowCount, CARD_GAP, CARD_BG } f
 import { saveDepartmentDraft } from "./draftStorage";
 import { IngestItem, CardDef, CardLayout } from "../types";
 import MergeSelectionDialog, { MergeCandidate } from "./MergeSelectionDialog";
-import FontToolbar from "./FontToolbar";
+import GlobalFontToolbar from "./GlobalFontToolbar";
 
 const PREVIEW_SCALE = 0.5;
 const MIN_CARD_WIDTH = 150;
@@ -97,12 +97,17 @@ export default function EditorCanvas({
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   const [addImageModalSlot, setAddImageModalSlot] = useState<number | null>(null);
   const [addImageModalCardId, setAddImageModalCardId] = useState<string | null>(null);
-  const [fontTarget, setFontTarget] = useState<{ itemId: string; element: 'title' | 'price' } | null>(null);
-
-  // load template config
+  // load template config; for custom templates with no background image, set imageSize from canvas dims
   useEffect(() => {
-    loadFlyerTemplateConfig(templateId).then(setConfig);
-  }, [templateId]);
+    setImageSize(null);
+    loadFlyerTemplateConfig(templateId).then(cfg => {
+      setConfig(cfg);
+      const p = cfg.pages.find((pg: any) => pg.departments && pg.departments[department]);
+      if (p && !p.imagePath && p.canvasWidth && p.canvasHeight) {
+        setImageSize({ width: p.canvasWidth, height: p.canvasHeight });
+      }
+    });
+  }, [templateId, department]);
 
   // editorQueue is already glued content
   const items = editorQueue;
@@ -115,6 +120,22 @@ export default function EditorCanvas({
       saveDepartmentDraft(templateId, department, items);
     }
   }, [items, templateId, department]);
+
+  // Keep a ref to onReplaceImage so the IPC handler always uses the latest version
+  // without capturing a potentially-uninitialized handleReplaceImage (defined after early return)
+  const onReplaceImageRef = useRef(onReplaceImage);
+  onReplaceImageRef.current = onReplaceImage;
+
+  useEffect(() => {
+    const unsub = (window as any).ufm.onContextMenuAction(({ itemId, action }: { itemId: string; action: string }) => {
+      if (action === 'editTitle') onEditTitle?.(itemId);
+      else if (action === 'googleSearch') onGoogleSearch?.(itemId);
+      else if (action === 'dbResults') onChooseDatabaseResults?.(itemId);
+      else if (action === 'uploadLocal') onReplaceImageRef.current?.(itemId);
+      else if (action === 'flavors') onPickSeriesFlavors?.(itemId);
+    });
+    return unsub;
+  }, [onEditTitle, onGoogleSearch, onChooseDatabaseResults, onPickSeriesFlavors]);
 
   const page = config ? findPageForDepartment(config, department) : null;
   const region = page?.departments?.[department] ?? null;
@@ -445,16 +466,38 @@ export default function EditorCanvas({
     [cardLayout, onCardLayoutChange]
   );
 
-  const handleFontUpdate = useCallback(
-    (updates: Partial<Pick<CardDef, 'titleFontFamily' | 'titleColor' | 'titleItalic' | 'priceFontFamily' | 'priceColor'>>) => {
-      if (!fontTarget || !cardLayout || !onCardLayoutChange) return;
-      const updated = cardLayout.map(c =>
-        c.itemId === fontTarget.itemId ? { ...c, ...updates } : c
-      );
-      onCardLayoutChange(updated);
-    },
-    [fontTarget, cardLayout, onCardLayoutChange]
-  );
+  // All-card global font/style update helpers
+  const handleAllTitleFontChange = useCallback((family: string) => {
+    if (!cardLayout || !onCardLayoutChange) return;
+    onCardLayoutChange(cardLayout.map(c => ({ ...c, titleFontFamily: family || undefined })));
+  }, [cardLayout, onCardLayoutChange]);
+
+  const handleAllTitleColorChange = useCallback((color: string) => {
+    if (!cardLayout || !onCardLayoutChange) return;
+    onCardLayoutChange(cardLayout.map(c => ({ ...c, titleColor: color })));
+  }, [cardLayout, onCardLayoutChange]);
+
+  const handleAllTitleItalicToggle = useCallback(() => {
+    if (!cardLayout || !onCardLayoutChange) return;
+    const currentValue = cardLayout.some(c => c.titleItalic);
+    onCardLayoutChange(cardLayout.map(c => ({ ...c, titleItalic: !currentValue })));
+  }, [cardLayout, onCardLayoutChange]);
+
+  const handleAllPriceFontChange = useCallback((family: string) => {
+    if (!cardLayout || !onCardLayoutChange) return;
+    onCardLayoutChange(cardLayout.map(c => ({ ...c, priceFontFamily: family || undefined })));
+  }, [cardLayout, onCardLayoutChange]);
+
+  const handleAllPriceColorChange = useCallback((color: string) => {
+    if (!cardLayout || !onCardLayoutChange) return;
+    onCardLayoutChange(cardLayout.map(c => ({ ...c, priceColor: color })));
+  }, [cardLayout, onCardLayoutChange]);
+
+  const handleShowDollarToggleAll = useCallback(() => {
+    if (!cardLayout || !onCardLayoutChange) return;
+    const currentValue = cardLayout.some(c => c.itemId && c.priceShowDollar);
+    onCardLayoutChange(cardLayout.map(c => ({ ...c, priceShowDollar: !currentValue })));
+  }, [cardLayout, onCardLayoutChange]);
 
   const handleCropDragStart = useCallback(
     (itemId: string, side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds?: { width: number; height: number }) => {
@@ -1532,22 +1575,23 @@ export default function EditorCanvas({
       );
     })()}
 
-    {/* Font toolbar — shown when a title/price text is clicked in edit mode */}
-    {fontTarget && (() => {
-      const targetCard = cardLayout?.find(c => c.itemId === fontTarget.itemId);
-      const currentFont = fontTarget.element === 'title' ? targetCard?.titleFontFamily : targetCard?.priceFontFamily;
-      const currentColor = fontTarget.element === 'title' ? targetCard?.titleColor : targetCard?.priceColor;
-      const currentItalic = fontTarget.element === 'title' ? targetCard?.titleItalic : undefined;
+    {/* Global font toolbar — always visible for card-mode departments */}
+    {isCard && editMode && cardLayout && onCardLayoutChange && (() => {
+      const firstCard = cardLayout.find(c => c.itemId);
       return (
-        <FontToolbar
-          target={fontTarget}
-          currentFont={currentFont}
-          currentColor={currentColor}
-          currentItalic={currentItalic}
-          onFontChange={(family) => handleFontUpdate(fontTarget.element === 'title' ? { titleFontFamily: family || undefined } : { priceFontFamily: family || undefined })}
-          onColorChange={(color) => handleFontUpdate(fontTarget.element === 'title' ? { titleColor: color } : { priceColor: color })}
-          onItalicToggle={() => handleFontUpdate({ titleItalic: !currentItalic })}
-          onClose={() => setFontTarget(null)}
+        <GlobalFontToolbar
+          titleFont={firstCard?.titleFontFamily}
+          titleColor={firstCard?.titleColor ?? "#000000"}
+          titleItalic={cardLayout.some(c => c.titleItalic)}
+          priceFont={firstCard?.priceFontFamily}
+          priceColor={firstCard?.priceColor ?? "#000000"}
+          priceShowDollar={cardLayout.some(c => c.itemId && c.priceShowDollar)}
+          onTitleFontChange={handleAllTitleFontChange}
+          onTitleColorChange={handleAllTitleColorChange}
+          onTitleItalicToggle={handleAllTitleItalicToggle}
+          onPriceFontChange={handleAllPriceFontChange}
+          onPriceColorChange={handleAllPriceColorChange}
+          onShowDollarToggle={handleShowDollarToggleAll}
         />
       );
     })()}
@@ -1555,7 +1599,6 @@ export default function EditorCanvas({
     <div
       key={page.pageId} // hard reset per page
       style={{ marginTop: 24, display: "flex", justifyContent: "center", position: "relative" }}
-      onClick={() => { if (fontTarget) setFontTarget(null); }}
     >
       <div
         ref={scaledCanvasRef}
@@ -1574,6 +1617,31 @@ export default function EditorCanvas({
             overflow: "visible",
           }}
           onMouseDown={isCard && onCardLayoutChange ? handleCanvasMouseDown : undefined}
+          onContextMenu={isCard && editMode ? (e) => {
+            e.preventDefault();
+            if (!scaledCanvasRef.current) return;
+            const canvasRect = scaledCanvasRef.current.getBoundingClientRect();
+            const canvasX = (e.clientX - canvasRect.left) / PREVIEW_SCALE;
+            const canvasY = (e.clientY - canvasRect.top) / PREVIEW_SCALE;
+            const hit = cardRects.find(r =>
+              r.itemId &&
+              canvasX >= r.x && canvasX <= r.x + r.width &&
+              canvasY >= r.y && canvasY <= r.y + r.height
+            );
+            if (!hit?.itemId) return;
+            const itemId = hit.itemId;
+            const item = items.find((it: any) => it.id === itemId);
+            const menuActions: Array<{ id: string; label: string; enabled?: boolean }> = [];
+            if ((item?.result?.allFlavorPaths?.length ?? 0) > 1 && onPickSeriesFlavors) {
+              const isPending = item?.result?.pendingFlavorSelection === true;
+              menuActions.push({ id: 'flavors', label: isPending ? 'Select Flavors' : 'Change Flavors' });
+            }
+            if (onEditTitle) menuActions.push({ id: 'editTitle', label: 'Edit Discount Details' });
+            if (onGoogleSearch) menuActions.push({ id: 'googleSearch', label: 'Google Search' });
+            menuActions.push({ id: 'dbResults', label: 'Database Results', enabled: !!onChooseDatabaseResults });
+            menuActions.push({ id: 'uploadLocal', label: 'Upload from Local' });
+            (window as any).ufm.showContextMenu(itemId, menuActions);
+          } : undefined}
         >
           {/* template image */}
           <img
@@ -1620,8 +1688,8 @@ export default function EditorCanvas({
                   activeScaleDrag={elementScaleDrag}
                   onElementDragStart={onCardLayoutChange && editMode ? handleElementScaleDragStart : undefined}
                   onRotateDragStart={onCardLayoutChange && editMode ? handleElementRotateDragStart : undefined}
-                  onEditTitle={editMode ? (itemId) => setFontTarget({ itemId, element: 'title' }) : undefined}
-                  onEditPrice={editMode ? (itemId) => setFontTarget({ itemId, element: 'price' }) : undefined}
+                  onEditTitle={undefined}
+                  onEditPrice={undefined}
                   onSubImageScaleDragStart={onSubImageUpdate && editMode ? handleSubImageScaleDragStart : undefined}
                   onSubImageRotateDragStart={onSubImageUpdate && editMode ? handleSubImageRotateDragStart : undefined}
                   onDeleteSubImage={onDeleteSubImage && editMode ? onDeleteSubImage : undefined}
@@ -1633,8 +1701,8 @@ export default function EditorCanvas({
                 />
               )}
 
-              {/* Card overlays (add/replace/edit/delete buttons) — hidden during editMode or swap drag */}
-              {!editMode && <div style={{ pointerEvents: swapDrag ? 'none' : 'auto' }}>
+              {/* Card overlays (add/replace/edit/delete buttons; edit menu via right-click in editMode) */}
+              <div style={{ pointerEvents: swapDrag ? 'none' : 'auto' }}>
                 <SlotOverlays
                   slots={cardRects.map(r => ({ x: r.x, y: r.y, width: r.width, height: r.height }))}
                   items={items}
@@ -1653,8 +1721,9 @@ export default function EditorCanvas({
                   cardRects={cardRects}
                   cardLayout={cardLayout ?? undefined}
                   isLocked={isLocked}
+                  editMode={editMode}
                 />
-              </div>}
+              </div>
 
               {/* Card border outlines */}
               {onCardLayoutChange && cardRects.map((rect) => (

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { DbBatchProgressEvent, DbBatchCompleteEvent, DbParsedMetadata, QuotaStatus, QuotaEntry, DbSyncReport, DbSyncResult, ScanNonProductsProgressEvent, ScanNonProductsCompleteEvent } from "../global";
+import type { DbBatchProgressEvent, DbBatchCompleteEvent, DbParsedMetadata, QuotaStatus, QuotaEntry, DbSyncReport, DbSyncResult, ScanNonProductsProgressEvent, ScanNonProductsCompleteEvent, TodaysSaveItem } from "../global";
 
 type DbUploadStatus =
   | "pending"
@@ -548,6 +548,8 @@ export default function DbUploadView({ onBack }: Props) {
     e.target.value = "";
   };
 
+  const [activeTab, setActiveTab] = useState<"upload" | "today">("upload");
+
   const pendingCount = items.filter((i) => i.status === "pending").length;
   const doneCount = items.filter((i) => i.status === "done").length;
 
@@ -729,8 +731,29 @@ export default function DbUploadView({ onBack }: Props) {
         </div>
       </div>
 
-      {/* Body — two columns */}
-      <div style={{ display: "flex", gap: 24, alignItems: "flex-start" }}>
+      {/* Tab bar */}
+      <div style={{ display: "flex", borderBottom: "2px solid #E9ECEF", marginBottom: 24 }}>
+        {(["upload", "today"] as const).map(tab => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => setActiveTab(tab)}
+            style={{
+              padding: "8px 20px", border: "none", background: "none", cursor: "pointer",
+              fontWeight: 600, fontSize: 13, marginBottom: -2,
+              borderBottom: activeTab === tab ? "2px solid #228BE6" : "2px solid transparent",
+              color: activeTab === tab ? "#228BE6" : "#868E96",
+            }}
+          >
+            {tab === "upload" ? "Upload" : "This Week's Saves"}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "today" ? <TodaysSavesPanel /> : null}
+
+      {/* Body — two columns (Upload tab) */}
+      <div style={{ display: activeTab === "upload" ? "flex" : "none", gap: 24, alignItems: "flex-start" }}>
         {/* Left — drop zone */}
         <div style={{ flex: "0 0 38%", minWidth: 0 }}>
           <div
@@ -1385,6 +1408,130 @@ function SyncButton({ onSyncComplete }: { onSyncComplete: () => void }) {
 
       {error && (
         <span style={{ fontSize: 11, color: "#C92A2A" }}>{error}</span>
+      )}
+    </div>
+  );
+}
+
+function relativeTime(ms: number): string {
+  const diff = Date.now() - ms;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hr ago`;
+  return `${Math.floor(hrs / 24)} day ago`;
+}
+
+function TodaysSavesPanel() {
+  const [items, setItems] = useState<TodaysSaveItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetch = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    window.ufm.getTodaysSaves()
+      .then(setItems)
+      .catch((err: any) => setError(err?.message ?? "Failed to load"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { fetch(); }, [fetch]);
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: "center", padding: 48, color: "#868E96" }}>
+        <span style={{
+          display: "inline-block", width: 20, height: 20,
+          border: "3px solid #E9ECEF", borderTopColor: "#228BE6",
+          borderRadius: "50%", animation: "ufm-spin 0.7s linear infinite",
+        }} />
+        <div style={{ marginTop: 12, fontSize: 13 }}>Loading this week's saves…</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ textAlign: "center", padding: 48 }}>
+        <div style={{ fontSize: 13, color: "#C92A2A", marginBottom: 12 }}>{error}</div>
+        <button type="button" onClick={fetch} style={{ padding: "6px 16px", borderRadius: 6, border: "1px solid #CED4DA", background: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <span style={{ fontSize: 13, color: "#868E96" }}>
+          {items.length === 0 ? "No combinations saved this week yet" : `${items.length} saved this week`}
+        </span>
+        <button type="button" onClick={fetch} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid #DEE2E6", background: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#495057" }}>
+          ↻ Refresh
+        </button>
+      </div>
+
+      {items.length > 0 && (
+        <div style={{ border: "1px solid #E9ECEF", borderRadius: 10, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "#F8F9FA", borderBottom: "1px solid #E9ECEF" }}>
+                <th style={{ padding: "8px 12px", textAlign: "left", fontSize: 12, color: "#868E96", fontWeight: 600, width: 68 }}>Image</th>
+                <th style={{ padding: "8px 12px", textAlign: "left", fontSize: 12, color: "#868E96", fontWeight: 600 }}>Product</th>
+                <th style={{ padding: "8px 12px", textAlign: "left", fontSize: 12, color: "#868E96", fontWeight: 600, width: 110 }}>Dept</th>
+                <th style={{ padding: "8px 12px", textAlign: "right", fontSize: 12, color: "#868E96", fontWeight: 600, width: 80 }}>Price</th>
+                <th style={{ padding: "8px 12px", textAlign: "right", fontSize: 12, color: "#868E96", fontWeight: 600, width: 90 }}>Saved</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map(item => (
+                <tr key={item.id} style={{ borderBottom: "1px solid #F1F3F5", verticalAlign: "middle" }}>
+                  <td style={{ padding: "8px 12px" }}>
+                    {item.publicUrl ? (
+                      <img
+                        src={item.publicUrl}
+                        alt=""
+                        style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6, background: "#F1F3F5", display: "block" }}
+                        onError={e => { (e.target as HTMLImageElement).style.visibility = "hidden"; }}
+                      />
+                    ) : (
+                      <div style={{ width: 48, height: 48, borderRadius: 6, background: "#F1F3F5" }} />
+                    )}
+                  </td>
+                  <td style={{ padding: "8px 12px" }}>
+                    {item.englishTitle && (
+                      <div style={{ fontWeight: 600, fontSize: 13, color: "#212529" }}>{item.englishTitle}</div>
+                    )}
+                    {item.chineseTitle && (
+                      <div style={{ fontSize: 12, color: "#495057" }}>{item.chineseTitle}</div>
+                    )}
+                    {!item.englishTitle && !item.chineseTitle && (
+                      <div style={{ fontSize: 12, color: "#ADB5BD" }}>(no title)</div>
+                    )}
+                  </td>
+                  <td style={{ padding: "8px 12px" }}>
+                    {item.department && (
+                      <MetaChip label={item.department} color="#5C6BC0" />
+                    )}
+                  </td>
+                  <td style={{ padding: "8px 12px", textAlign: "right" }}>
+                    {item.salePrice ? (
+                      <span style={{ fontWeight: 700, fontSize: 13, color: "#C92A2A" }}>${item.salePrice}</span>
+                    ) : (
+                      <span style={{ color: "#ADB5BD", fontSize: 12 }}>—</span>
+                    )}
+                  </td>
+                  <td style={{ padding: "8px 12px", textAlign: "right" }}>
+                    <span style={{ fontSize: 11, color: "#ADB5BD" }}>{relativeTime(item.createdAt)}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

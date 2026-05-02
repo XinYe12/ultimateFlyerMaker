@@ -24,9 +24,11 @@ interface FontToolbarProps {
   currentFont?: string;
   currentColor?: string;
   currentItalic?: boolean;
+  currentShowDollar?: boolean;
   onFontChange: (family: string) => void;
   onColorChange: (color: string) => void;
   onItalicToggle: () => void;
+  onShowDollarToggle?: () => void;
   onClose: () => void;
 }
 
@@ -35,9 +37,11 @@ export default function FontToolbar({
   currentFont,
   currentColor = "#000000",
   currentItalic,
+  currentShowDollar,
   onFontChange,
   onColorChange,
   onItalicToggle,
+  onShowDollarToggle,
   onClose,
 }: FontToolbarProps) {
   const label = target.element === "title" ? "Title Font:" : "Price Font:";
@@ -71,7 +75,6 @@ export default function FontToolbar({
         borderRadius: 8,
         boxShadow: "0 2px 12px rgba(0,0,0,0.12)",
         padding: "6px 10px",
-        marginBottom: 8,
         flexWrap: "nowrap",
         userSelect: "none",
       }}
@@ -153,32 +156,61 @@ export default function FontToolbar({
         )}
       </div>
 
-      {/* Divider */}
-      <div style={{ width: 1, height: 20, background: "#e5e7eb", margin: "0 2px", flexShrink: 0 }} />
+      {/* Italic toggle (title only) */}
+      {target.element === "title" && (
+        <>
+          <div style={{ width: 1, height: 20, background: "#e5e7eb", margin: "0 2px", flexShrink: 0 }} />
+          <button
+          onClick={onItalicToggle}
+          title="Italic"
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 6,
+            border: currentItalic ? "2px solid #2563eb" : "1px solid #d1d5db",
+            background: currentItalic ? "#eff6ff" : "#f9fafb",
+            color: currentItalic ? "#1d4ed8" : "#374151",
+            cursor: "pointer",
+            fontStyle: "italic",
+            fontSize: 14,
+            fontFamily: "Georgia, serif",
+            fontWeight: 700,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+            I
+          </button>
+        </>
+      )}
 
-      {/* Italic toggle */}
-      <button
-        onClick={onItalicToggle}
-        title="Italic"
-        style={{
-          width: 28,
-          height: 28,
-          borderRadius: 6,
-          border: currentItalic ? "2px solid #2563eb" : "1px solid #d1d5db",
-          background: currentItalic ? "#eff6ff" : "#f9fafb",
-          color: currentItalic ? "#1d4ed8" : "#374151",
-          cursor: "pointer",
-          fontStyle: "italic",
-          fontSize: 14,
-          fontFamily: "Georgia, serif",
-          fontWeight: 700,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        I
-      </button>
+      {/* Dollar sign toggle (price only) */}
+      {target.element === "price" && (
+        <>
+          <div style={{ width: 1, height: 20, background: "#e5e7eb", margin: "0 2px", flexShrink: 0 }} />
+          <button
+            onClick={onShowDollarToggle}
+            title="Show dollar sign"
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 6,
+              border: currentShowDollar ? "2px solid #2563eb" : "1px solid #d1d5db",
+              background: currentShowDollar ? "#eff6ff" : "#f9fafb",
+              color: currentShowDollar ? "#1d4ed8" : "#374151",
+              cursor: "pointer",
+              fontSize: 14,
+              fontWeight: 700,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            $
+          </button>
+        </>
+      )}
 
       {/* Color picker */}
       <label

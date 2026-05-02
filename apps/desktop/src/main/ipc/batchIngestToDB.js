@@ -583,3 +583,32 @@ export async function getDbStats() {
   LOG("C", "Query succeeded. count=" + snap.data().count);
   return { count: snap.data().count, quota: getQuotaStatus() };
 }
+
+export async function getTodaysSaves() {
+  const now = new Date();
+  const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon…
+  const daysToMonday = (dayOfWeek + 6) % 7; // days since last Monday
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - daysToMonday);
+  monday.setHours(0, 0, 0, 0);
+  const todayMs = monday.getTime();
+  const snap = await db.collection(FIRESTORE_COLLECTION)
+    .where("createdAt", ">=", todayMs)
+    .orderBy("createdAt", "desc")
+    .limit(100)
+    .get();
+  return snap.docs
+    .map(d => d.data())
+    .filter(d => d.source === "flyer_editor")
+    .map(d => ({
+      id: d.id,
+      englishTitle: d.englishTitle ?? "",
+      chineseTitle: d.chineseTitle ?? "",
+      publicUrl: d.publicUrl ?? "",
+      salePrice: d.salePrice ?? "",
+      department: d.department ?? "",
+      createdAt: d.createdAt,
+      status: d.status ?? "active",
+    }));
+}
+

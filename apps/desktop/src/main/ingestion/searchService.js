@@ -14,11 +14,17 @@ function pickPublicFields(p) {
     category: p.category,
     publicUrl: p.publicUrl,
     score: Number((p.score != null ? p.score : 0).toFixed(4)),
+    // Optional: price + provenance for flyer_editor combination entries
+    ...(p.salePrice != null    ? { salePrice: p.salePrice }       : {}),
+    ...(p.regularPrice != null ? { regularPrice: p.regularPrice } : {}),
+    ...(p.unit != null         ? { unit: p.unit }                 : {}),
+    ...(p.quantity != null     ? { quantity: p.quantity }         : {}),
+    ...(p.source != null       ? { source: p.source }             : {}),
   };
 }
 
 /* ---------- Text search (for product title → DB images) ---------- */
-function normalize(str = "") {
+export function normalize(str = "") {
   return String(str)
     .toLowerCase()
     .replace(/(\d+)(kg|g|克|ml|l)/g, "$1")
@@ -102,15 +108,27 @@ export function invalidateEmbeddingCache() {
   _embeddingCacheLoad = null;
 }
 
+const EMBEDDING_CACHE_TIMEOUT_MS = 8_000;
+
 async function getEmbeddingCache() {
   if (_embeddingCache) return _embeddingCache;
   // If a load is already in flight, reuse it instead of firing another Firestore query
   if (!_embeddingCacheLoad) {
-    _embeddingCacheLoad = db
-      .collection(FIRESTORE_COLLECTION)
-      .where("status", "==", "active")
-      .select("id", "englishTitle", "chineseTitle", "brand", "size", "category", "publicUrl", "embedding")
-      .get()
+    _embeddingCacheLoad = Promise.race([
+      db
+        .collection(FIRESTORE_COLLECTION)
+        .where("status", "==", "active")
+        .select("id", "englishTitle", "chineseTitle", "brand", "size", "category", "publicUrl", "embedding")
+        .get(),
+      new Promise((_, reject) =>
+        setTimeout(() => {
+          // Clear immediately so the next call starts a fresh Firestore connection
+          // instead of re-awaiting this dead promise (stale gRPC channel scenario).
+          _embeddingCacheLoad = null;
+          reject(new Error("getEmbeddingCache timed out — gRPC channel may be stale"));
+        }, EMBEDDING_CACHE_TIMEOUT_MS)
+      ),
+    ])
       .then((snapshot) => {
         _embeddingCache = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
         _embeddingCacheLoad = null;
@@ -138,10 +156,16 @@ export async function searchByText(query, limit = 6, minScore = 0.15) {
   const queryTokens = tokenize(String(query).trim());
   if (!queryTokens.length) return [];
 
-  const snapshot = await db
-    .collection(FIRESTORE_COLLECTION)
-    .where("searchTokens", "array-contains-any", queryTokens.slice(0, 10))
-    .get();
+  const QUERY_TIMEOUT_MS = 6_000;
+  const snapshot = await Promise.race([
+    db
+      .collection(FIRESTORE_COLLECTION)
+      .where("searchTokens", "array-contains-any", queryTokens.slice(0, 10))
+      .get(),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("searchByText Firestore query timed out")), QUERY_TIMEOUT_MS)
+    ),
+  ]);
 
   return snapshot.docs
     .map((d) => ({ id: d.id, ...d.data() }))
@@ -227,6 +251,27 @@ export async function searchForDiscountItem(item, limit = 6) {
   const fullQuery = [item?.en, item?.zh, item?.size].filter(Boolean).map(String).map((s) => s.trim()).join(" ").trim();
 
   if (!fullQuery && !enQuery && !zhQuery) return [];
+
+  // Fast-path: exact match against saved flyer_editor combinations via matchKeys index.
+  // This bypasses fuzzy text/embedding search for products the user has already saved.
+  try {
+    const exactKey = normalize(enQuery) || normalize(zhQuery);
+    if (exactKey) {
+      const snap = await db.collection(FIRESTORE_COLLECTION)
+        .where("matchKeys", "array-contains", exactKey)
+        .limit(3)
+        .get();
+      const hits = snap.docs
+        .map(d => ({ ...d.data(), id: d.id }))
+        .filter(d => d.source === "flyer_editor" && d.status === "active");
+      if (hits.length > 0) {
+        console.log(`[searchService] Fast-path exact match (${hits.length}): "${exactKey}"`);
+        return hits.map(p => ({ ...pickPublicFields(p), score: 0.98 }));
+      }
+    }
+  } catch (err) {
+    console.warn("[searchService] Fast-path matchKeys query failed:", err?.message?.slice(0, 80));
+  }
 
   // Run text search for all distinct query variants (parallel)
   const queries = [...new Set([fullQuery, enQuery, zhQuery].filter(Boolean))];

@@ -31,6 +31,7 @@ function drawTitleText(ctx, text, x, y, font) {
   ctx.font = font;
   ctx.textAlign = "left";
   ctx.lineJoin = "round";
+  
   ctx.fillStyle = "#000000";
   ctx.fillText(text, x, y);
 }

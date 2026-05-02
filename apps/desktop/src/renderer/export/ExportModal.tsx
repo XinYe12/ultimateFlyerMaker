@@ -17,12 +17,14 @@ type Props = {
   templateConfig: FlyerTemplateConfig;
   jobs: FlyerJob[];
   onClose: () => void;
+  onSuccess?: () => void;
 };
 
 export default function ExportModal({
   templateConfig,
   jobs,
   onClose,
+  onSuccess,
 }: Props) {
   const [renderReady, setRenderReady] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -43,6 +45,7 @@ export default function ExportModal({
       });
 
       setSuccess(true);
+      onSuccess?.();
     } catch (err) {
       console.error("Export failed:", err);
       setError(err instanceof Error ? err.message : "Export failed");

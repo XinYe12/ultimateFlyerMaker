@@ -213,6 +213,7 @@ function PlacementCard({
   p, item, label, editMode, activeScaleDrag, onElementDragStart, onRotateDragStart, onEditTitle, onEditPrice,
   onSubImageScaleDragStart, onSubImageRotateDragStart, onDeleteSubImage,
   onImagePanStart, onSubImagePanStart, onOrientationChange, onCropDragStart, onSubImageCropDragStart,
+  onContextMenu,
 }: {
   p: any;
   item: any;
@@ -231,6 +232,7 @@ function PlacementCard({
   onOrientationChange?: (orientation: 'vertical' | 'horizontal' | 'top') => void;
   onCropDragStart?: (side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds?: { width: number; height: number }) => void;
   onSubImageCropDragStart?: (subIdx: number, side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds: { width: number; height: number }) => void;
+  onContextMenu?: () => void;
 }) {
   const [imgInfo, setImgInfo] = useState<{
     natW: number; natH: number;
@@ -401,8 +403,9 @@ function PlacementCard({
   const rawSrc =
     item?.image?.src ??
     item?.cutoutPath ??
-    item?.result?.cutoutPath ??
+    (item?.result?.cutoutPath || null) ??
     (Array.isArray(rawPaths) && rawPaths.length > 0 ? rawPaths[0] : null) ??
+    item?.result?.inputPath ??   // show original photo while Phase 2 is pending
     null;
 
   const imgSrc = rawSrc
@@ -452,6 +455,7 @@ function PlacementCard({
   const titleItalic = p.titleItalic as boolean | undefined;
   const priceFontFamily = p.priceFontFamily as string | undefined;
   const priceColor = p.priceColor as string | undefined;
+  const priceShowDollar = p.priceShowDollar as boolean | undefined;
   const titleTextStyle: React.CSSProperties = {
     fontFamily: titleFontFamily ?? undefined,
     color: titleColor ?? undefined,
@@ -517,6 +521,9 @@ function PlacementCard({
   const priceDecTop   = -Math.round(priceMainSize * 0.20);
   const priceQtySize  = Math.round(priceMainSize * 0.55);
   const priceUnitSize = Math.round(priceMainSize * 0.12);
+  const dollarSize    = Math.round(priceMainSize * 0.35);
+  // Raise $ so its top almost touches the top of the big integer (~0.72 cap height ratio)
+  const dollarTop     = -Math.round(priceMainSize * 0.44);
 
   const availW = p.orientation === 'horizontal'
     ? Math.max(1, Math.round(p.width * 0.55) - SIDE_PAD * 2)
@@ -791,8 +798,13 @@ function PlacementCard({
                 )}
                 {pp && (
                   <div className="ufm-price" style={{ alignItems: "baseline", paddingRight: 4 }}>
-                    {pp.type === "MULTI" && <span className="ufm-price-qty" style={{ fontSize: priceQtySize, ...priceTextStyle }}>{pp.quantity}/</span>}
-                    <span className="ufm-price-main" style={{ fontSize: priceMainSize, ...priceTextStyle }}>{pp.integer}</span>
+                    {pp.type === "MULTI" && <span className="ufm-price-qty" style={{ fontSize: priceQtySize, marginRight: 0, ...priceTextStyle }}>{pp.quantity}/</span>}
+                    <span style={{ display: "inline-flex", alignItems: "baseline" }}>
+                      {priceShowDollar && (
+                        <span style={{ fontSize: dollarSize, paddingRight: 2, lineHeight: 1, position: "relative", top: dollarTop, ...priceTextStyle }}>$</span>
+                      )}
+                      <span className="ufm-price-main" style={{ fontSize: priceMainSize, ...priceTextStyle }}>{pp.integer}</span>
+                    </span>
                     {pp.decimal && <span className="ufm-price-decimal" style={{ fontSize: priceDecSize, top: priceDecTop, ...priceTextStyle }}>{pp.decimal}</span>}
                   </div>
                 )}
@@ -978,9 +990,14 @@ function PlacementCard({
                 )}
                 <div className="ufm-price" style={{ display: 'flex', alignItems: 'baseline' }}>
                   {priceParts.type === "MULTI" && (
-                    <span className="ufm-price-qty" style={{ fontSize: priceQtySize, ...priceTextStyle }}>{priceParts.quantity}/</span>
+                    <span className="ufm-price-qty" style={{ fontSize: priceQtySize, marginRight: 0, ...priceTextStyle }}>{priceParts.quantity}/</span>
                   )}
-                  <span className="ufm-price-main" style={{ fontSize: priceMainSize, ...priceTextStyle }}>{priceParts.integer}</span>
+                  <span style={{ display: "inline-flex", alignItems: "baseline" }}>
+                    {priceShowDollar && (
+                      <span style={{ fontSize: dollarSize, paddingRight: 2, lineHeight: 1, position: "relative", top: dollarTop, ...priceTextStyle }}>$</span>
+                    )}
+                    <span className="ufm-price-main" style={{ fontSize: priceMainSize, ...priceTextStyle }}>{priceParts.integer}</span>
+                  </span>
                   {priceParts.decimal && (
                     <span className="ufm-price-decimal" style={{ fontSize: priceDecSize, top: priceDecTop, ...priceTextStyle }}>{priceParts.decimal}</span>
                   )}
@@ -1158,9 +1175,14 @@ function PlacementCard({
             )}
             <div className="ufm-price" style={{ display: 'flex', alignItems: 'baseline' }}>
               {priceParts.type === "MULTI" && (
-                <span className="ufm-price-qty" style={{ fontSize: priceQtySize, ...priceTextStyle }}>{priceParts.quantity}/</span>
+                <span className="ufm-price-qty" style={{ fontSize: priceQtySize, marginRight: 0, ...priceTextStyle }}>{priceParts.quantity}/</span>
               )}
-              <span className="ufm-price-main" style={{ fontSize: priceMainSize, ...priceTextStyle }}>{priceParts.integer}</span>
+              <span style={{ display: "inline-flex", alignItems: "baseline" }}>
+                {priceShowDollar && (
+                  <span style={{ fontSize: dollarSize, paddingRight: 2, lineHeight: 1, position: "relative", top: dollarTop, ...priceTextStyle }}>$</span>
+                )}
+                <span className="ufm-price-main" style={{ fontSize: priceMainSize, ...priceTextStyle }}>{priceParts.integer}</span>
+              </span>
               {priceParts.decimal && (
                 <span className="ufm-price-decimal" style={{ fontSize: priceDecSize, top: priceDecTop, ...priceTextStyle }}>{priceParts.decimal}</span>
               )}
@@ -1416,9 +1438,14 @@ function PlacementCard({
           )}
           <div className="ufm-price" style={{ display: "flex", alignItems: "baseline" }}>
             {priceParts.type === "MULTI" && (
-              <span className="ufm-price-qty" style={{ fontSize: priceQtySize, ...priceTextStyle }}>{priceParts.quantity}/</span>
+              <span className="ufm-price-qty" style={{ fontSize: priceQtySize, marginRight: 0, ...priceTextStyle }}>{priceParts.quantity}/</span>
             )}
-            <span className="ufm-price-main" style={{ fontSize: priceMainSize, ...priceTextStyle }}>{priceParts.integer}</span>
+            <span style={{ display: "inline-flex", alignItems: "baseline" }}>
+              {priceShowDollar && (
+                <span style={{ fontSize: dollarSize, paddingRight: 2, lineHeight: 1, position: "relative", top: dollarTop, ...priceTextStyle }}>$</span>
+              )}
+              <span className="ufm-price-main" style={{ fontSize: priceMainSize, ...priceTextStyle }}>{priceParts.integer}</span>
+            </span>
             {priceParts.decimal && (
               <span className="ufm-price-decimal" style={{ fontSize: priceDecSize, top: priceDecTop, ...priceTextStyle }}>{priceParts.decimal}</span>
             )}
@@ -1430,6 +1457,36 @@ function PlacementCard({
       )}
 
       </div>{/* end content clip wrapper */}
+
+      {/* Phase-2 pending overlay — blocks all interaction while cutout is processing */}
+      {item?.status === "processing_cutout" && (
+        <div
+          style={{ position: "absolute", inset: 0, zIndex: 200, pointerEvents: "all", cursor: "not-allowed",
+                   display: "flex", alignItems: "center", justifyContent: "center",
+                   background: "rgba(255,255,255,0.55)", backdropFilter: "blur(2px)" }}
+          onMouseDown={e => e.stopPropagation()}
+          onClick={e => e.stopPropagation()}
+        >
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+            <div style={{ width: 22, height: 22, border: "3px solid rgba(0,0,0,0.15)",
+                          borderTopColor: "#1a1a1a", borderRadius: "50%",
+                          animation: "ufm-spin 0.75s linear infinite" }} />
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
+                           color: "rgba(0,0,0,0.45)", textTransform: "uppercase" }}>
+              Processing…
+            </span>
+          </div>
+        </div>
+      )}
+      {/* Cutout failed badge — card still fully interactive */}
+      {item?.status === "cutout_error" && (
+        <div style={{ position: "absolute", bottom: 4, right: 4, zIndex: 200, pointerEvents: "none",
+                      background: "rgba(245,158,11,0.9)", color: "#fff", fontSize: 9,
+                      fontWeight: 700, letterSpacing: "0.05em", padding: "2px 5px",
+                      borderRadius: 3, textTransform: "uppercase" }}>
+          Cutout failed
+        </div>
+      )}
 
     </div>
   );
@@ -1453,6 +1510,7 @@ export default function RenderFlyerPlacements({
   onOrientationChange,
   onCropDragStart,
   onSubImageCropDragStart,
+  onCardContextMenu,
 }: {
   items: any[];
   placements: any[];
@@ -1477,6 +1535,7 @@ export default function RenderFlyerPlacements({
   onOrientationChange?: (itemId: string, orientation: 'vertical' | 'horizontal' | 'top') => void;
   onCropDragStart?: (itemId: string, side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds?: { width: number; height: number }) => void;
   onSubImageCropDragStart?: (itemId: string, subIdx: number, side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds: { width: number; height: number }) => void;
+  onCardContextMenu?: (itemId: string) => void;
 }) {
   if (!Array.isArray(items) || !Array.isArray(placements)) return null;
 
@@ -1501,15 +1560,29 @@ export default function RenderFlyerPlacements({
         : (item?.result?.llmResult?.items?.[0] as any)?.regular_price != null
           ? String((item.result.llmResult.items[0] as any).regular_price)
           : "";
-    const saleFromDiscount = (item?.result?.discount as any)?.price ?? (item?.result?.discount as any)?.display;
-    const priceDisplay =
-      saleFromDiscount != null && String(saleFromDiscount).trim() !== ""
-        ? String(saleFromDiscount).trim().startsWith("$")
-          ? String(saleFromDiscount).trim()
-          : `$${String(saleFromDiscount).trim()}`
-        : (item?.result?.llmResult?.items?.[0] as any)?.sale_price != null
-          ? `$${String((item.result.llmResult?.items?.[0] as any)?.sale_price ?? "")}`
-          : "";
+    // discount.price may be an object { display: "$5.59" } or a plain string
+    const rawSaleFromDiscount = (item?.result?.discount as any)?.price ?? (item?.result?.discount as any)?.display;
+    const saleFromDiscount =
+      rawSaleFromDiscount != null && typeof rawSaleFromDiscount === "object"
+        ? (rawSaleFromDiscount as any).display
+        : rawSaleFromDiscount;
+    const priceDisplay = (() => {
+      if (saleFromDiscount != null && String(saleFromDiscount).trim() !== "") {
+        const s = String(saleFromDiscount).trim();
+        // Multi-buy strings like "2 FOR $5.99" must NOT get a $ prepended —
+        // parsePriceDisplay's MULTI regex requires the string to start with a digit.
+        // Only add $ when s is a bare number like "5.99" with no existing prefix.
+        if (s.startsWith("$") || /FOR/i.test(s) || s.includes("/")) return s;
+        return `$${s}`;
+      }
+      const llmSalePrice = (item?.result?.llmResult?.items?.[0] as any)?.sale_price;
+      if (llmSalePrice != null) {
+        const qty = Number((item?.result?.llmResult?.items?.[0] as any)?.quantity);
+        const rawPrice = parseFloat(String(llmSalePrice)).toFixed(2);
+        return qty > 1 ? `${qty} FOR $${rawPrice}` : `$${rawPrice}`;
+      }
+      return "";
+    })();
     return {
       id: itemId,
       title: { en, zh, size, regularPrice },
@@ -1566,6 +1639,7 @@ export default function RenderFlyerPlacements({
             onSubImageCropDragStart={onSubImageCropDragStart
               ? (subIdx, side, startValue, e, bounds) => onSubImageCropDragStart(p.itemId, subIdx, side, startValue, e, bounds)
               : undefined}
+            onContextMenu={onCardContextMenu ? () => onCardContextMenu(p.itemId) : undefined}
           />
         );
       })}

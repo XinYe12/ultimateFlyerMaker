@@ -1,4 +1,5 @@
 // ✅ ELECTRON MAIN — SAFE, DEV + PROD, WINDOWS-SAFE
+// Lazy graceful init: app starts even without credentials; DB calls fail with a clear message.
 
 import { readFileSync, existsSync } from "fs";
 import path from "path";
@@ -9,43 +10,72 @@ import { app } from "electron";
 const LOG = (step, msg) => console.log(`[firebase] [${step}]`, msg);
 
 /**
- * NEVER resolve credentials relative to src/main.
- * ALWAYS resolve from app root / resources.
+ * Credential resolution priority:
+ *  1. FIREBASE_CREDENTIALS env var (absolute path)
+ *  2. <userData>/firebase-service-account.json  (end-user drop location)
+ *  3. <appPath>/backend/config/firebase-service-account.json  (dev/bundled copy)
  */
-function resolveFirebaseCredentialPath() {
-  LOG("1", "Resolving credential path...");
-  const p = !app.isPackaged
-    ? path.join(app.getAppPath(), "backend", "config", "firebase-service-account.json")
-    : path.join(process.resourcesPath, "backend", "config", "firebase-service-account.json");
-  LOG("1", "Resolved path: " + p);
-  return p;
+function resolveCredentialPath() {
+  if (process.env.FIREBASE_CREDENTIALS && existsSync(process.env.FIREBASE_CREDENTIALS)) {
+    LOG("creds", "Using FIREBASE_CREDENTIALS env var: " + process.env.FIREBASE_CREDENTIALS);
+    return process.env.FIREBASE_CREDENTIALS;
+  }
+  const userData = path.join(app.getPath("userData"), "firebase-service-account.json");
+  if (existsSync(userData)) {
+    LOG("creds", "Using userData credential: " + userData);
+    return userData;
+  }
+  const bundled = app.isPackaged
+    ? path.join(process.resourcesPath, "backend", "config", "firebase-service-account.json")
+    : path.join(app.getAppPath(), "backend", "config", "firebase-service-account.json");
+  if (existsSync(bundled)) {
+    LOG("creds", "Using bundled credential: " + bundled);
+    return bundled;
+  }
+  return null;
 }
 
-const CRED_PATH = resolveFirebaseCredentialPath();
-LOG("2", "Credential file exists: " + existsSync(CRED_PATH));
-
-const serviceAccount = JSON.parse(readFileSync(CRED_PATH, "utf8"));
-const projectId = serviceAccount.project_id;
-LOG("2", "Loaded service account, project_id: " + projectId);
-
-const databaseId = process.env.FIRESTORE_DATABASE_ID || "(default)";
-const emulator = process.env.FIRESTORE_EMULATOR_HOST;
-LOG("3", "databaseId=" + databaseId + " | emulator=" + (emulator || "(none)"));
-
-LOG("4", "Initializing Firebase app...");
-const fbApp = !getApps().length
-  ? initializeApp({
-      credential: cert(serviceAccount),
-      storageBucket: `${projectId}.firebasestorage.app`,
-    })
-  : getApps()[0];
-LOG("4", "Firebase app initialized. storageBucket: " + projectId + ".firebasestorage.app");
-
-if (emulator) {
-  LOG("5", "FIRESTORE_EMULATOR_HOST set → using emulator: " + emulator);
+function makeUnconfiguredProxy() {
+  const msg =
+    "[firebase] No service account credentials found. " +
+    "Place firebase-service-account.json in your app data folder or set FIREBASE_CREDENTIALS.";
+  return new Proxy({}, {
+    get() { throw new Error(msg); },
+    apply() { throw new Error(msg); },
+  });
 }
-LOG("5", "Getting Firestore client (project=" + projectId + ", database=" + databaseId + ")...");
-export const db = databaseId !== "(default)"
-  ? getFirestore(fbApp, databaseId)
-  : getFirestore(fbApp);
-LOG("5", "Firestore client ready. Collection: product_vectors");
+
+let db;
+try {
+  const credPath = resolveCredentialPath();
+  if (!credPath) {
+    LOG("init", "⚠️ No credentials found — Firestore disabled");
+    db = makeUnconfiguredProxy();
+  } else {
+    const serviceAccount = JSON.parse(readFileSync(credPath, "utf8"));
+    const projectId = serviceAccount.project_id;
+    const databaseId = process.env.FIRESTORE_DATABASE_ID || "(default)";
+    const emulator = process.env.FIRESTORE_EMULATOR_HOST;
+    LOG("init", `project_id=${projectId} databaseId=${databaseId} emulator=${emulator || "(none)"}`);
+
+    if (emulator) LOG("init", "FIRESTORE_EMULATOR_HOST set → using emulator: " + emulator);
+
+    const fbApp = !getApps().length
+      ? initializeApp({
+          credential: cert(serviceAccount),
+          storageBucket: `${projectId}.firebasestorage.app`,
+        })
+      : getApps()[0];
+
+    db = databaseId !== "(default)"
+      ? getFirestore(fbApp, databaseId)
+      : getFirestore(fbApp);
+
+    LOG("init", "Firestore client ready. Collection: product_vectors");
+  }
+} catch (err) {
+  LOG("init", "❌ Firebase init failed: " + err.message);
+  db = makeUnconfiguredProxy();
+}
+
+export { db };

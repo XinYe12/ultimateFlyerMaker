@@ -106,6 +106,17 @@ export type QuotaStatus = {
   storageTotalBytes: QuotaEntry;
 };
 
+export type TodaysSaveItem = {
+  id: string;
+  englishTitle: string;
+  chineseTitle: string;
+  publicUrl: string;
+  salePrice: string;
+  department: string;
+  createdAt: number;
+  status: string;
+};
+
 declare global {
   interface Window {
     electron: {
@@ -114,8 +125,14 @@ declare global {
 
     ufm: {
       ingestPhoto: (path: string) => Promise<IngestResult>;
+      ingestPhotoPhase1: (path: string) => Promise<{ inputPath: string; cutoutPath: null; layout: null; title: any; aiTitle: any; ocr: any; llmResult: any }>;
+      startCutout: (id: string, path: string) => Promise<{ queued: boolean }>;
+      onCutoutComplete: (cb: (data: { id: string; cutoutPath: string; layout: { size: string } }) => void) => () => void;
+      onCutoutError: (cb: (data: { id: string; error: string }) => void) => () => void;
       parseDiscountText: (text: string) => Promise<ParsedDiscount[]>;
       parseDiscountXlsx: (filePath: string, department?: string) => Promise<ParsedDiscount[]>;
+      parseAllDepartmentsXlsx: (filePath: string) => Promise<Record<string, ParsedDiscount[]>>;
+      exportExampleXlsx: (format?: "single" | "multi") => Promise<{ filePath?: string; canceled?: boolean }>;
       exportDiscountImages: (items: any[]) => Promise<DiscountLabel[]>;
       openXlsxDialog: () => Promise<string>;
       openImageDialog: () => Promise<string | null>;
@@ -161,11 +178,43 @@ declare global {
 
       openLogFile: () => Promise<string>;
 
+      saveCombinationToDb: (items: {
+        id: string;
+        imagePath: string;
+        en: string;
+        zh: string;
+        size: string;
+        salePrice: string;
+        regularPrice: string;
+        unit: string;
+        quantity: number | null;
+        department: string;
+      }[]) => Promise<{ ok: boolean }>;
+      onSaveCombinationProgress: (cb: (data: {
+        id: string; index: number; total: number;
+        status: "embedding" | "saving" | "uploading" | "done" | "skipped" | "error";
+        reason?: string; error?: string; productId?: string; publicUrl?: string;
+      }) => void) => () => void;
+      onSaveCombinationComplete: (cb: (data: {
+        saved: number; skipped: number; errors: number; error?: string;
+      }) => void) => () => void;
+
       deleteDbProduct: (productId: string) => Promise<{ ok: boolean; error?: string }>;
+      getTodaysSaves: () => Promise<TodaysSaveItem[]>;
 
       scanNonProducts: () => Promise<{ ok: boolean }>;
       onScanNonProductsProgress: (cb: (data: ScanNonProductsProgressEvent) => void) => () => void;
       onScanNonProductsComplete: (cb: (data: ScanNonProductsCompleteEvent) => void) => () => void;
+      showContextMenu: (itemId: string, actions: Array<{ id: string; label: string; enabled?: boolean }>) => void;
+      onContextMenuAction: (cb: (data: { itemId: string; action: string }) => void) => () => void;
+
+      getAppPaths: () => Promise<{ userData: string; firebaseCredential: string; firebaseCredentialExists: boolean }>;
+      getMissingKeys: () => Promise<string[]>;
+      getConfig: () => Promise<{
+        requiredKeys: Array<{ key: string; label: string; description: string; url: string; value: string; isSet: boolean }>;
+        optionalKeys: Array<{ key: string; label: string; description: string; url: string; value: string; isSet: boolean }>;
+      }>;
+      saveConfig: (patch: Record<string, string>) => Promise<{ ok: boolean; missingKeys: string[] }>;
     };
   }
 }

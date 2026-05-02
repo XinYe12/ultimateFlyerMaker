@@ -13,11 +13,13 @@ type DepartmentInfo = {
   editedAt?: number;
   progressPercent: number;
   progressText: string;
+  isLocked: boolean;
 };
 
 type Props = {
   jobs: FlyerJob[];
   availableDepartments: string[];
+  templateId: string;
   onDepartmentClick?: (department: DepartmentId) => void;
 };
 
@@ -60,8 +62,8 @@ function getWeekCycle(): string {
   return `${formatDate(nextFriday)} - ${formatDate(followingThursday)}`;
 }
 
-function getDepartmentStatus(department: string, jobs: FlyerJob[]): DepartmentInfo {
-  const deptJobs = jobs.filter(j => j.department === department);
+function getDepartmentStatus(department: string, jobs: FlyerJob[], templateId: string): DepartmentInfo {
+  const deptJobs = jobs.filter(j => j.department === department && j.templateId === templateId);
 
   if (deptJobs.length === 0) {
     return {
@@ -69,6 +71,7 @@ function getDepartmentStatus(department: string, jobs: FlyerJob[]): DepartmentIn
       statusLabel: "Not started",
       progressPercent: 0,
       progressText: "",
+      isLocked: false,
     };
   }
 
@@ -87,11 +90,15 @@ function getDepartmentStatus(department: string, jobs: FlyerJob[]): DepartmentIn
       statusLabel: "Not started",
       progressPercent: 0,
       progressText: "",
+      isLocked: false,
     };
   }
 
-  // Check if the job has actual work done (images added or discount-only processed)
+  const isLocked = jobToShow.result?.departmentLocked === true;
+
+  // Check if the job has actual work done (images added, discount-only processed, or actively running)
   const hasWork =
+    jobToShow.status === "queued" || jobToShow.status === "processing" ||
     jobToShow.images.length > 0 || (jobToShow.result?.processedImages?.length ?? 0) > 0;
 
   if (!hasWork) {
@@ -100,6 +107,7 @@ function getDepartmentStatus(department: string, jobs: FlyerJob[]): DepartmentIn
       statusLabel: "Not started",
       progressPercent: 0,
       progressText: "",
+      isLocked,
     };
   }
 
@@ -108,11 +116,9 @@ function getDepartmentStatus(department: string, jobs: FlyerJob[]): DepartmentIn
   let progressText = "0%";
 
   if (jobToShow.status === "queued" || jobToShow.status === "processing") {
-    // Job is being processed - show actual progress
-    const total = jobToShow.progress.totalImages || 1;
-    const processed = jobToShow.progress.processedImages || 0;
-    progressPercent = Math.round((processed / total) * 100);
-    progressText = `${progressPercent}%`;
+    // Job is being processed — progress is visible in the editor, no text needed here
+    progressPercent = 0;
+    progressText = "";
   } else if (jobToShow.status === "completed") {
     // Completed job - show as ready to edit (100% processed)
     progressPercent = 100;
@@ -146,28 +152,40 @@ function getDepartmentStatus(department: string, jobs: FlyerJob[]): DepartmentIn
     statusLabel,
     progressPercent: progressPercent,
     progressText: progressText,
+    isLocked,
   };
 }
 
-export default function DepartmentOverview({ jobs, availableDepartments, onDepartmentClick }: Props) {
+export default function DepartmentOverview({ jobs, availableDepartments, templateId, onDepartmentClick }: Props) {
   const weekCycle = getWeekCycle();
 
   return (
     <div
       style={{
-        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-        borderRadius: 12,
+        background: "transparent padding-box, linear-gradient(135deg, #667eea 0%, #764ba2 100%) border-box",
+        border: "3px solid transparent",
+        borderRadius: 14,
         padding: 24,
         marginBottom: 24,
-        color: "white",
+        boxShadow: "inset 0 3px 16px rgba(102, 126, 234, 0.10), inset 0 1px 6px rgba(118, 75, 162, 0.08)",
       }}
     >
       {/* Header */}
       <div style={{ marginBottom: 20 }}>
-        <h2 style={{ margin: 0, fontSize: 24, fontWeight: 600 }}>
+        <h2
+          style={{
+            margin: 0,
+            fontSize: 24,
+            fontWeight: 700,
+            background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+            WebkitBackgroundClip: "text",
+            WebkitTextFillColor: "transparent",
+            backgroundClip: "text",
+          }}
+        >
           Weekly Flyer London Store
         </h2>
-        <p style={{ margin: "8px 0 0 0", fontSize: 14, opacity: 0.9 }}>
+        <p style={{ margin: "8px 0 0 0", fontSize: 14, color: "#8b8fa8" }}>
           Week Cycle: {weekCycle}
         </p>
       </div>
@@ -175,13 +193,13 @@ export default function DepartmentOverview({ jobs, availableDepartments, onDepar
       {/* Department Cards */}
       <div
         style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))",
-          gap: 16,
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 10,
         }}
       >
         {availableDepartments.map(dept => {
-          const deptInfo = getDepartmentStatus(dept, jobs);
+          const deptInfo = getDepartmentStatus(dept, jobs, templateId);
           const label = DEPARTMENT_LABELS[dept] || dept;
 
           return (
@@ -192,6 +210,7 @@ export default function DepartmentOverview({ jobs, availableDepartments, onDepar
               progressText={deptInfo.progressText}
               statusLabel={deptInfo.statusLabel}
               status={deptInfo.status}
+              isLocked={deptInfo.isLocked}
               onClick={() => (onDepartmentClick || (() => {}))(dept as DepartmentId)}
             />
           );

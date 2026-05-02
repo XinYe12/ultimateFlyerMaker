@@ -1,7 +1,7 @@
 // PATH: apps/desktop/src/renderer/types.ts
 // 🔧 ADD: DiscountMatch + DiscountItem exports (keep existing ingestion/editor fields)
 
-export type IngestStatus = "pending" | "running" | "done" | "error";
+export type IngestStatus = "pending" | "running" | "processing_cutout" | "done" | "error" | "cutout_error";
 
 // Shape produced by parseDiscountText and parseDiscountXlsx
 export type ParsedDiscount = {
@@ -22,21 +22,11 @@ export type OCRResult = Array<{
   rec_scores?: number[];
 }>;
 
-export type DepartmentId =
-  | "grocery"
-  | "frozen"
-  | "hot_food"
-  | "sushi"
-  | "meat"
-  | "seafood"
-  | "fruit"
-  | "vegetable"
-  | "hot_sale"
-  | "produce";
+export type DepartmentId = string;
 
 export type IngestResult = {
   inputPath: string;
-  cutoutPath: string;
+  cutoutPath: string | null;
   /** Multi-flavor/series: currently active/selected product images */
   cutoutPaths?: string[];
   /** Full staged set from DB search — preserved even after user narrows selection */
@@ -45,7 +35,7 @@ export type IngestResult = {
   pendingFlavorSelection?: boolean;
   /** Per-sub-image overrides; index matches cutoutPaths[]. Not used for price-based duplicates. */
   subImageOverrides?: Array<{ scale?: number; rotation?: number; x?: number; y?: number; cropLeft?: number; cropRight?: number; cropTop?: number; cropBottom?: number }>;
-  layout: { size: string };
+  layout: { size: string } | null;
   titleImagePath?: string;
   priceImagePath?: string;
 
@@ -204,6 +194,7 @@ export type CardDef = {
   titleItalic?: boolean;
   priceFontFamily?: string;
   priceColor?: string;
+  priceShowDollar?: boolean;
 };
 
 export type CardLayout = CardDef[];

@@ -5,54 +5,69 @@ import { v4 as uuidv4 } from "uuid";
 export function useIngestQueue() {
   const [queue, setQueue] = useState<IngestItem[]>([]);
 
-  // ---------- INGEST ----------
+  // ---------- INGEST (two-phase) ----------
   async function enqueue(paths: string[], options?: { slotIndex?: number }) {
     for (const path of paths) {
       const id = uuidv4();
 
       setQueue(prev => [
         ...prev,
-        {
-          id,
-          path,
-          status: "running",
-          slotIndex: options?.slotIndex,
-        },
+        { id, path, status: "running", slotIndex: options?.slotIndex },
       ]);
 
       try {
-        const result = await window.ufm.ingestPhoto(path);
+        // Phase 1: OCR + LLM — card appears immediately after this resolves
+        const phase1 = await window.ufm.ingestPhotoPhase1(path);
 
         setQueue(prev =>
           prev.map(item =>
             item.id === id
               ? {
                   ...item,
-                  status: "done",
+                  status: "processing_cutout",
                   result: {
-                    ...result,
-                    // editor-state invariants
-                    title: result.title,
-                    aiTitle: result.aiTitle,
+                    ...phase1,
+                    title: phase1.title,
+                    aiTitle: phase1.aiTitle,
                   },
                 }
               : item
           )
         );
+
+        // Phase 2: cutout + shadow + sizing — fire-and-forget; result arrives via onCutoutComplete
+        await window.ufm.startCutout(id, path);
       } catch (err: any) {
         setQueue(prev =>
           prev.map(item =>
-            item.id === id
-              ? {
-                  ...item,
-                  status: "error",
-                  error: String(err),
-                }
-              : item
+            item.id === id ? { ...item, status: "error", error: String(err) } : item
           )
         );
       }
     }
+  }
+
+  // ---------- CUTOUT PATCH (called from App.tsx when ufm:cutoutComplete fires) ----------
+  function applyCutoutPatch(id: string, patch: { cutoutPath: string; layout: { size: string } }) {
+    setQueue(prev =>
+      prev.map(item =>
+        item.id === id
+          ? {
+              ...item,
+              status: "done",
+              result: item.result ? { ...item.result, ...patch } : item.result,
+            }
+          : item
+      )
+    );
+  }
+
+  function applyCutoutError(id: string, _error: string) {
+    setQueue(prev =>
+      prev.map(item =>
+        item.id === id ? { ...item, status: "cutout_error" } : item
+      )
+    );
   }
 
   // ---------- EDITOR UPDATE ----------
@@ -112,14 +127,22 @@ export function useIngestQueue() {
     setQueue(prev => [...prev, item]);
   }
 
+  // ---------- REPLACE ITEM IN-PLACE (preserves ordering) ----------
+  function replaceItem(oldId: string, newItem: IngestItem) {
+    setQueue(prev => prev.map(item => item.id === oldId ? newItem : item));
+  }
+
   return {
     queue,          // editor state
     enqueue,
     updateItem,     // authoritative editor mutations
+    applyCutoutPatch,
+    applyCutoutError,
     retry,
     remove,
     clear,
     loadItems,
     addItem,
+    replaceItem,
   };
 }

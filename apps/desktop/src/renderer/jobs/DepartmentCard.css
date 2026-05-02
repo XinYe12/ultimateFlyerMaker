@@ -2,16 +2,16 @@
 
 .dept-card-container {
   position: relative;
-  width: 190px;
-  height: 254px;
+  width: 160px;
+  height: 72px;
   transition: 200ms;
   cursor: pointer;
   overflow: visible;
 }
 
 .dept-card-container:active {
-  width: 180px;
-  height: 245px;
+  width: 154px;
+  height: 68px;
 }
 
 .dept-card-canvas {
@@ -60,9 +60,10 @@
   inset: 0;
   z-index: 0;
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
-  border-radius: 20px;
+  border-radius: 12px;
   transition: 700ms;
   transform-style: preserve-3d;
   background: var(--dept-card-gradient, linear-gradient(43deg, rgb(65, 88, 208) 0%, rgb(200, 80, 192) 46%, rgb(255, 204, 112) 100%));
@@ -95,85 +96,69 @@
   right: 0;
   transform: translateY(-50%);
   z-index: 20;
-  font-size: 20px;
-  font-weight: 800;
-  transition: 300ms ease-in-out;
+  font-size: 12px;
+  font-weight: 700;
+  transition: opacity 200ms ease-in-out;
   position: absolute;
   text-align: center;
   opacity: 0;
+  margin: 0;
 }
 
 .dept-card--not-started .dept-card-prompt,
-.dept-card--uploading .dept-card-prompt {
-  color: rgb(80, 80, 90);
-}
-
-.dept-card--in-progress .dept-card-prompt {
-  color: rgb(100, 80, 30);
-}
-
+.dept-card--uploading .dept-card-prompt,
+.dept-card--in-progress .dept-card-prompt,
 .dept-card--done .dept-card-prompt,
 .dept-card--done-edited .dept-card-prompt {
-  color: rgb(30, 80, 40);
+  color: #fff;
 }
 
 .dept-card-tracker:hover ~ .dept-card .dept-card-prompt {
   opacity: 1;
 }
 
-.dept-card-title {
-  position: absolute;
-  top: 24px;
-  left: 0;
-  right: 0;
-  font-size: 22px;
-  font-weight: bold;
-  text-align: center;
-}
-
-.dept-card--not-started .dept-card-title,
-.dept-card--uploading .dept-card-title {
-  color: rgb(80, 80, 90);
-}
-
-.dept-card--in-progress .dept-card-title {
-  color: rgb(100, 80, 30);
-}
-
-.dept-card--done .dept-card-title,
-.dept-card--done-edited .dept-card-title {
-  color: rgb(30, 80, 40);
-}
-
-.dept-card-subtitle {
-  position: absolute;
-  bottom: 14px;
-  left: 0;
-  right: 0;
-  text-align: center;
-  font-size: 13px;
-  transition: color 300ms ease-in-out;
-}
-
-.dept-card-subtitle[data-status="not-started"] {
-  color: rgb(100, 100, 110);
-}
-
-.dept-card-subtitle[data-status="uploading"] {
-  color: rgb(100, 100, 110);
-}
-
-.dept-card-subtitle[data-status="in-progress"] {
-  color: rgb(120, 90, 40);
-}
-
-.dept-card-subtitle[data-status="done"],
-.dept-card-subtitle[data-status="done-edited"] {
-  color: rgb(40, 100, 50);
+.dept-card-tracker:hover ~ .dept-card .dept-card-title {
+  opacity: 0;
 }
 
 .dept-card-tracker:hover ~ .dept-card .dept-card-subtitle {
-  color: rgb(80, 80, 90);
+  opacity: 0;
+}
+
+.dept-card-title {
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.2;
+  transition: opacity 200ms ease-in-out;
+}
+
+.dept-card--not-started .dept-card-title,
+.dept-card--uploading .dept-card-title,
+.dept-card--in-progress .dept-card-title,
+.dept-card--done .dept-card-title,
+.dept-card--done-edited .dept-card-title {
+  color: #fff;
+}
+
+.dept-card-subtitle {
+  text-align: center;
+  font-size: 10px;
+  margin-top: 3px;
+  transition: opacity 200ms ease-in-out, color 200ms ease-in-out;
+  line-height: 1.2;
+}
+
+.dept-card-subtitle[data-status="not-started"],
+.dept-card-subtitle[data-status="uploading"],
+.dept-card-subtitle[data-status="in-progress"],
+.dept-card-subtitle[data-status="done"],
+.dept-card-subtitle[data-status="done-edited"] {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.dept-card-tracker:hover ~ .dept-card .dept-card-subtitle {
+  color: #fff;
 }
 
 /* Grid areas for trackers */

@@ -1,0 +1,220 @@
+// apps/desktop/src/renderer/settings/SettingsView.tsx
+
+import { useState, useEffect, useCallback } from "react";
+import Button from "../components/ui/Button";
+import Card from "../components/ui/Card";
+
+type KeyEntry = { key: string; label: string; description: string; url: string; isSet: boolean };
+
+type Props = {
+  onBack: () => void;
+};
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export default function SettingsView({ onBack }: Props) {
+  const [cacheInfo, setCacheInfo] = useState<{ count: number; sizeBytes: number } | null>(null);
+  const [clearing, setClearing] = useState(false);
+  const [clearedCount, setClearedCount] = useState<number | null>(null);
+
+  const [requiredKeys, setRequiredKeys] = useState<KeyEntry[]>([]);
+  const [optionalKeys, setOptionalKeys] = useState<KeyEntry[]>([]);
+  const [keyValues, setKeyValues] = useState<Record<string, string>>({});
+  const [keySaving, setKeySaving] = useState(false);
+  const [keySaved, setKeySaved] = useState(false);
+
+  const [appPaths, setAppPaths] = useState<{ userData: string; firebaseCredential: string; firebaseCredentialExists: boolean } | null>(null);
+
+  const loadCacheInfo = useCallback(async () => {
+    const info = await window.ufm.getCutoutCacheInfo();
+    setCacheInfo(info);
+  }, []);
+
+  useEffect(() => {
+    loadCacheInfo();
+    void window.ufm.getConfig().then((cfg: { requiredKeys: KeyEntry[]; optionalKeys: KeyEntry[] }) => {
+      setRequiredKeys(cfg.requiredKeys);
+      setOptionalKeys(cfg.optionalKeys);
+    });
+    void window.ufm.getAppPaths().then(setAppPaths);
+  }, [loadCacheInfo]);
+
+  const handleClearCache = useCallback(async () => {
+    const confirmed = window.confirm(
+      `Delete all ${cacheInfo?.count ?? 0} cached cutout files (${formatBytes(cacheInfo?.sizeBytes ?? 0)})?\n\nOnly do this after you have exported all current flyer jobs. Any open job in the editor will lose its product images.`
+    );
+    if (!confirmed) return;
+
+    setClearing(true);
+    setClearedCount(null);
+    try {
+      const res = await window.ufm.clearCutoutCache();
+      setClearedCount(res.cleared ?? 0);
+      setCacheInfo({ count: 0, sizeBytes: 0 });
+    } finally {
+      setClearing(false);
+    }
+  }, [cacheInfo]);
+
+  const handleSaveKeys = async () => {
+    const patch: Record<string, string> = {};
+    for (const [k, v] of Object.entries(keyValues)) {
+      if (v.trim()) patch[k] = v.trim();
+    }
+    if (Object.keys(patch).length === 0) return;
+    setKeySaving(true);
+    try {
+      await window.ufm.saveConfig(patch);
+      setKeyValues({});
+      setKeySaved(true);
+      setTimeout(() => setKeySaved(false), 2500);
+      void window.ufm.getConfig().then((cfg: { requiredKeys: KeyEntry[]; optionalKeys: KeyEntry[] }) => { setRequiredKeys(cfg.requiredKeys); setOptionalKeys(cfg.optionalKeys); });
+    } finally {
+      setKeySaving(false);
+    }
+  };
+
+  const inputStyle: React.CSSProperties = {
+    width: "100%", boxSizing: "border-box" as const,
+    padding: "8px 10px", borderRadius: 6,
+    border: "1.5px solid #e2e8f0", fontSize: 13,
+    fontFamily: "monospace", background: "#f8fafc",
+  };
+
+  const renderKeyField = (k: KeyEntry) => (
+    <div key={k.key} style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 3 }}>
+        <label style={{ fontSize: 13, fontWeight: 600, color: "#1e293b" }}>
+          {k.label}
+          {k.isSet && <span style={{ marginLeft: 6, fontSize: 11, color: "#22c55e", fontWeight: 400 }}>✓ Set</span>}
+        </label>
+      </div>
+      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 5 }}>{k.description}</div>
+      <input
+        type="password"
+        placeholder={k.isSet ? "Leave blank to keep current value" : "Paste key here"}
+        value={keyValues[k.key] ?? ""}
+        onChange={e => setKeyValues(prev => ({ ...prev, [k.key]: e.target.value }))}
+        style={inputStyle}
+        autoComplete="off"
+        spellCheck={false}
+      />
+    </div>
+  );
+
+  return (
+    <div style={{ maxWidth: 640, margin: "0 auto", padding: "0 24px" }}>
+      <div style={{ marginBottom: 24 }}>
+        <Button variant="secondary" size="sm" onClick={onBack}>
+          ← Back
+        </Button>
+      </div>
+
+      <h2 style={{ margin: "0 0 24px", fontSize: "var(--text-2xl)", fontWeight: "var(--font-semibold)" }}>
+        Settings
+      </h2>
+
+      {/* API Keys section */}
+      <Card style={{ padding: 24, marginBottom: 16 }}>
+        <h3 style={{ margin: "0 0 4px", fontSize: "var(--text-lg)", fontWeight: "var(--font-semibold)" }}>
+          API Keys
+        </h3>
+        <p style={{ margin: "0 0 16px", fontSize: "var(--text-sm)", color: "var(--color-text-muted)", lineHeight: 1.5 }}>
+          Keys are stored locally in your application data folder and never sent anywhere except the respective API endpoints.
+        </p>
+
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.08em", textTransform: "uppercase" as const, marginBottom: 10 }}>Required</div>
+        {requiredKeys.map(renderKeyField)}
+
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", letterSpacing: "0.08em", textTransform: "uppercase" as const, margin: "16px 0 10px" }}>Optional</div>
+        {optionalKeys.map(renderKeyField)}
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 16 }}>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleSaveKeys}
+            disabled={keySaving || Object.values(keyValues).every(v => !v.trim())}
+          >
+            {keySaving ? "Saving…" : "Save Keys"}
+          </Button>
+          {keySaved && <span style={{ fontSize: 13, color: "#22c55e" }}>✓ Saved</span>}
+        </div>
+      </Card>
+
+      {/* Firebase credentials section */}
+      <Card style={{ padding: 24, marginBottom: 16 }}>
+        <h3 style={{ margin: "0 0 4px", fontSize: "var(--text-lg)", fontWeight: "var(--font-semibold)" }}>
+          Firebase Credentials
+        </h3>
+        <p style={{ margin: "0 0 12px", fontSize: "var(--text-sm)", color: "var(--color-text-muted)", lineHeight: 1.5 }}>
+          Required for the Product Library (database search, batch upload). Download your Firebase service account JSON from the Firebase console and place it at the path below.
+        </p>
+        {appPaths && (
+          <>
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Expected location:</div>
+              <code style={{ display: "block", fontSize: 11, background: "var(--color-bg-subtle)", padding: "7px 10px", borderRadius: 6, wordBreak: "break-all" as const, color: "#1e293b" }}>
+                {appPaths.firebaseCredential}
+              </code>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {appPaths.firebaseCredentialExists ? (
+                <span style={{ fontSize: 13, color: "#22c55e", fontWeight: 600 }}>✓ Credential file found</span>
+              ) : (
+                <span style={{ fontSize: 13, color: "#f59e0b", fontWeight: 600 }}>⚠ Not found — Product Library features disabled</span>
+              )}
+            </div>
+          </>
+        )}
+      </Card>
+
+      {/* Storage section */}
+      <Card style={{ padding: 24, marginBottom: 16 }}>
+        <h3 style={{ margin: "0 0 4px", fontSize: "var(--text-lg)", fontWeight: "var(--font-semibold)" }}>
+          Cutout Cache
+        </h3>
+        <p style={{ margin: "0 0 16px", fontSize: "var(--text-sm)", color: "var(--color-text-muted)", lineHeight: 1.5 }}>
+          Every product image you process gets its background removed and saved as a PNG in{" "}
+          <code style={{ fontSize: 11, background: "var(--color-bg-subtle)", padding: "1px 5px", borderRadius: 4 }}>
+            apps/exports/cutouts/
+          </code>
+          . These files are needed while jobs are open in the editor. Once you have exported your flyers you can safely delete them to free up disk space.
+        </p>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ flex: 1 }}>
+            {cacheInfo === null ? (
+              <span style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>Loading…</span>
+            ) : cacheInfo.count === 0 ? (
+              <span style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>Cache is empty</span>
+            ) : (
+              <span style={{ fontSize: "var(--text-sm)", fontWeight: "var(--font-medium)" }}>
+                {cacheInfo.count} file{cacheInfo.count !== 1 ? "s" : ""} &mdash;{" "}
+                {formatBytes(cacheInfo.sizeBytes)}
+              </span>
+            )}
+            {clearedCount !== null && (
+              <span style={{ marginLeft: 12, fontSize: "var(--text-sm)", color: "var(--color-success)" }}>
+                ✓ Deleted {clearedCount} file{clearedCount !== 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={handleClearCache}
+            disabled={clearing || (cacheInfo?.count ?? 0) === 0}
+          >
+            {clearing ? "Clearing…" : "Clear Cache"}
+          </Button>
+        </div>
+      </Card>
+    </div>
+  );
+}

@@ -24,4 +24,5 @@ export type FlyerPlacement = {
   titleItalic?: boolean
   priceFontFamily?: string
   priceColor?: string
+  priceShowDollar?: boolean
 }

@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { FlyerJob, IngestItem } from "../types";
-import { FlyerTemplateConfig } from "../editor/loadFlyerTemplateConfig";
+import { FlyerTemplateConfig, CustomBoxDef } from "../editor/loadFlyerTemplateConfig";
 import RenderFlyerPlacements from "../editor/RenderFlyerPlacements";
 import { layoutFlyer, layoutFlyerSlots } from "../../../../shared/flyer/layout/layoutFlyer";
 import { isSlottedDepartment, isCardDepartment } from "../editor/loadFlyerTemplateConfig";
@@ -24,18 +24,30 @@ export default function FlyerExportRenderer({
 }: Props) {
   const [imageLoadStates, setImageLoadStates] = useState<Record<string, boolean>>({});
 
-  // Track image loading
+  // Mark custom pages without background image as loaded immediately
+  useEffect(() => {
+    setImageLoadStates((prev) => {
+      const next = { ...prev };
+      templateConfig.pages.forEach((page) => {
+        if ((page as any).boxes && !page.imagePath) {
+          next[page.pageId] = true;
+        }
+      });
+      return next;
+    });
+  }, [templateConfig.pages]);
+
   const handleImageLoad = (pageId: string) => {
     setImageLoadStates((prev) => ({ ...prev, [pageId]: true }));
   };
 
-  // Notify when all images are loaded
+  // Notify when all images are loaded (custom pages without imagePath count as loaded)
   useEffect(() => {
-    const allLoaded = templateConfig.pages.every(
-      (page) => imageLoadStates[page.pageId]
-    );
+    const allLoaded = templateConfig.pages.every((page) => {
+      if ((page as any).boxes && !(page as any).imagePath) return true; // custom page, no bg image
+      return imageLoadStates[page.pageId];
+    });
     if (allLoaded && onRenderComplete) {
-      // Small delay to ensure rendering is complete
       setTimeout(onRenderComplete, 500);
     }
   }, [imageLoadStates, templateConfig.pages, onRenderComplete]);
@@ -61,23 +73,117 @@ export default function FlyerExportRenderer({
             data-page-id={page.pageId}
             style={{
               position: "relative",
-              background: "#fff",
+              background: (page as any).backgroundColor ?? "#fff",
               boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-              width: "1650px", // Fixed width matching template
+              width: "1650px",
               marginBottom: pageIndex < templateConfig.pages.length - 1 ? "20px" : "0",
             }}
           >
-            {/* Background template image */}
-            <img
-              src={page.imagePath}
-              alt={`Page ${pageIndex + 1}`}
-              onLoad={() => handleImageLoad(page.pageId)}
-              style={{
-                display: "block",
-                width: "1650px", // Use fixed width instead of percentage
-                height: "auto",
-              }}
-            />
+            {/* Background: template image or custom background image */}
+            {page.imagePath ? (
+              <img
+                src={page.imagePath}
+                alt={`Page ${pageIndex + 1}`}
+                onLoad={() => handleImageLoad(page.pageId)}
+                style={{ display: "block", width: "1650px", height: "auto" }}
+              />
+            ) : (page as any).boxes ? (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  background: (page as any).backgroundImage ? `url(${(page as any).backgroundImage}) center/cover` : "transparent",
+                }}
+              />
+            ) : null}
+
+            {/* Custom overlay boxes */}
+            {(page as any).boxes?.length > 0 && (
+              <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+                {((page as any).boxes as CustomBoxDef[])
+                  .map((box: CustomBoxDef) => {
+                    const clipPath = (box.cropLeft ?? 0) || (box.cropRight ?? 0) || (box.cropTop ?? 0) || (box.cropBottom ?? 0)
+                      ? `inset(${box.cropTop ?? 0}px ${box.cropRight ?? 0}px ${box.cropBottom ?? 0}px ${box.cropLeft ?? 0}px)`
+                      : undefined;
+                    const textContent = box.content?.trim()
+                      ? box.content
+                      : (box.boxType === "product" || !box.boxType) && box.label?.trim()
+                      ? box.label
+                      : null;
+                    return (
+                      <div
+                        key={box.id}
+                        style={{
+                          position: "absolute",
+                          left: box.x,
+                          top: box.y,
+                          width: box.width,
+                          height: box.height,
+                          background: box.color,
+                          boxSizing: "border-box",
+                          borderRadius: box.borderRadius ?? 0,
+                          border: box.borderWidth ? `${box.borderWidth}px solid ${box.borderColor ?? "#000"}` : undefined,
+                          overflow: "hidden",
+                          clipPath,
+                        }}
+                      >
+                        {/* Image layer */}
+                        {box.imagePath && (
+                          <div style={{
+                            position: "absolute", inset: 0,
+                            background: `url(${box.imagePath}) center/contain no-repeat`,
+                          }} />
+                        )}
+                        {/* Text layer */}
+                        {textContent && (
+                          <div
+                            style={box.textOffsetX != null || box.textOffsetY != null ? {
+                              position: "absolute",
+                              left: box.textOffsetX ?? 0,
+                              top: box.textOffsetY ?? 0,
+                              color: box.textColor,
+                              fontWeight: 700,
+                              fontSize: box.fontSize ?? 24,
+                              fontFamily: box.fontFamily || undefined,
+                              lineHeight: 1,
+                              padding: "6px 10px",
+                            } : {
+                              position: "absolute", inset: 0,
+                              padding: "6px 10px",
+                              display: "flex",
+                              alignItems: box.textVertical === "middle" ? "center" : box.textVertical === "bottom" ? "flex-end" : "flex-start",
+                              justifyContent: box.textAlign === "center" ? "center" : box.textAlign === "right" ? "flex-end" : "flex-start",
+                              color: box.textColor,
+                              fontWeight: 700,
+                              fontSize: box.fontSize ?? 24,
+                              fontFamily: box.fontFamily || undefined,
+                              lineHeight: 1,
+                              overflow: "hidden",
+                            }}
+                          >
+                            {(() => {
+                              const hr = box.highlightRange;
+                              if (hr && hr.start < hr.end && box.highlightColor) {
+                                const before = textContent.slice(0, hr.start);
+                                const highlight = textContent.slice(hr.start, hr.end);
+                                const after = textContent.slice(hr.end);
+                                return (
+                                  <span>
+                                    {before}
+                                    <span style={{ backgroundColor: box.highlightColor }}>{highlight}</span>
+                                    {after}
+                                  </span>
+                                );
+                              }
+                              return textContent;
+                            })()}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
 
             {/* Render each department on this page */}
             {Object.entries(page.departments).map(([deptId, deptDef]) => {

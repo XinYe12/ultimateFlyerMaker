@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { FlyerJob, ImageTask, DiscountInput, DepartmentId, JobStatus, IngestItem, CardLayout } from "../types";
-import { loadJobs, saveJobs } from "../services/jobPersistence";
+import { loadJobsFromFile, saveJobsToFile } from "../services/jobPersistence";
 
 declare global {
   interface Window {
@@ -14,32 +14,36 @@ declare global {
       onJobProgress: (callback: (data: { jobId: string; progress: { currentStep: string; processedImages: number; totalImages: number } }) => void) => () => void;
       onJobComplete: (callback: (data: { jobId: string; result: any }) => void) => () => void;
       onJobError: (callback: (data: { jobId: string; error: string }) => void) => () => void;
+      onJobStarted: (callback: (data: { jobId: string; itemCount: number }) => void) => () => void;
+      onJobItemComplete: (callback: (data: { jobId: string; processedImage: any; discountLabel: any; index: number; total: number }) => void) => () => void;
       [key: string]: any;
     };
   }
 }
 
 export function useJobQueue() {
-  // Load jobs from localStorage synchronously on mount; no crash dialog — we always resume
-  const [jobs, setJobs] = useState<FlyerJob[]>(() => loadJobs());
-  const resumeDone = useRef(false);
+  // Jobs loaded async from file; start empty to avoid overwriting file before load completes
+  const [jobs, setJobs] = useState<FlyerJob[]>([]);
+  const initialized = useRef(false);
 
-  // Resume any queued jobs once on mount
+  // Load from userData file on mount, then resume any queued jobs
   useEffect(() => {
-    if (resumeDone.current) return;
-    resumeDone.current = true;
-    const savedJobs = loadJobs();
-    const queuedJobs = savedJobs.filter(j => j.status === "queued");
-    queuedJobs.forEach(job => {
-      window.ufm.startJob(job).catch(err => {
-        console.error("[useJobQueue] Failed to resume job:", job.id, err);
+    loadJobsFromFile().then(loaded => {
+      initialized.current = true;
+      if (loaded.length > 0) setJobs(loaded);
+      const queuedJobs = loaded.filter(j => j.status === "queued");
+      queuedJobs.forEach(job => {
+        window.ufm.startJob(job).catch((err: unknown) => {
+          console.error("[useJobQueue] Failed to resume job:", job.id, err);
+        });
       });
     });
   }, []);
 
-  // Persist jobs whenever they change
+  // Persist to file whenever jobs change (guard prevents overwriting before initial load)
   useEffect(() => {
-    saveJobs(jobs);
+    if (!initialized.current) return;
+    saveJobsToFile(jobs);
   }, [jobs]);
 
   // Listen for IPC events
@@ -100,10 +104,74 @@ export function useJobQueue() {
       );
     });
 
+    const unsubStarted = window.ufm.onJobStarted(({ jobId, itemCount }) => {
+      setJobs(prev =>
+        prev.map(job =>
+          job.id === jobId
+            ? {
+                ...job,
+                status: "processing" as JobStatus,
+                progress: {
+                  ...job.progress,
+                  totalImages: itemCount,
+                  processedImages: 0,
+                  currentStep: "Processing…",
+                },
+              }
+            : job
+        )
+      );
+    });
+
+    const unsubAborted = window.ufm.onJobAborted(({ jobId }: { jobId: string }) => {
+      setJobs(prev =>
+        prev.map(job =>
+          job.id === jobId
+            ? {
+                ...job,
+                status: "drafting" as JobStatus,
+                progress: {
+                  ...job.progress,
+                  currentStep: "Draft",
+                },
+              }
+            : job
+        )
+      );
+    });
+
+    const unsubItemComplete = window.ufm.onJobItemComplete(({ jobId, processedImage, discountLabel, index, total }) => {
+      setJobs(prev =>
+        prev.map(job => {
+          if (job.id !== jobId) return job;
+          const existingImages = job.result?.processedImages ?? [];
+          const existingLabels = job.result?.discountLabels ?? [];
+          return {
+            ...job,
+            progress: {
+              ...job.progress,
+              processedImages: index + 1,
+              totalImages: total,
+            },
+            result: {
+              ...job.result,
+              processedImages: [...existingImages, processedImage],
+              discountLabels: discountLabel ? [...existingLabels, discountLabel] : existingLabels,
+              verificationDone: job.result?.verificationDone ?? false,
+              departmentLocked: job.result?.departmentLocked ?? false,
+            },
+          };
+        })
+      );
+    });
+
     return () => {
       unsubProgress();
       unsubComplete();
       unsubError();
+      unsubStarted();
+      unsubAborted();
+      unsubItemComplete();
     };
   }, []);
 
@@ -266,6 +334,73 @@ export function useJobQueue() {
     }
   }, [jobs]);
 
+  // Create/update jobs for all departments at once and immediately start each one.
+  // Uses a single setJobs call to avoid stale-closure issues with per-job startJob.
+  const bulkApplyAndStart = useCallback(
+    async (opts: {
+      templateId: string;
+      discountsByDept: Record<string, DiscountInput>;
+      availableDepts: string[];
+    }) => {
+      const { templateId: tplId, discountsByDept, availableDepts } = opts;
+      const jobsToStart: FlyerJob[] = [];
+
+      setJobs(prev => {
+        const next = [...prev];
+        for (const [dept, discount] of Object.entries(discountsByDept)) {
+          if (!availableDepts.includes(dept)) continue;
+
+          const existing = next.find(
+            j => j.department === dept && j.templateId === tplId &&
+                 (j.status === "drafting" || j.status === "failed")
+          );
+
+          let jobObj: FlyerJob;
+          if (existing) {
+            jobObj = {
+              ...existing,
+              discount,
+              status: "queued" as JobStatus,
+              startedAt: Date.now(),
+              progress: { ...existing.progress, currentStep: "Queued" },
+            };
+            const idx = next.findIndex(j => j.id === existing.id);
+            next[idx] = jobObj;
+          } else {
+            jobObj = {
+              id: uuidv4(),
+              name: `Flyer ${new Date().toLocaleDateString()}`,
+              department: dept as DepartmentId,
+              templateId: tplId,
+              images: [],
+              discount,
+              status: "queued" as JobStatus,
+              createdAt: Date.now(),
+              startedAt: Date.now(),
+              progress: { totalImages: 0, processedImages: 0, currentStep: "Queued" },
+            };
+            next.unshift(jobObj);
+          }
+          jobsToStart.push(jobObj);
+        }
+        return next;
+      });
+
+      // Start each job — we pass the constructed objects directly to avoid
+      // re-reading from a potentially stale jobs closure.
+      await Promise.all(
+        jobsToStart.map(job =>
+          window.ufm.startJob(job).catch((err: unknown) => {
+            console.error("[bulkApplyAndStart] Failed to start job:", job.id, err);
+          })
+        )
+      );
+
+      return jobsToStart.map(j => j.id);
+    },
+    []
+  );
+
   // Delete a job
   const deleteJob = useCallback((jobId: string) => {
     setJobs(prev => prev.filter(j => j.id !== jobId));
@@ -274,14 +409,17 @@ export function useJobQueue() {
   // Sync current editor items + discount labels back to a drafting job (updates draft in job queue UI)
   const syncJobFromEditorItems = useCallback(
     (jobId: string, items: IngestItem[], discountLabels?: any[], slotOverrides?: Record<number, { x: number; y: number; width: number; height: number }>, cardLayouts?: Record<string, CardLayout>, verificationDone?: boolean, verificationProgress?: any, departmentLocked?: boolean) => {
-      const images: ImageTask[] = items.map((item) => ({
-        id: item.id,
-        path: item.path,
-        status: item.status === "done" ? "done" : item.status === "error" ? "error" : item.status === "running" ? "processing" : "pending",
-        result: item.result,
-        error: item.error,
-        slotIndex: item.slotIndex,
-      }));
+      // Exclude skeleton placeholder items (status "pending" with no result) from job persistence
+      const images: ImageTask[] = items
+        .filter(item => !(item.status === "pending" && !item.result))
+        .map((item) => ({
+          id: item.id,
+          path: item.path,
+          status: item.status === "done" ? "done" : item.status === "error" ? "error" : item.status === "running" ? "processing" : "pending",
+          result: item.result,
+          error: item.error,
+          slotIndex: item.slotIndex,
+        }));
       setJobs((prev) =>
         prev.map((j) =>
           j.id === jobId
@@ -328,6 +466,7 @@ export function useJobQueue() {
     setJobName,
     setJobDepartment,
     startJob,
+    bulkApplyAndStart,
     deleteJob,
     getJob,
     syncJobFromEditorItems,

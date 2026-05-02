@@ -23,21 +23,40 @@ import CheckingPanel from "./editor/CheckingPanel";
 import { loadFlyerTemplateConfig, isCardDepartment, findPageForDepartment } from "./editor/loadFlyerTemplateConfig";
 import { clearDepartmentDraft } from "./editor/draftStorage";
 import { autoLayoutCards } from "../../../shared/flyer/layout/autoLayoutCards";
+import { CARD_GAP } from "../../../shared/flyer/layout/layoutCardRows";
 import JobQueueView from "./jobs/JobQueueView";
 import DbUploadView from "./db-upload/DbUploadView";
+import TemplateSelectView from "./editor/TemplateSelectView";
+import SettingsView from "./settings/SettingsView";
+import SetupView from "./settings/SetupView";
+import WorkflowProgressBar from "./components/WorkflowProgressBar";
 
-type AppView = "queue" | "editor" | "db-upload";
+type AppView = "setup" | "home" | "templateSelect" | "queue" | "editor" | "db-upload" | "settings";
 
 export default function App() {
   // ---------------- VIEW STATE ----------------
-  const [view, setView] = useState<AppView>("queue");
+  const [view, setView] = useState<AppView>("home");
+
+  // Check for missing required API keys on mount — show setup screen if needed
+  useEffect(() => {
+    window.ufm.getMissingKeys().then((missing: string[]) => {
+      if (missing.length > 0) setView("setup");
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [viewingJob, setViewingJob] = useState<FlyerJob | null>(null);
 
   // ---------------- EDITOR STATE ----------------
   const [templateId, setTemplateId] = useState("weekly_v1");
+  const [selectedTemplateId, setSelectedTemplateId] = useState("weekly_v1");
   const [department, setDepartment] = useState("grocery");
   const [availableDepartments, setAvailableDepartments] = useState<string[]>(["grocery"]);
-  const { queue: editorQueue, loadItems, enqueue, remove, updateItem, addItem } = useIngestQueue();
+  const { queue: editorQueue, loadItems, enqueue, remove, updateItem, addItem, applyCutoutPatch, applyCutoutError } = useIngestQueue();
+  const editorQueueRef = useRef(editorQueue);
+  editorQueueRef.current = editorQueue;
+  const applyCutoutPatchRef = useRef(applyCutoutPatch);
+  applyCutoutPatchRef.current = applyCutoutPatch;
+  const applyCutoutErrorRef = useRef(applyCutoutError);
+  applyCutoutErrorRef.current = applyCutoutError;
   const jobQueueHook = useJobQueue();
   const { jobs, deleteJob, syncJobFromEditorItems } = jobQueueHook;
   const [discountLabels, setDiscountLabels] = useState<{
@@ -45,6 +64,8 @@ export default function App() {
     title?: { en: string; zh: string; size: string; regularPrice: string };
     price?: { display: string; quantity?: number | null; unit?: string; regular?: string };
   }[]>([]);
+  const discountLabelsRef = useRef(discountLabels);
+  discountLabelsRef.current = discountLabels;
   const [slotOverrides, setSlotOverrides] = useState<Record<number, { x: number; y: number; width: number; height: number }>>({});
   const [cardLayouts, setCardLayouts] = useState<Record<string, CardLayout>>({});
   const [userRowCounts, setUserRowCounts] = useState<Record<string, number>>({});
@@ -59,7 +80,7 @@ export default function App() {
   const [seriesPickerItemId, setSeriesPickerItemId] = useState<string | null>(null);
   // Track which series items have already been auto-shown (so we don't re-open after Cancel)
   const seriesAutoShownRef = useRef<Set<string>>(new Set());
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showAddProductDialog, setShowAddProductDialog] = useState(false);
   const [originalDiscounts, setOriginalDiscounts] = useState<any[]>([]);
   const [showCheckingPanel, setShowCheckingPanel] = useState(false);
@@ -67,6 +88,9 @@ export default function App() {
   const [verificationDone, setVerificationDone] = useState(false);
   const [verificationProgress, setVerificationProgress] = useState<any>(null);
   const [departmentLocked, setDepartmentLocked] = useState(false);
+  const [flyerExported, setFlyerExported] = useState(false);
+  const [saveCombining, setSaveCombining] = useState(false);
+  const [saveProgress, setSaveProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
 
   const [toastState, setToastState] = useState<{ visible: boolean; message: string; variant: "success" | "error" }>({
     visible: false, message: "Draft saved", variant: "success",
@@ -76,6 +100,34 @@ export default function App() {
   const editorSyncRunCount = useRef(0);
   const lastViewingJobIdRef = useRef<string | null>(null);
   const templateConfigRef = useRef<any>(null);
+  const xlsxItemsLoadedRef = useRef(false);
+
+  // Phase-2 cutout results arrive via push channel — register once on mount
+  useEffect(() => {
+    const unsubOk  = window.ufm.onCutoutComplete((d: { id: string; cutoutPath: string; layout: { size: string } }) => applyCutoutPatchRef.current(d.id, { cutoutPath: d.cutoutPath, layout: d.layout }));
+    const unsubErr = window.ufm.onCutoutError((d: { id: string; error: string }) => applyCutoutErrorRef.current(d.id, d.error));
+    return () => { unsubOk(); unsubErr(); };
+  }, []);
+
+  // Save-combination progress/complete listeners
+  useEffect(() => {
+    const unsubProgress = window.ufm.onSaveCombinationProgress((d: { index: number; total: number }) => {
+      setSaveProgress({ done: d.index + 1, total: d.total });
+    });
+    const unsubComplete = window.ufm.onSaveCombinationComplete((d: { saved: number; skipped: number; errors: number; error?: string }) => {
+      setSaveCombining(false);
+      setSaveProgress({ done: 0, total: 0 });
+      if (d.error) {
+        setToastState({ visible: true, message: `Save failed: ${d.error}`, variant: "error" });
+      } else {
+        const msg = d.saved > 0
+          ? `Saved ${d.saved} product${d.saved !== 1 ? "s" : ""} to DB${d.skipped > 0 ? `, skipped ${d.skipped}` : ""}`
+          : `Nothing saved${d.skipped > 0 ? ` (${d.skipped} items had no image)` : ""}`;
+        setToastState({ visible: true, message: msg, variant: d.saved > 0 ? "success" : "error" });
+      }
+    });
+    return () => { unsubProgress(); unsubComplete(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // On mount: if we're recovering from a crash, show progress overlay then auto-hide
   useEffect(() => {
@@ -102,14 +154,42 @@ export default function App() {
     if (!isDeptCardBased()) setEditMode(false);
   }, [department]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Listen for job preflight coverage report
+  // Sync items from job state to editorQueue as they stream in
   useEffect(() => {
-    const unsub = window.ufm.onJobPreflight(({ matched, total, coverage }: { matched: number; total: number; coverage: number }) => {
-      const msg = `DB: ${matched}/${total} matched (${coverage}%). Starting download…`;
-      setToastState({ visible: true, message: msg, variant: coverage >= 70 ? "success" : "error" });
+    if (view !== "editor" || !viewingJob) return;
+    const liveJob = jobs.find(j => j.id === viewingJob.id);
+    if (!liveJob) return;
+
+    const jobImages = liveJob.result?.processedImages ?? [];
+    const jobLabels = liveJob.result?.discountLabels ?? [];
+
+    if (jobImages.length === 0) return;
+
+    const existingIds = new Set(editorQueueRef.current.map(item => item.id));
+    const newImages = jobImages.filter(
+      (img: any) => img.status === "done" && img.result && !existingIds.has(img.id)
+    );
+
+    // Always process labels even when no new images — for XLSX jobs, labels arrive in
+    // the final "complete" event after all items have already streamed in via itemComplete.
+    const existingLabelIds = new Set(discountLabelsRef.current.map((l: any) => l.id));
+    const newLabels = jobLabels.filter((l: any) => !existingLabelIds.has(l.id));
+    if (newLabels.length > 0) {
+      setDiscountLabels(prev => [...prev, ...newLabels]);
+    }
+
+    if (newImages.length === 0) return;
+
+    newImages.forEach((img: any) => {
+      addItem({
+        id: img.id,
+        path: img.path,
+        status: "done" as const,
+        result: img.result,
+        slotIndex: img.slotIndex,
+      });
     });
-    return unsub;
-  }, []);
+  }, [view, viewingJob?.id, jobs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // load template config → extract available departments
   useEffect(() => {
@@ -204,6 +284,67 @@ export default function App() {
     setCardLayouts(prev => ({ ...prev, [department]: newLayoutWithScale }));
   }, [department, cardLayouts]);
 
+  const handleFlipLayout = useCallback(() => {
+    const layout = cardLayouts[department];
+    if (!layout || layout.length === 0) return;
+
+    const config = templateConfigRef.current;
+    const page = config ? findPageForDepartment(config, department) : null;
+    const deptDef = page?.departments[department];
+    if (!deptDef || !isCardDepartment(deptDef)) return;
+
+    const regionWidth = (deptDef as any).region.width;
+    const curRows = Math.max(...layout.map(c => c.row)) + 1;
+    const curCols = Math.max(...layout.map(c => c.order + 1));
+    if (curRows === curCols) return;
+
+    const newRows = curCols;
+    const newCols = curRows;
+    const newCardWidth = Math.round((regionWidth - (newCols - 1) * CARD_GAP) / newCols);
+
+    // Build lookup: old (row, order) → card
+    const grid = new Map<string, typeof layout[0]>();
+    for (const card of layout) {
+      grid.set(`${card.row},${card.order}`, card);
+    }
+
+    // Transpose: new position (r, c) ← old position (row=c, order=r)
+    const newLayout: typeof layout = [];
+    for (let r = 0; r < newRows; r++) {
+      for (let c = 0; c < newCols; c++) {
+        const old = grid.get(`${c},${r}`);
+        newLayout.push({
+          id: Math.random().toString(36).slice(2) + Date.now().toString(36),
+          row: r,
+          order: c,
+          widthPx: newCardWidth,
+          itemId: old?.itemId,
+          contentScale: old?.contentScale,
+          imageScale: old?.imageScale,
+          titleScale: old?.titleScale,
+          priceScale: old?.priceScale,
+          imageRotation: old?.imageRotation,
+          imageOffsetX: old?.imageOffsetX,
+          imageOffsetY: old?.imageOffsetY,
+          orientation: old?.orientation,
+          cropLeft: old?.cropLeft,
+          cropRight: old?.cropRight,
+          cropTop: old?.cropTop,
+          cropBottom: old?.cropBottom,
+          titleFontFamily: old?.titleFontFamily,
+          titleColor: old?.titleColor,
+          titleItalic: old?.titleItalic,
+          priceFontFamily: old?.priceFontFamily,
+          priceColor: old?.priceColor,
+          priceShowDollar: old?.priceShowDollar,
+        });
+      }
+    }
+
+    setUserRowCounts(prev => ({ ...prev, [department]: newRows }));
+    setCardLayouts(prev => ({ ...prev, [department]: newLayout }));
+  }, [department, cardLayouts]);
+
   // Check if current department is card-based
   const isDeptCardBased = useCallback(() => {
     const config = templateConfigRef.current;
@@ -226,7 +367,7 @@ export default function App() {
     const deptDef = page.departments[department];
     if (!deptDef || !isCardDepartment(deptDef)) return;
 
-    const doneItems = editorQueue.filter((it: any) => it.status === "done");
+    const doneItems = editorQueue.filter((it: any) => it.status === "done" || it.status === "processing_cutout" || it.status === "cutout_error");
 
     // If there are items but no card layout, auto-generate
     if (doneItems.length > 0 && !cardLayouts[department]) {
@@ -255,7 +396,7 @@ export default function App() {
     const layout = cardLayouts[department];
     if (!layout) return;
 
-    const doneItems = editorQueue.filter((it: any) => it.status === "done");
+    const doneItems = editorQueue.filter((it: any) => it.status === "done" || it.status === "processing_cutout" || it.status === "cutout_error");
     const assignedItemIds = new Set(layout.filter(c => c.itemId).map(c => c.itemId));
     const unassigned = doneItems.filter((it: any) => !assignedItemIds.has(it.id));
 
@@ -295,16 +436,20 @@ export default function App() {
   useEffect(() => {
     if (view !== "editor") return;
 
-    const draftForDept = jobs.find(
-      j => j.department === department && j.status === "drafting"
+    const processingForDept = jobs.find(
+      j => j.department === department && (j.status === "queued" || j.status === "processing")
     );
     const completedForDept = jobs.find(
       j => j.department === department && j.status === "completed"
     );
+    const draftForDept = jobs.find(
+      j => j.department === department && j.status === "drafting"
+    );
 
-    const jobToLoad = (draftForDept && draftForDept.images.length > 0)
-      ? draftForDept
-      : completedForDept;
+    const jobToLoad =
+      processingForDept ||
+      (draftForDept && draftForDept.images.length > 0 ? draftForDept : null) ||
+      completedForDept;
 
     if (viewingJob && viewingJob.department !== department) {
       if (jobToLoad) {
@@ -339,6 +484,7 @@ export default function App() {
             setCardLayouts(jobToLoad.cardLayouts);
           }
         } else {
+          xlsxItemsLoadedRef.current = false;
           loadItems([]);
           setDiscountLabels([]);
           setOriginalDiscounts([]);
@@ -370,7 +516,10 @@ export default function App() {
     syncJobFromEditorItems(viewingJob.id, editorQueue, discountLabels, slotOverrides, cardLayouts, verificationDone, verificationProgress, departmentLocked);
     editorSyncRunCount.current += 1;
     if (editorSyncRunCount.current > 1) {
-      setToastState({ visible: true, message: "Draft saved", variant: "success" });
+      setToastState(prev => {
+        if (prev.visible && prev.variant === "error") return prev;
+        return { visible: true, message: "Draft saved", variant: "success" };
+      });
     }
   }, [view, viewingJob, editorQueue, discountLabels, slotOverrides, cardLayouts, verificationDone, verificationProgress, departmentLocked, syncJobFromEditorItems]);
 
@@ -384,6 +533,39 @@ export default function App() {
       }
     }
   }, [jobs]);
+
+  // Watch for parsedItems to arrive for xlsx drafts that opened before parsing finished
+  useEffect(() => {
+    if (view !== "editor" || !viewingJob || xlsxItemsLoadedRef.current) return;
+    if ((viewingJob.discount as any)?.type !== "xlsx") return;
+    const updatedJob = jobs.find(j => j.id === viewingJob.id);
+    const parsedItems = (updatedJob?.discount as any)?.parsedItems;
+    if (!parsedItems?.length) return;
+
+    const syntheticItems: IngestItem[] = parsedItems.map((di: any, i: number) => ({
+      id: crypto.randomUUID(),
+      path: "",
+      status: "pending" as const,
+      slotIndex: i,
+      result: {
+        inputPath: "",
+        cutoutPath: "",
+        layout: { size: "medium" },
+        title: {
+          en: di.en ?? "",
+          zh: di.zh ?? "",
+          size: di.size ?? "",
+          confidence: "high" as const,
+          source: "xlsx" as const,
+        },
+        discount: di,
+        ocr: { items: [] },
+        llmResult: { best_title: {}, items: [] },
+      },
+    }));
+    xlsxItemsLoadedRef.current = true;
+    loadItems(syntheticItems);
+  }, [view, viewingJob, jobs]);
 
   // ---------------- VIEW FLYER FROM JOB ----------------
   const handleViewFlyer = (job: FlyerJob) => {
@@ -420,9 +602,7 @@ export default function App() {
     setDepartmentLocked(job.result?.departmentLocked ?? false);
 
     setSlotOverrides(job.slotOverrides ?? {});
-    if (job.cardLayouts) {
-      setCardLayouts(job.cardLayouts);
-    }
+    setCardLayouts(job.cardLayouts ?? {});
     setView("editor");
   };
 
@@ -432,7 +612,7 @@ export default function App() {
     setTemplateId(job.templateId);
     setDepartment(job.department);
 
-    if (job.result?.processedImages) {
+    if (job.result?.processedImages?.length) {
       const ingestItems: IngestItem[] = job.result.processedImages
         .filter(img => img.status === "done" && img.result)
         .map(img => ({
@@ -458,7 +638,46 @@ export default function App() {
       setVerificationProgress(job.result?.verificationProgress ?? null);
       setDepartmentLocked(job.result?.departmentLocked ?? false);
     } else {
-      loadItems([]);
+      // No processed images yet
+      const parsedItems = (job.discount as any)?.parsedItems;
+      const isXlsx = (job.discount as any)?.type === "xlsx";
+
+      if (isXlsx) {
+        xlsxItemsLoadedRef.current = false;
+
+        if (parsedItems?.length) {
+          const syntheticItems: IngestItem[] = parsedItems.map(
+            (di: any, i: number) => ({
+              id: crypto.randomUUID(),
+              path: "",
+              status: "pending" as const,
+              slotIndex: i,
+              result: {
+                inputPath: "",
+                cutoutPath: "",
+                layout: { size: "medium" },
+                title: {
+                  en: di.en ?? "",
+                  zh: di.zh ?? "",
+                  size: di.size ?? "",
+                  confidence: "high" as const,
+                  source: "xlsx" as const,
+                },
+                discount: di,
+                ocr: { items: [] },
+                llmResult: { best_title: {}, items: [] },
+              },
+            })
+          );
+          xlsxItemsLoadedRef.current = true;
+          loadItems(syntheticItems);
+        } else {
+          // Still parsing — reactive effect will load items when ready
+          loadItems([]);
+        }
+      } else {
+        loadItems([]);
+      }
       setDiscountLabels([]);
       setOriginalDiscounts([]);
       setVerificationDone(false);
@@ -467,17 +686,8 @@ export default function App() {
     }
 
     setSlotOverrides(job.slotOverrides ?? {});
-    if (job.cardLayouts) {
-      setCardLayouts(job.cardLayouts);
-    }
+    setCardLayouts(job.cardLayouts ?? {});
     setView("editor");
-  };
-
-  const handleBackToQueue = () => {
-    setView("queue");
-    setViewingJob(null);
-    setToastState(prev => ({ ...prev, visible: false }));
-    editorSyncRunCount.current = 0;
   };
 
   // ---------------- REPLACE IMAGE IN-PLACE ----------------
@@ -499,7 +709,14 @@ export default function App() {
       updateItem(itemId, {
         status: "done",
         path: filePath,
-        result: { ...result, title: result.title, aiTitle: result.aiTitle },
+        result: {
+          ...result,
+          discount: existingItem?.result?.discount,
+          cutoutPaths: undefined,
+          allFlavorPaths: undefined,
+          pendingFlavorSelection: undefined,
+          subImageOverrides: undefined,
+        },
       });
     } catch (err) {
       console.error("Failed to replace image:", err);
@@ -509,10 +726,20 @@ export default function App() {
 
   // ---------------- REPLACE VIA SEARCH MODALS ----------------
   const handleSearchReplace = (itemId: string, data: { path: string; result: any }) => {
+    const existingItem = editorQueue.find(item => item.id === itemId);
     updateItem(itemId, {
       status: "done",
       path: data.path,
-      result: { ...data.result, title: data.result.title, aiTitle: data.result.aiTitle },
+      result: {
+        ...data.result,
+        // Preserve discount metadata from the original item
+        discount: existingItem?.result?.discount,
+        // Clear stale multi-image fields from the old item so the new single image renders correctly
+        cutoutPaths: undefined,
+        allFlavorPaths: undefined,
+        pendingFlavorSelection: undefined,
+        subImageOverrides: undefined,
+      },
     });
   };
 
@@ -725,6 +952,11 @@ export default function App() {
     setView("queue");
   };
 
+  const handleAbortJob = () => {
+    if (!viewingJob) return;
+    window.ufm.cancelJob(viewingJob.id);
+  };
+
   // ---------------- ADD PRODUCT FROM DIALOG ----------------
   const handleAddProductFromDialog = async (data: AddProductData) => {
     if (data.mode === "batch") {
@@ -915,6 +1147,30 @@ export default function App() {
     clearDepartmentDraft(templateId, department);
   };
 
+  // ---------------- CLEAR ALL DEPARTMENTS ----------------
+  const handleClearAllDepartments = () => {
+    // Clear local editor state (same as clearing current dept)
+    loadItems([]);
+    setDiscountLabels([]);
+    setOriginalDiscounts([]);
+    setVerificationDone(false);
+    setVerificationProgress(null);
+    setDepartmentLocked(false);
+    setSlotOverrides({});
+    setCardLayouts({});
+    // Clear persisted drafts for every available department
+    availableDepartments.forEach(dept => clearDepartmentDraft(templateId, dept));
+    // Abort any running jobs and remove all jobs for this template from the queue
+    jobs.filter(j => j.templateId === templateId).forEach(j => {
+      if (j.status === "processing" || j.status === "queued") {
+        window.ufm.cancelJob(j.id);
+      }
+      deleteJob(j.id);
+    });
+    // Clear the viewing job reference so the processing banner disappears
+    setViewingJob(null);
+  };
+
   const handleToggleLock = () => {
     if (departmentLocked) {
       const ok = confirm("Unlock this department? You will need to re-verify before locking again.");
@@ -923,6 +1179,7 @@ export default function App() {
       setVerificationDone(false);
     } else {
       setDepartmentLocked(true);
+      handleSaveCombination();
     }
   };
 
@@ -949,6 +1206,77 @@ export default function App() {
     ? Math.max(...currentCardLayout.map((c) => c.row)) + 1
     : (userRowCounts[department] ?? 1);
 
+  // Effective col count = max cards in any single row
+  const effectiveColCount = currentCardLayout && currentCardLayout.length > 0
+    ? Math.max(...currentCardLayout.map((c) => c.order + 1))
+    : 1;
+
+  // ---------------- WORKFLOW PROGRESS BAR ----------------
+  const allVerified =
+    availableDepartments.length > 0 &&
+    availableDepartments.every(dept =>
+      jobs.some(j => j.templateId === selectedTemplateId && j.department === dept && j.result?.departmentLocked)
+    );
+
+  // 4 = past last step → all dots show as completed (green)
+  const workflowStep =
+    flyerExported ? 4
+    : view === "templateSelect" ? 0
+    : view === "queue" ? (allVerified ? 3 : 1)
+    : view === "editor" ? (departmentLocked ? 3 : 2)
+    : 1;
+
+  const handleSaveCombination = () => {
+    if (saveCombining) return;
+    const payload = editorQueue
+      .filter((item: any) => item.result?.cutoutPath)
+      .map((item: any) => ({
+        id: item.id,
+        imagePath: item.result.cutoutPath as string,
+        en: (item.result?.title?.en ?? item.result?.discount?.en ?? "") as string,
+        zh: (item.result?.title?.zh ?? item.result?.discount?.zh ?? "") as string,
+        size: (item.result?.title?.size ?? item.result?.discount?.size ?? "") as string,
+        salePrice: (item.result?.discount?.salePrice ?? "") as string,
+        regularPrice: (item.result?.discount?.regularPrice ?? "") as string,
+        unit: (item.result?.discount?.unit ?? "") as string,
+        quantity: (item.result?.discount?.quantity ?? null) as number | null,
+        department,
+      }));
+    if (payload.length === 0) {
+      setToastState({ visible: true, message: "No items with images to save", variant: "error" });
+      return;
+    }
+    setSaveCombining(true);
+    setSaveProgress({ done: 0, total: payload.length });
+    window.ufm.saveCombinationToDb(payload);
+  };
+
+  const [triggerExport, setTriggerExport] = useState(false);
+
+  const handleWorkflowNavigate = (step: number) => {
+    // Clean up editor state when leaving the editor view
+    if (view === "editor" && step !== 3) {
+      setViewingJob(null);
+      setToastState(prev => ({ ...prev, visible: false }));
+      editorSyncRunCount.current = 0;
+    }
+    if (step === 0) setView("templateSelect");
+    else if (step === 1 || step === 2) setView("queue");
+    else if (step === 3) {
+      if (viewingJob) setView("editor");
+      else setView("queue");
+    }
+  };
+
+  const handleProgressBarExport = () => {
+    if (view === "editor") {
+      setViewingJob(null);
+      editorSyncRunCount.current = 0;
+    }
+    setView("queue");
+    setTriggerExport(true);
+  };
+
   const toolbarBtnBase: React.CSSProperties = {
     display: "flex", alignItems: "center", gap: 6,
     height: 32, padding: "0 12px",
@@ -969,13 +1297,18 @@ export default function App() {
       <RecoveryOverlay visible={showRecoveryOverlay} />
       <div className="app-root">
         <div className="app-header">
-          <div className="app-logo">
+          <button
+            type="button"
+            className="app-logo app-logo-btn"
+            onClick={() => setView("home")}
+            title="Home"
+          >
             <svg className="app-logo-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
               <rect x="4" y="2" width="24" height="28" rx="2" stroke="currentColor" strokeWidth="2" fill="none"/>
               <path d="M8 10h16M8 16h12M8 22h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
             </svg>
             <span className="app-logo-text">Ultimate Flyer Maker</span>
-          </div>
+          </button>
           <button
             type="button"
             className="app-quit-btn"
@@ -986,17 +1319,127 @@ export default function App() {
           </button>
         </div>
 
+        {view !== "setup" && view !== "home" && view !== "db-upload" && view !== "settings" && (
+          <WorkflowProgressBar
+            currentStep={workflowStep}
+            onNavigate={handleWorkflowNavigate}
+            onExportClick={allVerified ? handleProgressBarExport : undefined}
+          />
+        )}
+
+        {view === "setup" && (
+          <SetupView onComplete={() => setView("home")} />
+        )}
+
+        {view === "home" && (
+          <div style={{
+            flex: 1, display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center",
+            gap: 48, padding: "48px 32px",
+            background: "var(--color-bg, #f8fafc)",
+          }}>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 28, fontWeight: 700, color: "#1e293b", marginBottom: 8 }}>
+                What would you like to do?
+              </div>
+              <div style={{ fontSize: 15, color: "#64748b" }}>Choose an option to get started</div>
+            </div>
+
+            <div style={{ display: "flex", gap: 32, flexWrap: "wrap", justifyContent: "center" }}>
+              {/* Make a Flyer */}
+              <button
+                onClick={() => setView("templateSelect")}
+                style={{
+                  width: 280, padding: "40px 32px",
+                  background: "#fff", border: "2px solid #e2e8f0",
+                  borderRadius: 16, cursor: "pointer", textAlign: "left",
+                  display: "flex", flexDirection: "column", gap: 16,
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+                  transition: "border-color 150ms, box-shadow 150ms",
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4C6EF5"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 4px 16px rgba(76,110,245,0.15)"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#e2e8f0"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 2px 8px rgba(0,0,0,0.06)"; }}
+              >
+                <div style={{
+                  width: 52, height: 52, borderRadius: 12,
+                  background: "#EEF2FF", display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4C6EF5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>
+                  </svg>
+                </div>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: "#1e293b", marginBottom: 6 }}>Make a Flyer</div>
+                  <div style={{ fontSize: 13, color: "#64748b", lineHeight: 1.5 }}>
+                    Upload discounts, match products, and export a flyer PDF.
+                  </div>
+                </div>
+              </button>
+
+              {/* Product Library */}
+              <button
+                onClick={() => setView("db-upload")}
+                style={{
+                  width: 280, padding: "40px 32px",
+                  background: "#fff", border: "2px solid #e2e8f0",
+                  borderRadius: 16, cursor: "pointer", textAlign: "left",
+                  display: "flex", flexDirection: "column", gap: 16,
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+                  transition: "border-color 150ms, box-shadow 150ms",
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#22c55e"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 4px 16px rgba(34,197,94,0.15)"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#e2e8f0"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 2px 8px rgba(0,0,0,0.06)"; }}
+              >
+                <div style={{
+                  width: 52, height: 52, borderRadius: 12,
+                  background: "#F0FDF4", display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/>
+                  </svg>
+                </div>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: "#1e293b", marginBottom: 6 }}>Product Library</div>
+                  <div style={{ fontSize: 13, color: "#64748b", lineHeight: 1.5 }}>
+                    Upload and manage your product image database.
+                  </div>
+                </div>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {view === "templateSelect" && (
+          <TemplateSelectView
+            jobs={jobs}
+            onSelect={id => {
+              setTemplateId(id);
+              setSelectedTemplateId(id);
+              setView("queue");
+            }}
+          />
+        )}
+
         {view === "queue" && (
           <JobQueueView
+            templateId={selectedTemplateId}
+            onBack={() => setView("home")}
             onViewFlyer={handleViewFlyer}
             onOpenDraft={handleOpenDraft}
             jobQueueHook={jobQueueHook}
-            onOpenDbUpload={() => setView("db-upload")}
+            onOpenSettings={() => setView("settings")}
+            onExportDone={() => setFlyerExported(true)}
+            triggerExport={triggerExport}
+            onTriggerExportConsumed={() => setTriggerExport(false)}
           />
         )}
 
         {view === "db-upload" && (
-          <DbUploadView onBack={() => setView("queue")} />
+          <DbUploadView onBack={() => setView("home")} />
+        )}
+
+        {view === "settings" && (
+          <SettingsView onBack={() => setView("queue")} />
         )}
 
         <DraftSavedToast
@@ -1013,8 +1456,8 @@ export default function App() {
           <>
             <EditorHeader
               viewingJob={viewingJob}
-              onBack={handleBackToQueue}
               onDeleteDraft={handleDeleteDraft}
+              onAbortJob={handleAbortJob}
             />
 
             {viewingJob && (
@@ -1038,6 +1481,7 @@ export default function App() {
                     onDepartmentChange={setDepartment}
                     itemCount={editorQueue.length}
                     onClear={departmentLocked ? undefined : handleClearDepartment}
+                    onClearAll={departmentLocked ? undefined : handleClearAllDepartments}
                   />
 
                   {/* Separator */}
@@ -1143,6 +1587,12 @@ export default function App() {
                     </button>
                   )}
 
+                  {saveCombining && (
+                    <span style={{ ...toolbarBtnBase, background: "#6b7280", color: "#fff", cursor: "default" }}>
+                      Saving {saveProgress.done}/{saveProgress.total}…
+                    </span>
+                  )}
+
                   {/* Right: Rows control */}
                   {isDeptCardBased() && !departmentLocked && editorQueue.length > 0 && (
                     <>
@@ -1151,9 +1601,41 @@ export default function App() {
                       <button onClick={() => handleRowCountChange(Math.max(1, effectiveRowCount - 1))} style={rowBtnStyle}>−</button>
                       <span style={{ minWidth: 18, textAlign: "center", fontSize: 13, fontWeight: 600 }}>{effectiveRowCount}</span>
                       <button onClick={() => handleRowCountChange(effectiveRowCount + 1)} style={rowBtnStyle}>+</button>
+                      <div style={{ width: 1, height: 20, background: "var(--color-border)", margin: "0 4px" }} />
+                      <button
+                        onClick={handleFlipLayout}
+                        disabled={effectiveRowCount === effectiveColCount}
+                        title={effectiveRowCount !== effectiveColCount ? `Flip layout: switch to ${effectiveColCount} row${effectiveColCount !== 1 ? "s" : ""} × ${effectiveRowCount} col${effectiveRowCount !== 1 ? "s" : ""}` : "Layout is already square"}
+                        style={{ ...rowBtnStyle, width: "auto", padding: "0 8px", fontSize: 13, opacity: effectiveRowCount === effectiveColCount ? 0.4 : 1 }}
+                      >
+                        ⇄ Flip
+                      </button>
                     </>
                   )}
                 </div>
+
+                {(() => {
+                  const liveJob = viewingJob ? (jobs.find(j => j.id === viewingJob.id) ?? viewingJob) : null;
+                  const isJobProc = liveJob?.status === "processing" || liveJob?.status === "queued";
+                  const jobDone  = liveJob?.progress?.processedImages ?? 0;
+                  const jobTotal = liveJob?.progress?.totalImages ?? 0;
+                  return isJobProc ? (
+                    <div className="ufm-processing-banner">
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div className="ufm-processing-banner__spin" />
+                        <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>
+                          Searching for product images…
+                          {jobTotal > 0 ? ` (${jobDone} / ${jobTotal} done)` : ""}
+                        </span>
+                      </div>
+                      {jobTotal > 0 && (
+                        <div className="ufm-processing-banner__bar">
+                          <div style={{ width: `${Math.round((jobDone / jobTotal) * 100)}%` }} />
+                        </div>
+                      )}
+                    </div>
+                  ) : null;
+                })()}
 
                 <EditorCanvas
                   editorQueue={editorQueue}

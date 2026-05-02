@@ -1,36 +1,48 @@
 // ✅ FIREBASE ADMIN — ELECTRON-SAFE SINGLETON
+// Returns null from initFirebase() if no credentials found — app starts without Firebase.
 
 import admin from "firebase-admin";
 import fs from "fs";
 import path from "path";
 import { app } from "electron";
 
+/**
+ * Credential resolution priority:
+ *  1. FIREBASE_CREDENTIALS env var (absolute path)
+ *  2. <userData>/firebase-service-account.json  (end-user drop location)
+ *  3. <appPath>/backend/config/firebase-service-account.json  (dev/bundled copy)
+ */
 function resolveServiceAccountPath() {
-  const base = app.isPackaged
-    ? process.resourcesPath
-    : app.getAppPath();
+  if (process.env.FIREBASE_CREDENTIALS && fs.existsSync(process.env.FIREBASE_CREDENTIALS)) {
+    return process.env.FIREBASE_CREDENTIALS;
+  }
+  const userData = path.join(app.getPath("userData"), "firebase-service-account.json");
+  if (fs.existsSync(userData)) return userData;
 
-  return path.join(
-    base,
-    "backend",
-    "config",
-    "firebase-service-account.json"
-  );
+  const base = app.isPackaged ? process.resourcesPath : app.getAppPath();
+  const bundled = path.join(base, "backend", "config", "firebase-service-account.json");
+  if (fs.existsSync(bundled)) return bundled;
+
+  return null;
 }
 
 export function initFirebase() {
   console.log("[firebase main] initFirebase() called. admin.apps.length=" + admin.apps.length);
   if (admin.apps.length > 0) {
-    console.log("[firebase main] Firebase already initialized (by ingestion/firebase.js), skipping.");
+    console.log("[firebase main] Firebase already initialized, skipping.");
     return admin.app();
   }
 
   const serviceAccountPath = resolveServiceAccountPath();
-  console.log("[firebase main] Service account path:", serviceAccountPath);
-  if (!fs.existsSync(serviceAccountPath)) {
-    throw new Error(`[firebase] service account NOT FOUND: ${serviceAccountPath}`);
+  if (!serviceAccountPath) {
+    console.warn(
+      "[firebase main] ⚠️ No service account credentials found. " +
+      "Firebase features disabled. Drop firebase-service-account.json into your app data folder."
+    );
+    return null;
   }
 
+  console.log("[firebase main] Service account path:", serviceAccountPath);
   const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf-8"));
   console.log("[firebase main] Initializing app, project_id=" + serviceAccount.project_id);
 

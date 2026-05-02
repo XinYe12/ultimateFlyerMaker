@@ -13,11 +13,11 @@ type DepartmentStatus =
 function getGradientForStatus(status: DepartmentStatus): string {
   switch (status) {
     case "not started":
-      return "linear-gradient(43deg, rgb(245, 245, 248) 0%, rgb(252, 252, 254) 50%, rgb(250, 250, 252) 100%)";
+      return "linear-gradient(43deg, rgb(70, 72, 82) 0%, rgb(82, 85, 96) 50%, rgb(90, 93, 105) 100%)";
     case "uploading":
-      return "linear-gradient(43deg, rgb(245, 245, 248) 0%, rgb(252, 252, 254) 50%, rgb(250, 250, 252) 100%)";
+      return "linear-gradient(43deg, rgb(70, 72, 82) 0%, rgb(82, 85, 96) 50%, rgb(90, 93, 105) 100%)";
     case "in progress":
-      return "linear-gradient(43deg, rgb(255, 230, 130) 0%, rgb(255, 242, 180) 50%, rgb(255, 248, 200) 100%)";
+      return "linear-gradient(43deg, rgb(234, 179, 8) 0%, rgb(250, 200, 30) 50%, rgb(253, 212, 50) 100%)";
     case "done":
     case "done, edited":
       return "linear-gradient(43deg, rgb(140, 220, 150) 0%, rgb(180, 240, 190) 50%, rgb(200, 250, 210) 100%)";
@@ -42,6 +42,7 @@ type Props = {
   progressText: string;
   statusLabel: string;
   status: DepartmentStatus;
+  isLocked?: boolean;
   onClick: () => void;
 };
 
@@ -53,10 +54,13 @@ export default function DepartmentCard({
   progressText,
   statusLabel,
   status,
+  isLocked = false,
   onClick,
 }: Props) {
-  const gradient = getGradientForStatus(status);
-  const hoverPrompt = getHoverPrompt(status);
+  const gradient = isLocked
+    ? "linear-gradient(43deg, rgb(34, 139, 80) 0%, rgb(46, 160, 96) 50%, rgb(56, 176, 108) 100%)"
+    : getGradientForStatus(status);
+  const hoverPrompt = isLocked ? "Verification Passed" : getHoverPrompt(status);
 
   return (
     <div
@@ -90,6 +94,7 @@ export default function DepartmentCard({
             className="dept-card-subtitle"
             data-status={status.replace(/\s/g, "-").replace(/,/g, "")}
           >
+            {isLocked ? "✓ " : ""}
             {progressText
               ? `${progressText} • ${statusLabel}`
               : statusLabel}

@@ -8,10 +8,11 @@ import { fileURLToPath } from "url";
 import "dotenv/config";
 
 import { processFlyerImage } from "./imagePipeline.js";
-import { ingestPhoto } from "./ingestion/ingestPhoto.js";
+import { ingestPhoto, ingestPhotoPhase1, ingestPhotoPhase2 } from "./ingestion/ingestPhoto.js";
 import { parseDiscountText } from "./ipc/parseDiscountText.js";
 import { exportDiscountImages } from "./ipc/exportDiscountImages.js";
-import { parseDiscountXlsx } from "./ipc/parseDiscountXlsx.js";
+import { parseDiscountXlsx, parseAllDepartmentsXlsx } from "./ipc/parseDiscountXlsx.js";
+import { exportExampleXlsx } from "./ipc/exportExampleXlsx.js";
 import { ingestImages } from "./ipc/ingestImages.js";
 import { getJobProcessor } from "./jobs/JobProcessor.js";
 import { searchForDiscountItem } from "./ingestion/searchService.js";
@@ -21,10 +22,12 @@ import os from "os";
 
 import { startBackend, stopBackend, startHealthWatch } from "./startBackend.js";
 import { waitForBackend } from "./waitForBackend.js";
+import { loadUserConfig, readUserConfig, writeUserConfig } from "./ipc/configStore.js";
 import { initFirebase, admin } from "./firebase.js";
 import { registerBackendIpc } from "./ipc/backend.js";
 import { registerBackendProxyIpc } from "./ipc/backendProxy.js";
-import { processDbBatch, getDbStats, checkDbStorageConsistency, fixDbStorageConsistency, confirmSingleImageToDb, scanAndRemoveNonProducts, deleteProductFromDb } from "./ipc/batchIngestToDB.js";
+import { processDbBatch, getDbStats, getTodaysSaves, checkDbStorageConsistency, fixDbStorageConsistency, confirmSingleImageToDb, scanAndRemoveNonProducts, deleteProductFromDb } from "./ipc/batchIngestToDB.js";
+import { saveCombinationToDb } from "./ipc/saveCombinationToDB.js";
 import { getQuotaStatus, getLiveQuotaStatus } from "./ipc/quotaTracker.js";
 import { checkOllamaStatus } from "./ingestion/imageEmbeddingService.js";
 import "./net/longFetch.js";
@@ -180,6 +183,30 @@ ipcMain.on("ufm:startDrag", (event, filePath) => {
   event.sender.startDrag({ file: filePath, icon });
 });
 
+/* ---------- IPC: file-based job persistence ---------- */
+const JOBS_FILE = path.join(app.getPath("userData"), "flyer-jobs.json");
+
+ipcMain.handle("ufm:saveJobs", async (_event, data) => {
+  try {
+    fs.writeFileSync(JOBS_FILE, JSON.stringify(data), "utf-8");
+    return { ok: true };
+  } catch (err) {
+    log.error("[saveJobs] failed:", err);
+    return { ok: false, error: String(err) };
+  }
+});
+
+ipcMain.handle("ufm:loadJobs", async () => {
+  try {
+    if (!fs.existsSync(JOBS_FILE)) return [];
+    const raw = fs.readFileSync(JOBS_FILE, "utf-8");
+    return JSON.parse(raw);
+  } catch (err) {
+    log.error("[loadJobs] failed:", err);
+    return [];
+  }
+});
+
 /* ---------- IPC: crash recovery flag ---------- */
 ipcMain.handle("ufm:didCrashLastRun", () => {
   const crashed = !!global.__ufmCrashedLastRun;
@@ -236,12 +263,45 @@ ipcMain.handle("ufm:ingestPhoto", async (_, inputPath) => {
   }
 });
 
+ipcMain.handle("ufm:ingestPhotoPhase1", async (_, inputPath) => {
+  try {
+    return await ingestPhotoPhase1(inputPath);
+  } catch (err) {
+    log.error("[ufm:ingestPhotoPhase1]", err);
+    throw err;
+  }
+});
+
+// Fire-and-forget: returns { queued: true } immediately; result arrives via push channel
+ipcMain.handle("ufm:startCutout", async (_, id, inputPath) => {
+  ingestPhotoPhase2(inputPath)
+    .then(patch => safeSend("ufm:cutoutComplete", { id, ...patch }))
+    .catch(err => safeSend("ufm:cutoutError", { id, error: err?.message ?? String(err) }));
+  return { queued: true };
+});
+
 /* ---------- IPC: parsing ---------- */
 ipcMain.handle("ufm:parseDiscountXlsx", async (event, ...args) => {
   try {
     return await parseDiscountXlsx(event, ...args);
   } catch (err) {
     log.error("[ufm:parseDiscountXlsx]", err);
+    throw err;
+  }
+});
+ipcMain.handle("ufm:parseAllDepartmentsXlsx", async (event, ...args) => {
+  try {
+    return await parseAllDepartmentsXlsx(event, ...args);
+  } catch (err) {
+    log.error("[ufm:parseAllDepartmentsXlsx]", err);
+    throw err;
+  }
+});
+ipcMain.handle("ufm:exportExampleXlsx", async (event, format) => {
+  try {
+    return await exportExampleXlsx(event, format);
+  } catch (err) {
+    log.error("[ufm:exportExampleXlsx]", err);
     throw err;
   }
 });
@@ -492,6 +552,11 @@ ipcMain.handle("ufm:getJobQueueStatus", async () => {
   };
 });
 
+ipcMain.handle("ufm:cancelJob", async (_, jobId) => {
+  jobProcessor.cancelJob(jobId);
+  return { ok: true };
+});
+
 /* ---------- IPC: batch DB upload ---------- */
 ipcMain.handle("ufm:confirmDbImage", async (_, imagePath, action, parsed, embedding) => {
   if (action !== "add") {
@@ -519,6 +584,22 @@ ipcMain.handle("ufm:startDbBatch", async (_, paths) => {
     });
   });
   return { ok: true };
+});
+
+ipcMain.handle("ufm:saveCombinationToDb", async (_, items) => {
+  saveCombinationToDb(
+    items,
+    (data) => safeSend("ufm:saveCombinationProgress", data),
+    (data) => safeSend("ufm:saveCombinationComplete", data)
+  ).catch((err) => {
+    console.error("[saveCombinationToDb] failed:", err);
+    safeSend("ufm:saveCombinationComplete", { saved: 0, skipped: 0, errors: Array.isArray(items) ? items.length : 0, error: err.message });
+  });
+  return { ok: true };
+});
+
+ipcMain.handle("ufm:getTodaysSaves", async () => {
+  return getTodaysSaves();
 });
 
 const DB_STATS_TIMEOUT_MS = 10000;
@@ -601,13 +682,71 @@ ipcMain.handle("ufm:clearCutoutCache", async () => {
   }
 });
 
+ipcMain.handle("ufm:getCutoutCacheInfo", async () => {
+  const cutoutDir = path.resolve(__dirname, "../../../exports/cutouts");
+  try {
+    const files = await fs.promises.readdir(cutoutDir);
+    let sizeBytes = 0;
+    await Promise.all(
+      files.map(async (f) => {
+        try {
+          const stat = await fs.promises.stat(path.join(cutoutDir, f));
+          sizeBytes += stat.size;
+        } catch {}
+      })
+    );
+    return { count: files.length, sizeBytes };
+  } catch {
+    return { count: 0, sizeBytes: 0 };
+  }
+});
+
+/* ---------- IPC: App paths ---------- */
+ipcMain.handle("ufm:getAppPaths", () => ({
+  userData: app.getPath("userData"),
+  firebaseCredential: path.join(app.getPath("userData"), "firebase-service-account.json"),
+  firebaseCredentialExists: fs.existsSync(path.join(app.getPath("userData"), "firebase-service-account.json")),
+}));
+
+/* ---------- IPC: API key config ---------- */
+ipcMain.handle("ufm:getMissingKeys", () => global.__ufmMissingKeys ?? []);
+
+ipcMain.handle("ufm:getConfig", () => {
+  const stored = readUserConfig();
+  return {
+    requiredKeys: REQUIRED_KEYS.map(({ key, label, description, url }) => ({
+      key, label, description, url,
+      value: stored[key] ? "***" : "",
+      isSet: !!(process.env[key] || stored[key]),
+    })),
+    optionalKeys: OPTIONAL_KEYS.map(({ key, label, description, url }) => ({
+      key, label, description, url,
+      value: stored[key] ? "***" : "",
+      isSet: !!(process.env[key] || stored[key]),
+    })),
+  };
+});
+
+ipcMain.handle("ufm:saveConfig", (_, patch) => {
+  const allowed = [...REQUIRED_KEYS, ...OPTIONAL_KEYS].map(k => k.key);
+  const safe = Object.fromEntries(
+    Object.entries(patch).filter(([k]) => allowed.includes(k) && typeof patch[k] === "string")
+  );
+  writeUserConfig(safe);
+  global.__ufmMissingKeys = getMissingRequiredKeys().map(k => k.key);
+  return { ok: true, missingKeys: global.__ufmMissingKeys };
+});
+
 ipcMain.handle("ufm:getQuotaStatus", async () => {
   try {
-    const saPath = path.join(
-      app.isPackaged ? process.resourcesPath : app.getAppPath(),
-      "backend", "config", "firebase-service-account.json"
-    );
-    if (!fs.existsSync(saPath)) {
+    // Check credential paths in priority order (userData first, then bundled)
+    const candidates = [
+      process.env.FIREBASE_CREDENTIALS,
+      path.join(app.getPath("userData"), "firebase-service-account.json"),
+      path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), "backend", "config", "firebase-service-account.json"),
+    ];
+    const saPath = candidates.find(p => p && fs.existsSync(p));
+    if (!saPath) {
       return getQuotaStatus();
     }
     const sa = JSON.parse(fs.readFileSync(saPath, "utf8"));
@@ -620,18 +759,39 @@ ipcMain.handle("ufm:getQuotaStatus", async () => {
   }
 });
 
+/* ---------- Native context menu ---------- */
+ipcMain.on("ufm:showContextMenu", (event, { itemId, actions }) => {
+  const template = actions.map((action) => ({
+    label: action.label,
+    enabled: action.enabled !== false,
+    click: () => {
+      event.sender.send("ufm:contextMenuAction", { itemId, action: action.id });
+    },
+  }));
+  const menu = Menu.buildFromTemplate(template);
+  const win = BrowserWindow.fromWebContents(event.sender);
+  menu.popup({ window: win });
+});
+
 /* ---------- Env validation ---------- */
+const REQUIRED_KEYS = [
+  { key: "DEEPSEEK_API_KEY", label: "DeepSeek API Key", description: "Required for product name/price parsing", url: "https://platform.deepseek.com/api_keys" },
+];
+const OPTIONAL_KEYS = [
+  { key: "SERPER_API_KEY", label: "Serper API Key", description: "Enables Google image search for products", url: "https://serper.dev/api-key" },
+];
+
+function getMissingRequiredKeys() {
+  return REQUIRED_KEYS.filter(({ key }) => !String(process.env[key] || "").trim());
+}
+
 function validateEnv() {
-  const required = [
-    ["DEEPSEEK_API_KEY", "Required for OCR text parsing and discount text input"],
-    // PYTHON_BIN is only required in dev; packaged app uses the bundled binary.
-    ...(!app.isPackaged ? [["PYTHON_BIN", "Required to start the image processing backend"]] : []),
-  ];
-  const missing = required.filter(([key]) => !String(process.env[key] || "").trim());
-  if (missing.length > 0) {
-    const lines = missing.map(([k, desc]) => `  ${k} — ${desc}`).join("\n");
-    throw new Error(`Missing required environment variables:\n${lines}\n\nCopy .env.example to .env and fill in your values.`);
+  // PYTHON_BIN still required in dev (packaged app uses bundled binary)
+  if (!app.isPackaged && !String(process.env.PYTHON_BIN || "").trim()) {
+    throw new Error("Missing PYTHON_BIN environment variable.\n\nCopy .env.example to .env and set PYTHON_BIN to your Python 3.11 path.");
   }
+  // Required API keys are now handled via in-app setup — don't quit here
+  global.__ufmMissingKeys = getMissingRequiredKeys().map(k => k.key);
 }
 
 /* ---------- App bootstrap ---------- */
@@ -640,7 +800,8 @@ app.whenReady().then(async () => {
   createSplashWindow();
 
   try {
-    // 0️⃣ Validate required environment variables before doing anything else
+    // 0️⃣ Load user config (userData/ufm.config.json) then validate env
+    loadUserConfig();
     validateEnv();
     log.info(`UFM starting — electron ${process.versions.electron}, node ${process.versions.node}`);
 
@@ -663,15 +824,19 @@ app.whenReady().then(async () => {
     // 2b. Backend confirmed ready — now start the health watch
     startHealthWatch(backend);
 
-    // 3️⃣ Init Firebase (idempotent)
+    // 3️⃣ Init Firebase (idempotent; returns null if no credentials)
     updateSplash("Connecting to database…");
-    initFirebase();
+    const fbApp = initFirebase();
 
-    // 3b. Verify Firestore in background — do not block window from opening
-    console.log("[firebase] [post-init] Running test query: product_vectors.limit(1)...");
-    admin.firestore().collection("product_vectors").limit(1).get()
-      .then(snap => console.log("[firebase] [post-init] ✅ Test query OK. Sample size:", snap.size))
-      .catch(err => console.warn("[firebase] [post-init] ❌ Test query failed:", err?.message?.slice(0, 100)));
+    // 3b. Verify Firestore in background — skip if no credentials
+    if (fbApp) {
+      console.log("[firebase] [post-init] Running test query: product_vectors.limit(1)...");
+      admin.firestore().collection("product_vectors").limit(1).get()
+        .then(snap => console.log("[firebase] [post-init] ✅ Test query OK. Sample size:", snap.size))
+        .catch(err => console.warn("[firebase] [post-init] ❌ Test query failed:", err?.message?.slice(0, 100)));
+    } else {
+      console.warn("[firebase] [post-init] Skipping test query — Firebase not configured.");
+    }
 
     // 4️⃣ Register IPC (backend info)
     registerBackendIpc();
@@ -695,8 +860,14 @@ app.whenReady().then(async () => {
     jobProcessor.on("error", (jobId, error) => {
       safeSend("ufm:jobError", { jobId, error: error?.message || String(error) });
     });
-    jobProcessor.on("preflight", (jobId, data) => {
-      safeSend("ufm:jobPreflight", { jobId, ...data });
+    jobProcessor.on("started", (jobId, data) => {
+      safeSend("ufm:jobStarted", { jobId, ...data });
+    });
+    jobProcessor.on("itemComplete", (jobId, data) => {
+      safeSend("ufm:jobItemComplete", { jobId, ...data });
+    });
+    jobProcessor.on("aborted", (jobId) => {
+      safeSend("ufm:jobAborted", { jobId });
     });
   } catch (err) {
     log.error("App startup failed:", err);

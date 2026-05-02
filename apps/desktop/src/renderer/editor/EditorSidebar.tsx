@@ -24,6 +24,7 @@ type Props = {
   onDepartmentChange: (dept: string) => void;
   itemCount?: number;
   onClear?: () => void;
+  onClearAll?: () => void;
 };
 
 export default function EditorSidebar({
@@ -34,6 +35,7 @@ export default function EditorSidebar({
   onDepartmentChange,
   itemCount,
   onClear,
+  onClearAll,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -137,38 +139,70 @@ export default function EditorSidebar({
             );
           })}
 
-          {/* Clear department — only when there are items */}
-          {onClear && (itemCount ?? 0) > 0 && (
+          {/* Clear actions */}
+          {(onClear || onClearAll) && (
             <div style={{ borderTop: "1px solid var(--color-border)", marginTop: 4, paddingTop: 4 }}>
-              <button
-                onClick={() => {
-                  const label = DEPARTMENT_LABELS[activeDepartment] || activeDepartment;
-                  const confirmed = confirm(
-                    `Clear all products from "${label}"?\n\nThis cannot be undone.`
-                  );
-                  if (confirmed) {
-                    onClear!();
-                    onToggle();
-                  }
-                }}
-                style={{
-                  width: "100%",
-                  padding: "7px 12px",
-                  border: "none",
-                  borderRadius: "var(--radius-sm)",
-                  background: "transparent",
-                  color: "var(--color-error)",
-                  fontSize: "var(--text-sm)",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  textAlign: "left",
-                  fontFamily: "var(--font-sans)",
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "#FFF5F5"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-              >
-                Clear Department
-              </button>
+              {onClear && (itemCount ?? 0) > 0 && (
+                <button
+                  onClick={() => {
+                    const label = DEPARTMENT_LABELS[activeDepartment] || activeDepartment;
+                    const confirmed = confirm(
+                      `Clear all products from "${label}"?\n\nThis cannot be undone.`
+                    );
+                    if (confirmed) {
+                      onClear!();
+                      onToggle();
+                    }
+                  }}
+                  style={{
+                    width: "100%",
+                    padding: "7px 12px",
+                    border: "none",
+                    borderRadius: "var(--radius-sm)",
+                    background: "transparent",
+                    color: "var(--color-error)",
+                    fontSize: "var(--text-sm)",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    textAlign: "left",
+                    fontFamily: "var(--font-sans)",
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "#FFF5F5"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                >
+                  Clear Department
+                </button>
+              )}
+              {onClearAll && (
+                <button
+                  onClick={() => {
+                    const confirmed = confirm(
+                      `Clear ALL departments?\n\nThis will remove all products and price labels from every department. This cannot be undone.`
+                    );
+                    if (confirmed) {
+                      onClearAll();
+                      onToggle();
+                    }
+                  }}
+                  style={{
+                    width: "100%",
+                    padding: "7px 12px",
+                    border: "none",
+                    borderRadius: "var(--radius-sm)",
+                    background: "transparent",
+                    color: "var(--color-error)",
+                    fontSize: "var(--text-sm)",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    textAlign: "left",
+                    fontFamily: "var(--font-sans)",
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "#FFF5F5"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                >
+                  Clear All Departments
+                </button>
+              )}
             </div>
           )}
         </div>

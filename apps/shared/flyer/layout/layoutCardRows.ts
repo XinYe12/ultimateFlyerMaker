@@ -27,6 +27,7 @@ export type CardDef = {
   titleItalic?: boolean;
   priceFontFamily?: string;
   priceColor?: string;
+  priceShowDollar?: boolean;
 };
 
 /**
@@ -153,6 +154,7 @@ export function layoutCardRows({
       titleItalic: card.titleItalic,
       priceFontFamily: card.priceFontFamily,
       priceColor: card.priceColor,
+      priceShowDollar: card.priceShowDollar,
     });
   }
 

@@ -3,8 +3,8 @@ import Button from "./ui/Button";
 
 type Props = {
   viewingJob: FlyerJob | null;
-  onBack: () => void;
   onDeleteDraft: () => void;
+  onAbortJob?: () => void;
 };
 
 const styles = {
@@ -36,13 +36,10 @@ const styles = {
   } as const,
 };
 
-export default function EditorHeader({ viewingJob, onBack, onDeleteDraft }: Props) {
+export default function EditorHeader({ viewingJob, onDeleteDraft, onAbortJob }: Props) {
   if (!viewingJob) {
     return (
       <div style={styles.noJobWrapper}>
-        <Button variant="secondary" onClick={onBack} style={{ marginBottom: "var(--space-3)" }}>
-          Back to Queue
-        </Button>
         <div style={styles.warningBox}>
           <p style={styles.warningText}>
             No job selected. Go to Job Queue to create and process a flyer job.
@@ -52,14 +49,18 @@ export default function EditorHeader({ viewingJob, onBack, onDeleteDraft }: Prop
     );
   }
 
+  const isProcessing = viewingJob.status === "processing" || viewingJob.status === "queued";
+
   return (
     <div style={styles.toolbar}>
       <div style={styles.toolbarLeft}>
-        <Button variant="secondary" onClick={onBack}>
-          Back to Queue
-        </Button>
         <span style={styles.jobName}>Viewing: {viewingJob.name}</span>
       </div>
+      {isProcessing && onAbortJob && (
+        <Button variant="danger" onClick={onAbortJob}>
+          Abort
+        </Button>
+      )}
       {viewingJob.status === "drafting" && (
         <Button variant="danger" onClick={onDeleteDraft}>
           Delete Draft

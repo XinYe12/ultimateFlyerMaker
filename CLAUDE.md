@@ -78,6 +78,11 @@ python -m uvicorn cutout_service.server:app --host 127.0.0.1 --port 17890
 | Flyer templates | `apps/desktop/src/renderer/public/assets/flyer_templates/` |
 | Java DB ingestion pipeline | `apps/ingestion-java/` |
 
+### Template Department Areas
+
+- **Custom templates**: Use `departmentAreas` (department area boxes) to define product placement. Users draw and resize these in TemplateBuilder. Product boxes are visual labels only.
+- **Built-in templates** (weekly_v1, weekly_v2): Department regions are hardcoded in JSON config files under `apps/desktop/src/renderer/public/assets/flyer_templates/`. Do not modify these.
+
 ### IPC Channels
 
 Main IPC events exposed via `preload.cjs`:

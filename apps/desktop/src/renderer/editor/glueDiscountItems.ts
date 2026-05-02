@@ -25,7 +25,7 @@ export function glueDiscountItems(
 
     out.push({
       id: match.ingestedItemId,
-      image: { src: source.cutoutPath },
+      image: { src: source.cutoutPath ?? "" },
       title: { en: match.title.en, zh: match.title.zh },
       price: { display: match.price.display, value: match.price.value },
       confidence: {

@@ -1,11 +1,12 @@
 // apps/desktop/src/renderer/jobs/JobCreationPanel.tsx
 // Panel for creating a new flyer job with parallel image + discount input
 
-import { useState, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { FlyerJob, DepartmentId, DiscountInput } from "../types";
 import DepartmentSelector from "../components/DepartmentSelector";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
+import { listCustomTemplates } from "../editor/customTemplateStorage";
 
 const TEMPLATE_OPTIONS = [
   { id: "weekly_v1", label: "Weekly V1" },
@@ -23,6 +24,7 @@ type Props = {
   onSetTemplate: (templateId: string) => void;
   onQueueJob: () => void;
   onCreate: (templateId: string, department: DepartmentId) => void;
+  lockedTemplateId?: string;
 };
 
 type ElectronFile = File & { path: string };
@@ -38,13 +40,23 @@ export default function JobCreationPanel({
   onSetTemplate,
   onQueueJob,
   onCreate,
+  lockedTemplateId,
 }: Props) {
-  const [templateId, setTemplateId] = useState("weekly_v2");
+  const [templateId, setTemplateId] = useState(lockedTemplateId ?? "weekly_v2");
   const [department, setDepartment] = useState<DepartmentId>("grocery");
   const [discountText, setDiscountText] = useState("");
   const [xlsxPath, setXlsxPath] = useState<string | null>(null);
   const [discountSource, setDiscountSource] = useState<"text" | "xlsx" | null>(null);
+  const [allTemplateOptions, setAllTemplateOptions] = useState([...TEMPLATE_OPTIONS]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const custom = listCustomTemplates().map(t => ({ id: t.templateId, label: t.name }));
+    setAllTemplateOptions([...TEMPLATE_OPTIONS, ...custom]);
+  }, []);
+
+  const resolveTemplateName = (id: string) =>
+    allTemplateOptions.find(t => t.id === id)?.label ?? id;
 
   // If no job exists, show creation form
   if (!job) {
@@ -64,18 +76,24 @@ export default function JobCreationPanel({
           <label style={{ display: "block", marginBottom: 8, fontWeight: "var(--font-medium)" }}>
             Template
           </label>
-          <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "center" }}>
-            {TEMPLATE_OPTIONS.map(t => (
-              <Button
-                key={t.id}
-                variant={templateId === t.id ? "primary" : "secondary"}
-                size="sm"
-                onClick={() => setTemplateId(t.id)}
-              >
-                {t.label}
-              </Button>
-            ))}
-          </div>
+          {lockedTemplateId ? (
+            <span style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>
+              {resolveTemplateName(lockedTemplateId)}
+            </span>
+          ) : (
+            <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "center" }}>
+              {allTemplateOptions.map(t => (
+                <Button
+                  key={t.id}
+                  variant={templateId === t.id ? "primary" : "secondary"}
+                  size="sm"
+                  onClick={() => setTemplateId(t.id)}
+                >
+                  {t.label}
+                </Button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div style={{ marginBottom: 16 }}>
@@ -89,7 +107,7 @@ export default function JobCreationPanel({
           />
         </div>
 
-        <Button variant="primary" size="lg" onClick={() => onCreate(templateId, department)}>
+        <Button variant="primary" size="lg" onClick={() => onCreate(lockedTemplateId ?? templateId, department)}>
           Start New Job
         </Button>
       </div>
@@ -119,6 +137,12 @@ export default function JobCreationPanel({
         setDiscountSource("xlsx");
         setDiscountText("");
         onSetDiscount({ type: "xlsx", source: path, status: "pending" });
+        // Parse in background so parsedItems are ready before user opens editor
+        window.ufm.parseDiscountXlsx(path, department).then((items: any[]) => {
+          onSetDiscount({ type: "xlsx", source: path, parsedItems: items, status: "done" });
+        }).catch(() => {
+          onSetDiscount({ type: "xlsx", source: path, status: "error" });
+        });
       }
     } else {
       const text = await file.text();
@@ -143,9 +167,6 @@ export default function JobCreationPanel({
   const hasDiscount = xlsxPath !== null || discountText.trim().length > 0;
   const canQueue = job.images.length > 0 || hasDiscount;
   const isProcessing = job.status === "queued" || job.status === "processing";
-  const progressPercent = job.progress.totalImages > 0
-    ? Math.round((job.progress.processedImages / job.progress.totalImages) * 100)
-    : 0;
 
   return (
     <Card style={{ padding: 20 }}>
@@ -176,18 +197,22 @@ export default function JobCreationPanel({
           <label style={{ display: "block", marginBottom: 4, fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>
             Template
           </label>
-          <div style={{ display: "flex", gap: 6 }}>
-            {TEMPLATE_OPTIONS.map(t => (
-              <Button
-                key={t.id}
-                variant={job.templateId === t.id ? "primary" : "secondary"}
-                size="sm"
-                onClick={() => onSetTemplate(t.id)}
-              >
-                {t.label}
-              </Button>
-            ))}
-          </div>
+          {lockedTemplateId ? (
+            <span style={{ fontSize: "var(--text-sm)" }}>{resolveTemplateName(lockedTemplateId)}</span>
+          ) : (
+            <div style={{ display: "flex", gap: 6 }}>
+              {allTemplateOptions.map(t => (
+                <Button
+                  key={t.id}
+                  variant={job.templateId === t.id ? "primary" : "secondary"}
+                  size="sm"
+                  onClick={() => onSetTemplate(t.id)}
+                >
+                  {t.label}
+                </Button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div style={{ flex: 1 }}>
@@ -361,40 +386,6 @@ export default function JobCreationPanel({
           </Button>
         </div>
 
-        {/* Progress Bar */}
-        {isProcessing && (
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-              <span style={{ fontSize: "var(--text-sm)", color: "var(--color-text-muted)", fontWeight: "var(--font-medium)" }}>
-                {job.progress.currentStep}
-              </span>
-              <span style={{ fontSize: 13, color: "#868E96" }}>
-                {job.progress.processedImages}/{job.progress.totalImages} images
-              </span>
-            </div>
-            <div
-              style={{
-                width: "100%",
-                height: 8,
-                background: "#E9ECEF",
-                borderRadius: 4,
-                overflow: "hidden",
-              }}
-            >
-              <div
-                style={{
-                  width: `${progressPercent}%`,
-                  height: "100%",
-                  background: "linear-gradient(90deg, var(--color-primary) 0%, #5F3DC4 100%)",
-                  transition: "width 0.3s ease",
-                }}
-              />
-            </div>
-            <div style={{ textAlign: "center", marginTop: 4, fontSize: 12, color: "#868E96" }}>
-              {progressPercent}%
-            </div>
-          </div>
-        )}
 
         {/* Completion Message */}
         {job.status === "completed" && (

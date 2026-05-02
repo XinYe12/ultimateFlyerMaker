@@ -83,6 +83,7 @@ const DEPARTMENT_ALIASES = {
   vegetable: ["vegetable", "veggie", "vegetables"],
   hot_sale:  ["hot sale", "hotsale", "special"],
   produce:   ["produce"],
+  cosmetics: ["cosmetics", "beauty", "personal care"],
 };
 
 /* -------------------- sale field parser -------------------- */
@@ -155,8 +156,8 @@ function splitByDepartment(rows) {
  * Returns the matching section or null.
  */
 function findMatchingSection(sections, departmentId) {
-  const aliases = DEPARTMENT_ALIASES[departmentId];
-  if (!aliases) return null;
+  const knownAliases = DEPARTMENT_ALIASES[departmentId];
+  const aliases = knownAliases ?? [departmentId.toLowerCase()];
 
   return sections.find((s) => {
     if (!s.header) return false;
@@ -166,10 +167,22 @@ function findMatchingSection(sections, departmentId) {
 
 /* -------------------- direct row → items -------------------- */
 
+/** Return true only if the price string (after stripping) looks like a real decimal number. */
+function isValidPriceString(s) {
+  return typeof s === "string" && /^\d+(\.\d+)?$/.test(s) && s !== "";
+}
+
 /** Convert spreadsheet rows directly to normalized discount items (no LLM). */
 function rowsToItems(rows) {
   return rows
-    .filter(row => Array.isArray(row) && String(row[4] || "").trim())  // must have sale price
+    .filter(row => {
+      if (!Array.isArray(row)) return false;
+      // Quick pre-check: col[4] must contain at least one digit
+      if (!/\d/.test(String(row[4] || ""))) return false;
+      // Full validation: parseSaleField must produce a clean numeric price
+      const { salePrice } = parseSaleField(row[4]);
+      return isValidPriceString(salePrice);
+    })
     .map(row => {
       const en   = normalizeOptionalString(row[1]);
       const zh   = normalizeOptionalString(row[2]);
@@ -205,25 +218,119 @@ function rowsToItems(rows) {
     });
 }
 
-/* -------------------- IPC handler -------------------- */
+/* -------------------- multi-sheet helpers -------------------- */
+
+/**
+ * Map a sheet tab name to a DepartmentId using DEPARTMENT_ALIASES.
+ * Returns the matching departmentId or null.
+ */
+function sheetNameToDeptId(name) {
+  const lower = String(name || "").toLowerCase();
+  for (const [deptId, aliases] of Object.entries(DEPARTMENT_ALIASES)) {
+    if (aliases.some((alias) => lower.includes(alias))) return deptId;
+  }
+  return null;
+}
+
+/** Read a named sheet from workbook and return its rows. */
+function sheetToRows(workbook, sheetName) {
+  const sheet = workbook.Sheets[sheetName];
+  return XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+}
+
+/* -------------------- IPC handlers -------------------- */
+
+/**
+ * Parse ALL departments from an xlsx file.
+ * Multi-sheet: each sheet tab is treated as a department.
+ * Single-sheet: existing behaviour (split by in-row department headers).
+ * Returns { [departmentId]: ParsedDiscount[] } for every department that has ≥1 item.
+ */
+export async function parseAllDepartmentsXlsx(_event, filePath) {
+  const path = typeof filePath === "string" ? filePath.trim() : "";
+  if (!path) throw new Error("parseAllDepartmentsXlsx received empty file path");
+
+  const workbook = XLSX.readFile(path);
+  const result = {};
+
+  if (workbook.SheetNames.length > 1) {
+    // Multi-sheet mode: each sheet tab = one department
+    for (const sheetName of workbook.SheetNames) {
+      const deptId = sheetNameToDeptId(sheetName);
+      if (!deptId) {
+        console.log(`[parseAllDepartmentsXlsx] Skipping unrecognized sheet "${sheetName}"`);
+        continue;
+      }
+      const items = rowsToItems(sheetToRows(workbook, sheetName));
+      if (items.length > 0) {
+        result[deptId] = items;
+        console.log(`[parseAllDepartmentsXlsx] Sheet "${sheetName}" → dept "${deptId}" (${items.length} items)`);
+      }
+    }
+  } else {
+    // Single-sheet mode: split by in-row department headers
+    const allRows = sheetToRows(workbook, workbook.SheetNames[0]);
+    const sections = splitByDepartment(allRows);
+
+    for (const deptId of Object.keys(DEPARTMENT_ALIASES)) {
+      const match = findMatchingSection(sections, deptId);
+      if (!match) continue;
+      const items = rowsToItems(match.rows);
+      if (items.length > 0) {
+        result[deptId] = items;
+      }
+    }
+  }
+
+  if (Object.keys(result).length === 0) {
+    throw new Error("No recognized department sections found in the file");
+  }
+
+  return result;
+}
 
 export async function parseDiscountXlsx(_event, filePath, department) {
   const path = typeof filePath === "string" ? filePath.trim() : "";
   if (!path) throw new Error("parseDiscountXlsx received empty file path");
 
   const workbook = XLSX.readFile(path);
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const allRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
   let rows;
-  if (department) {
-    const sections = splitByDepartment(allRows);
-    const match = findMatchingSection(sections, department);
-    if (!match) throw new Error(`${department} department not found in uploaded file`);
-    console.log(`[parseDiscountXlsx] Matched department "${department}" → header "${match.header}" (${match.rows.length} rows)`);
-    rows = match.rows;
+
+  if (workbook.SheetNames.length > 1) {
+    // Multi-sheet mode
+    if (department) {
+      const deptAliases = DEPARTMENT_ALIASES[department] ?? [department.toLowerCase()];
+      const matchingSheet = workbook.SheetNames.find(
+        (n) => deptAliases.some((alias) => n.toLowerCase().includes(alias))
+      );
+      if (matchingSheet) {
+        console.log(`[parseDiscountXlsx] Multi-sheet: matched dept "${department}" → sheet "${matchingSheet}"`);
+        rows = sheetToRows(workbook, matchingSheet);
+      } else {
+        console.warn(`[parseDiscountXlsx] Multi-sheet: dept "${department}" not found — concatenating all sheets`);
+        rows = workbook.SheetNames.flatMap((n) => sheetToRows(workbook, n));
+      }
+    } else {
+      // No department hint: concatenate all sheets
+      rows = workbook.SheetNames.flatMap((n) => sheetToRows(workbook, n));
+    }
   } else {
-    rows = allRows;
+    // Single-sheet mode (existing behaviour)
+    const allRows = sheetToRows(workbook, workbook.SheetNames[0]);
+    if (department) {
+      const sections = splitByDepartment(allRows);
+      const match = findMatchingSection(sections, department);
+      if (match) {
+        console.log(`[parseDiscountXlsx] Matched department "${department}" → header "${match.header}" (${match.rows.length} rows)`);
+        rows = match.rows;
+      } else {
+        console.warn(`[parseDiscountXlsx] Department "${department}" not found in xlsx — using all rows`);
+        rows = allRows;
+      }
+    } else {
+      rows = allRows;
+    }
   }
 
   const items = rowsToItems(rows);

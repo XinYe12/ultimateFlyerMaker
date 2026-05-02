@@ -9,7 +9,11 @@ const { contextBridge, ipcRenderer } = require("electron");
  */
 
 contextBridge.exposeInMainWorld("ufm", {
-  
+
+  // ---------- JOB PERSISTENCE ----------
+  saveJobsToFile: (data) => ipcRenderer.invoke("ufm:saveJobs", data),
+  loadJobsFromFile: () => ipcRenderer.invoke("ufm:loadJobs"),
+
   getDiscounts: () => {
     return ipcRenderer.invoke("ufm:getDiscounts");
   },
@@ -44,6 +48,12 @@ contextBridge.exposeInMainWorld("ufm", {
     return ipcRenderer.invoke("ufm:parseDiscountText", rawText);
   },
 
+  // ---------- BULK DISCOUNT XLSX ----------
+  exportExampleXlsx: (format) => ipcRenderer.invoke("ufm:exportExampleXlsx", format),
+
+  parseAllDepartmentsXlsx: (filePath) =>
+    ipcRenderer.invoke("ufm:parseAllDepartmentsXlsx", filePath),
+
   // ---------- XLSX ----------
   parseDiscountXlsx: (filePath, department) => {
     console.log(
@@ -71,6 +81,23 @@ contextBridge.exposeInMainWorld("ufm", {
       typeof filePath
     );
     return ipcRenderer.invoke("ufm:ingestPhoto", filePath);
+  },
+
+  // ---------- TWO-PHASE INGESTION ----------
+  ingestPhotoPhase1: (filePath) => ipcRenderer.invoke("ufm:ingestPhotoPhase1", filePath),
+
+  startCutout: (id, filePath) => ipcRenderer.invoke("ufm:startCutout", id, filePath),
+
+  onCutoutComplete: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:cutoutComplete", handler);
+    return () => ipcRenderer.removeListener("ufm:cutoutComplete", handler);
+  },
+
+  onCutoutError: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:cutoutError", handler);
+    return () => ipcRenderer.removeListener("ufm:cutoutError", handler);
   },
 
   // ---------- XLSX DIALOG ----------
@@ -140,10 +167,26 @@ contextBridge.exposeInMainWorld("ufm", {
     return () => ipcRenderer.removeListener("ufm:jobError", handler);
   },
 
-  onJobPreflight: (callback) => {
+  onJobStarted: (callback) => {
     const handler = (_, data) => callback(data);
-    ipcRenderer.on("ufm:jobPreflight", handler);
-    return () => ipcRenderer.removeListener("ufm:jobPreflight", handler);
+    ipcRenderer.on("ufm:jobStarted", handler);
+    return () => ipcRenderer.removeListener("ufm:jobStarted", handler);
+  },
+
+  onJobItemComplete: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:jobItemComplete", handler);
+    return () => ipcRenderer.removeListener("ufm:jobItemComplete", handler);
+  },
+
+  cancelJob: (jobId) => ipcRenderer.invoke("ufm:cancelJob", jobId),
+
+  getCutoutCacheInfo: () => ipcRenderer.invoke("ufm:getCutoutCacheInfo"),
+
+  onJobAborted: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:jobAborted", handler);
+    return () => ipcRenderer.removeListener("ufm:jobAborted", handler);
   },
 
   openLogFile: () => ipcRenderer.invoke("ufm:openLogFile"),
@@ -172,6 +215,22 @@ contextBridge.exposeInMainWorld("ufm", {
     return () => ipcRenderer.removeListener("ufm:dbBatchComplete", handler);
   },
 
+  // ---------- SAVE COMBINATION TO DB ----------
+  saveCombinationToDb: (items) => ipcRenderer.invoke("ufm:saveCombinationToDb", items),
+  getTodaysSaves: () => ipcRenderer.invoke("ufm:getTodaysSaves"),
+
+  onSaveCombinationProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:saveCombinationProgress", handler);
+    return () => ipcRenderer.removeListener("ufm:saveCombinationProgress", handler);
+  },
+
+  onSaveCombinationComplete: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:saveCombinationComplete", handler);
+    return () => ipcRenderer.removeListener("ufm:saveCombinationComplete", handler);
+  },
+
   deleteDbProduct: (productId) => ipcRenderer.invoke("ufm:deleteDbProduct", productId),
 
   scanNonProducts: () => ipcRenderer.invoke("ufm:scanNonProducts"),
@@ -184,5 +243,22 @@ contextBridge.exposeInMainWorld("ufm", {
     const handler = (_, data) => callback(data);
     ipcRenderer.on("ufm:scanNonProductsComplete", handler);
     return () => ipcRenderer.removeListener("ufm:scanNonProductsComplete", handler);
+  },
+
+  // ---------- APP PATHS ----------
+  getAppPaths: () => ipcRenderer.invoke("ufm:getAppPaths"),
+
+  // ---------- API KEY CONFIG ----------
+  getMissingKeys: () => ipcRenderer.invoke("ufm:getMissingKeys"),
+  getConfig: () => ipcRenderer.invoke("ufm:getConfig"),
+  saveConfig: (patch) => ipcRenderer.invoke("ufm:saveConfig", patch),
+
+  // ---------- NATIVE CONTEXT MENU ----------
+  showContextMenu: (itemId, actions) =>
+    ipcRenderer.send("ufm:showContextMenu", { itemId, actions }),
+  onContextMenuAction: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:contextMenuAction", handler);
+    return () => ipcRenderer.removeListener("ufm:contextMenuAction", handler);
   },
 });

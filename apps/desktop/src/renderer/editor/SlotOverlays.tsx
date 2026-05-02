@@ -44,6 +44,7 @@ type SlotOverlaysProps = {
   cardRects?: CardRect[];
   cardLayout?: CardLayout;
   isLocked?: boolean;
+  editMode?: boolean;
 };
 
 export default function SlotOverlays({
@@ -61,21 +62,16 @@ export default function SlotOverlays({
   cardRects,
   cardLayout,
   isLocked = false,
+  editMode = false,
 }: SlotOverlaysProps) {
   const [hoveredSlot, setHoveredSlot] = useState<number | null>(null);
-  const [showReplaceMenu, setShowReplaceMenu] = useState<number | null>(null);
-  const [replacingItemId, setReplacingItemId] = useState<string | null>(null);
   const [confirmDeleteSlot, setConfirmDeleteSlot] = useState<number | null>(null);
   const [hoveredFullSlot, setHoveredFullSlot] = useState<number | null>(null);
 
-  // Close menus on Escape
+  // Close delete confirm on Escape
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        if (showReplaceMenu !== null) {
-          setShowReplaceMenu(null);
-          setReplacingItemId(null);
-        }
         if (confirmDeleteSlot !== null) {
           setConfirmDeleteSlot(null);
         }
@@ -83,7 +79,7 @@ export default function SlotOverlays({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [showReplaceMenu, confirmDeleteSlot]);
+  }, [confirmDeleteSlot]);
 
   // Find which placement occupies each slot (if any)
   const getPlacementForSlot = (slotIndex: number): Placement | null => {
@@ -129,7 +125,7 @@ export default function SlotOverlays({
         const isHovered = hoveredSlot === index;
 
         if (isEmpty) {
-          if (isLocked) return null;
+          if (isLocked || editMode) return null;
           // Empty slot/card: centered overlay with "Add Image" button
           return (
             <div
@@ -201,8 +197,8 @@ export default function SlotOverlays({
               top: overlayRect.y,
               width: overlayRect.width,
               height: overlayRect.height,
-              pointerEvents: isLocked ? "none" : "auto",
-              zIndex: (showReplaceMenu === index || confirmDeleteSlot === index) ? 9500 : 9000,
+              pointerEvents: (isLocked || editMode) ? "none" : "auto",
+              zIndex: confirmDeleteSlot === index ? 9500 : 9000,
             }}
             onMouseEnter={() => !isLocked && setHoveredFullSlot(index)}
             onMouseLeave={() => {
@@ -210,7 +206,7 @@ export default function SlotOverlays({
             }}
           >
             {/* ── Pending flavors: always-visible amber badge at bottom ── */}
-            {isPendingFlavors && onPickSeriesFlavors && confirmDeleteSlot !== index && (
+            {!editMode && isPendingFlavors && onPickSeriesFlavors && confirmDeleteSlot !== index && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -250,7 +246,7 @@ export default function SlotOverlays({
             )}
 
             {/* Delete X button — top-right corner, visible on full-slot hover */}
-            {hoveredFullSlot === index && confirmDeleteSlot !== index && onRemoveItem && (
+            {!editMode && hoveredFullSlot === index && confirmDeleteSlot !== index && onRemoveItem && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -290,7 +286,7 @@ export default function SlotOverlays({
             )}
 
             {/* Delete confirmation overlay */}
-            {confirmDeleteSlot === index && onRemoveItem && (
+            {!editMode && confirmDeleteSlot === index && onRemoveItem && (
               <div
                 style={{
                   position: "absolute",
@@ -343,25 +339,23 @@ export default function SlotOverlays({
               </div>
             )}
 
-            {/* Center 70% zone for Edit hover */}
-            <div
-              style={{
-                position: "absolute",
-                left: overlayRect.width * 0.15,
-                top: overlayRect.height * 0.15,
-                width: overlayRect.width * 0.7,
-                height: overlayRect.height * 0.7,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-              onMouseEnter={() => setHoveredSlot(index)}
-              onMouseLeave={() => setHoveredSlot(null)}
-            >
-            {isHovered && showReplaceMenu !== index && confirmDeleteSlot !== index && (
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
-                {/* Pending flavors: prominent "Pick Flavors" button in hover menu */}
-                {isPendingFlavors && onPickSeriesFlavors && (
+            {/* Center hover zone for Pick Flavors — non-editMode only */}
+            {!editMode && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: overlayRect.width * 0.15,
+                  top: overlayRect.height * 0.15,
+                  width: overlayRect.width * 0.7,
+                  height: overlayRect.height * 0.7,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+                onMouseEnter={() => setHoveredSlot(index)}
+                onMouseLeave={() => setHoveredSlot(null)}
+              >
+                {isHovered && confirmDeleteSlot !== index && isPendingFlavors && onPickSeriesFlavors && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -392,315 +386,9 @@ export default function SlotOverlays({
                     Pick Flavors ({flavorCount})
                   </button>
                 )}
-                {/* Single Edit button — opens the edit menu */}
-                <button
-                  onClick={() => {
-                    setShowReplaceMenu(index);
-                    setReplacingItemId(placement.itemId);
-                  }}
-                  style={{
-                    width: "80px",
-                    height: "80px",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: "12px",
-                    fontWeight: "700",
-                    color: "#fff",
-                    backgroundColor: "var(--color-warning)",
-                    border: "none",
-                    borderRadius: "8px",
-                    cursor: "pointer",
-                    boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
-                    transition: "transform 0.2s, box-shadow 0.2s",
-                    pointerEvents: "auto",
-                    zIndex: 9001,
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = "scale(1.08)";
-                    e.currentTarget.style.boxShadow = "0 6px 20px rgba(0,0,0,0.4)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = "scale(1)";
-                    e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.3)";
-                  }}
-                >
-                  <div style={{ fontSize: "20px", marginBottom: "4px", lineHeight: 1 }}>
-                    ✏️
-                  </div>
-                  <div style={{ fontSize: "11px", fontWeight: "700" }}>
-                    Edit
-                  </div>
-                </button>
               </div>
             )}
 
-            {/* Edit Menu */}
-            {showReplaceMenu === index && (
-              <div
-                style={{
-                  position: "absolute",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "32px",
-                  background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-                  padding: "48px 56px",
-                  borderRadius: "16px",
-                  boxShadow: "0 12px 48px rgba(0,0,0,0.35)",
-                  zIndex: 9999,
-                  minWidth: "680px",
-                  color: "white",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "32px",
-                    fontWeight: "600",
-                    marginBottom: "12px",
-                    textAlign: "center",
-                    opacity: 0.95,
-                  }}
-                >
-                  Edit
-                </div>
-
-                {/* Series flavor toggle — shown when item has multiple staged flavor images */}
-                {(() => {
-                  const replacingItem = items?.find((it: any) => it.id === replacingItemId);
-                  // Use allFlavorPaths (preserved full set) so button stays after selecting 1 flavor
-                  const isSeries = (replacingItem?.result?.allFlavorPaths?.length ?? 0) > 1;
-                  if (!isSeries || !onPickSeriesFlavors || !replacingItemId) return null;
-                  const isPending = replacingItem?.result?.pendingFlavorSelection === true;
-                  const count = replacingItem?.result?.allFlavorPaths?.length ?? 0;
-                  return (
-                    <button
-                      onClick={() => {
-                        onPickSeriesFlavors(replacingItemId);
-                        setShowReplaceMenu(null);
-                        setReplacingItemId(null);
-                      }}
-                      style={{
-                        padding: "28px 40px",
-                        background: isPending
-                          ? "linear-gradient(135deg, rgba(245,158,11,0.5), rgba(217,119,6,0.5))"
-                          : "rgba(255,255,255,0.2)",
-                        color: "#fff",
-                        border: isPending
-                          ? "1px solid rgba(245,158,11,0.8)"
-                          : "1px solid rgba(255,255,255,0.4)",
-                        borderRadius: "14px",
-                        cursor: "pointer",
-                        fontWeight: "600",
-                        fontSize: "24px",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: "16px",
-                        transition: "background 0.2s, transform 0.2s",
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background = isPending
-                          ? "linear-gradient(135deg, rgba(245,158,11,0.7), rgba(217,119,6,0.7))"
-                          : "rgba(255,255,255,0.3)";
-                        e.currentTarget.style.transform = "scale(1.02)";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = isPending
-                          ? "linear-gradient(135deg, rgba(245,158,11,0.5), rgba(217,119,6,0.5))"
-                          : "rgba(255,255,255,0.2)";
-                        e.currentTarget.style.transform = "scale(1)";
-                      }}
-                    >
-                      <span style={{ fontSize: "28px" }}>🍦</span>
-                      {isPending ? `Select Flavors (${count} staged)` : `Change Flavors (${count} selected)`}
-                    </button>
-                  );
-                })()}
-
-                {/* Option: Add discount details */}
-                {onEditTitle && replacingItemId && (
-                  <button
-                    onClick={() => {
-                      onEditTitle(replacingItemId);
-                      setShowReplaceMenu(null);
-                      setReplacingItemId(null);
-                    }}
-                    style={{
-                      padding: "28px 40px",
-                      background: "rgba(255,255,255,0.2)",
-                      color: "#fff",
-                      border: "1px solid rgba(255,255,255,0.4)",
-                      borderRadius: "14px",
-                      cursor: "pointer",
-                      fontWeight: "600",
-                      fontSize: "24px",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      gap: "16px",
-                      transition: "background 0.2s, transform 0.2s",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = "rgba(255,255,255,0.3)";
-                      e.currentTarget.style.transform = "scale(1.02)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = "rgba(255,255,255,0.2)";
-                      e.currentTarget.style.transform = "scale(1)";
-                    }}
-                  >
-                    <span style={{ fontSize: "28px" }}>✏️</span>
-                    Edit Discount Details
-                  </button>
-                )}
-
-                {/* Option: Google Search */}
-                <button
-                  onClick={() => {
-                    if (replacingItemId && onGoogleSearch) {
-                      onGoogleSearch(replacingItemId);
-                    } else {
-                      alert("Google Search is not available for this slot.");
-                    }
-                    setShowReplaceMenu(null);
-                  }}
-                  style={{
-                    padding: "28px 40px",
-                    background: "rgba(255,255,255,0.2)",
-                    color: "#fff",
-                    border: "1px solid rgba(255,255,255,0.4)",
-                    borderRadius: "14px",
-                    cursor: "pointer",
-                    fontWeight: "600",
-                    fontSize: "24px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "16px",
-                    transition: "background 0.2s, transform 0.2s",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "rgba(255,255,255,0.3)";
-                    e.currentTarget.style.transform = "scale(1.02)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "rgba(255,255,255,0.2)";
-                    e.currentTarget.style.transform = "scale(1)";
-                  }}
-                >
-                  <span style={{ fontSize: "28px" }}>🔍</span>
-                  Google Search
-                </button>
-
-                {/* Option: Database Results */}
-                <button
-                  onClick={() => {
-                    if (replacingItemId && onChooseDatabaseResults) {
-                      onChooseDatabaseResults(replacingItemId);
-                    }
-                    setShowReplaceMenu(null);
-                    setReplacingItemId(null);
-                  }}
-                  disabled={!onChooseDatabaseResults}
-                  style={{
-                    padding: "28px 40px",
-                    background: "rgba(255,255,255,0.2)",
-                    color: "#fff",
-                    border: "1px solid rgba(255,255,255,0.4)",
-                    borderRadius: "14px",
-                    cursor: onChooseDatabaseResults ? "pointer" : "not-allowed",
-                    fontWeight: "600",
-                    fontSize: "24px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "16px",
-                    opacity: onChooseDatabaseResults ? 1 : 0.7,
-                    transition: "background 0.2s, transform 0.2s",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (onChooseDatabaseResults) {
-                      e.currentTarget.style.background = "rgba(255,255,255,0.3)";
-                      e.currentTarget.style.transform = "scale(1.02)";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "rgba(255,255,255,0.2)";
-                    e.currentTarget.style.transform = "scale(1)";
-                  }}
-                >
-                  <span style={{ fontSize: "28px" }}>💾</span>
-                  Database Results
-                </button>
-
-                {/* Option: Upload from Local */}
-                <button
-                  onClick={() => {
-                    if (replacingItemId) {
-                      onReplaceImage(replacingItemId);
-                    }
-                    setShowReplaceMenu(null);
-                    setReplacingItemId(null);
-                  }}
-                  style={{
-                    padding: "28px 40px",
-                    background: "rgba(255,255,255,0.2)",
-                    color: "#fff",
-                    border: "1px solid rgba(255,255,255,0.4)",
-                    borderRadius: "14px",
-                    cursor: "pointer",
-                    fontWeight: "600",
-                    fontSize: "24px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "16px",
-                    transition: "background 0.2s, transform 0.2s",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "rgba(255,255,255,0.3)";
-                    e.currentTarget.style.transform = "scale(1.02)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "rgba(255,255,255,0.2)";
-                    e.currentTarget.style.transform = "scale(1)";
-                  }}
-                >
-                  <span style={{ fontSize: "28px" }}>📁</span>
-                  Upload from Local
-                </button>
-
-                {/* Cancel */}
-                <button
-                  onClick={() => {
-                    setShowReplaceMenu(null);
-                    setReplacingItemId(null);
-                  }}
-                  style={{
-                    padding: "22px 40px",
-                    background: "rgba(255,255,255,0.15)",
-                    color: "rgba(255,255,255,0.95)",
-                    border: "1px solid rgba(255,255,255,0.35)",
-                    borderRadius: "14px",
-                    cursor: "pointer",
-                    fontWeight: "600",
-                    fontSize: "20px",
-                    marginTop: "8px",
-                    transition: "background 0.2s",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "rgba(255,255,255,0.25)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "rgba(255,255,255,0.15)";
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
-            </div>
           </div>
         );
       })}
