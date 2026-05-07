@@ -1,10 +1,10 @@
 /**
  * Metadata extraction + embedding for DB ingestion.
  *
- * Vision:   Gemini 1.5 Flash (Google API) — sees the actual image, extracts metadata.
+ * Vision:   Gemini Flash (Google API) — sees the actual image, extracts metadata.
  * OCR:      PaddleOCR text is passed to Gemini as extra context when available.
  * Fallback: DeepSeek text-only if Gemini fails but OCR found text.
- * Embed:    nomic-embed-text (Ollama, ~274MB) produces the search vector.
+ * Embed:    Gemini text-embedding-004 (free, cloud, 768-dim) — no local model needed.
  */
 
 import fs from "fs";
@@ -12,9 +12,6 @@ import path from "path";
 import { runOCR } from "./ocrService.js";
 import { assertCanCallGemini, trackGeminiRequest } from "../ipc/quotaTracker.js";
 
-const OLLAMA_BASE = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || "nomic-embed-text";
-const EMBED_TIMEOUT_MS = 60_000;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 
 /* ---------- Gemini vision ---------- */
@@ -281,23 +278,58 @@ ${ocrText}
   }
 }
 
-/* ---------- Ollama embed ---------- */
+/* ---------- Gemini embed ---------- */
 
-function ollamaEmbed(text) {
+const EMBED_MODEL = "gemini-embedding-2";
+const EMBED_TIMEOUT_MS = 30_000;
+
+async function geminiEmbed(text) {
+  const apiKey = String(process.env.GEMINI_API_KEY || "").trim();
+  if (!apiKey) throw new Error("GEMINI_API_KEY missing");
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), EMBED_TIMEOUT_MS);
-  return fetch(`${OLLAMA_BASE}/api/embed`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: OLLAMA_EMBED_MODEL, input: text }),
-    signal: controller.signal,
-  }).then((res) => {
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:embedContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: `models/${EMBED_MODEL}`,
+          content: { parts: [{ text }] },
+          outputDimensionality: 768,
+        }),
+        signal: controller.signal,
+      }
+    );
     clearTimeout(timeout);
-    return res;
-  }).catch((err) => {
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`Gemini embed HTTP ${res.status}: ${body.slice(0, 120)}`);
+    }
+    const data = await res.json();
+    return Array.isArray(data?.embedding?.values) ? data.embedding.values : [];
+  } catch (err) {
     clearTimeout(timeout);
     throw err;
-  });
+  }
+}
+
+/**
+ * Embed arbitrary text using Gemini text-embedding-004.
+ * @param {string} text
+ * @returns {Promise<number[]>} 768-dim vector, or [] on failure
+ */
+export async function embedText(text) {
+  const s = String(text || "").trim() || "product";
+  try {
+    return await geminiEmbed(s);
+  } catch (err) {
+    console.warn("[imageEmbedding] embedText failed:", err?.message?.slice(0, 80));
+    return [];
+  }
 }
 
 /* ---------- Main export ---------- */
@@ -305,7 +337,7 @@ function ollamaEmbed(text) {
 /**
  * Extract product metadata via Gemini vision (+ OCR context), then embed.
  * Falls back to DeepSeek text-only if Gemini fails and OCR found text.
- * Returns { embedding, parsed }.
+ * Returns { embedding, parsed }. Embedding is [] if Gemini embed fails (soft-optional).
  */
 export async function getImageEmbedding(imagePath) {
   let parsed = {
@@ -399,13 +431,10 @@ export async function getImageEmbedding(imagePath) {
     parsed.ocrText,
   ].filter(Boolean).join(" | ") || "product";
 
-  // --- Step 3: Embed (nomic-embed-text, ~274MB) ---
+  // --- Step 3: Embed (Gemini text-embedding-004, free, cloud-based) ---
   let embedding = [];
   try {
-    const res = await ollamaEmbed(embeddingText);
-    if (!res.ok) throw new Error(`Ollama embed ${res.status}`);
-    const data = await res.json();
-    embedding = Array.isArray(data.embeddings?.[0]) ? data.embeddings[0] : data.embedding || [];
+    embedding = await geminiEmbed(embeddingText);
   } catch (err) {
     console.warn("[imageEmbedding] Embed failed:", err?.message?.slice(0, 80));
   }
@@ -413,62 +442,3 @@ export async function getImageEmbedding(imagePath) {
   return { embedding, parsed };
 }
 
-/**
- * Embed arbitrary text for semantic search (e.g. discount item query).
- * Uses same model as product embeddings for compatibility.
- * @param {string} text - Query text (e.g. "Atlantic Salmon 500g | 大西洋三文鱼")
- * @returns {Promise<number[]>} 768-dim vector, or [] on failure
- */
-export async function embedText(text) {
-  const s = String(text || "").trim() || "product";
-  try {
-    const res = await ollamaEmbed(s);
-    if (!res.ok) return [];
-    const data = await res.json();
-    return Array.isArray(data.embeddings?.[0]) ? data.embeddings[0] : data.embedding || [];
-  } catch {
-    return [];
-  }
-}
-
-/* ---------- Ollama status check (for UI indicator) ---------- */
-
-/**
- * Check if Ollama is running and the embed model is available.
- * @returns {Promise<{ ok: boolean; model?: string; error?: string }>}
- */
-export async function checkOllamaStatus() {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5_000);
-
-  try {
-    const res = await fetch(`${OLLAMA_BASE}/api/tags`, { signal: controller.signal });
-    clearTimeout(timeout);
-
-    if (!res.ok) return { ok: false, error: `Ollama returned ${res.status}` };
-
-    const json = await res.json();
-    const modelNames = (json.models || []).map((m) => m.name || "").filter(Boolean);
-    const hasEmbed = modelNames.some(
-      (n) => n === OLLAMA_EMBED_MODEL || n.startsWith(OLLAMA_EMBED_MODEL + ":")
-    );
-
-    if (hasEmbed) {
-      const found = modelNames.find(
-        (n) => n === OLLAMA_EMBED_MODEL || n.startsWith(OLLAMA_EMBED_MODEL + ":")
-      );
-      return { ok: true, model: found || OLLAMA_EMBED_MODEL };
-    }
-    return {
-      ok: false,
-      error: `Model ${OLLAMA_EMBED_MODEL} not found. Run: ollama pull ${OLLAMA_EMBED_MODEL}`,
-    };
-  } catch (err) {
-    clearTimeout(timeout);
-    const msg = err.message || String(err);
-    if (msg.includes("abort") || msg.includes("ECONNREFUSED")) {
-      return { ok: false, error: `Ollama not running. Run: ollama pull ${OLLAMA_EMBED_MODEL}` };
-    }
-    return { ok: false, error: msg };
-  }
-}

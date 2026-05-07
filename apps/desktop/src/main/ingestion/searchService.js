@@ -99,9 +99,11 @@ export function buildSearchTokens(parsed) {
   return tokenize(buildHaystack(parsed));
 }
 
-/* ---------- Embedding cache (for image search) ---------- */
-let _embeddingCache = null;     // null = stale, array = loaded
-let _embeddingCacheLoad = null; // in-flight Promise — prevents N concurrent Firestore queries
+/* ---------- Embedding cache ---------- */
+const GEMINI_EMBED_MODEL = "gemini-embedding-2";
+
+let _embeddingCache = null;
+let _embeddingCacheLoad = null;
 
 export function invalidateEmbeddingCache() {
   _embeddingCache = null;
@@ -112,18 +114,16 @@ const EMBEDDING_CACHE_TIMEOUT_MS = 8_000;
 
 async function getEmbeddingCache() {
   if (_embeddingCache) return _embeddingCache;
-  // If a load is already in flight, reuse it instead of firing another Firestore query
   if (!_embeddingCacheLoad) {
     _embeddingCacheLoad = Promise.race([
       db
         .collection(FIRESTORE_COLLECTION)
         .where("status", "==", "active")
+        .where("embeddingModel", "==", GEMINI_EMBED_MODEL)
         .select("id", "englishTitle", "chineseTitle", "brand", "size", "category", "publicUrl", "embedding")
         .get(),
       new Promise((_, reject) =>
         setTimeout(() => {
-          // Clear immediately so the next call starts a fresh Firestore connection
-          // instead of re-awaiting this dead promise (stale gRPC channel scenario).
           _embeddingCacheLoad = null;
           reject(new Error("getEmbeddingCache timed out — gRPC channel may be stale"));
         }, EMBEDDING_CACHE_TIMEOUT_MS)
@@ -135,7 +135,7 @@ async function getEmbeddingCache() {
         return _embeddingCache;
       })
       .catch((err) => {
-        _embeddingCacheLoad = null; // allow retry on next call
+        _embeddingCacheLoad = null;
         throw err;
       });
   }
@@ -182,12 +182,8 @@ export async function searchByText(query, limit = 6, minScore = 0.15) {
 }
 
 /**
- * Semantic search: embed query text and find nearest products by cosine similarity.
- * Better than text tokens for "Milk 2L" vs "Whole Milk 2 Liter", synonyms, etc.
- * Falls back to [] if Ollama embed fails.
- * @param {string} query - Product name, size, etc. (e.g. "Atlantic Salmon 500g")
- * @param {number} limit - Max results (default 6)
- * @param {number} minScore - Min cosine similarity 0–1 (default 0.3)
+ * Semantic search using Gemini text-embedding-004 vectors.
+ * Only searches products tagged with embeddingModel === GEMINI_EMBED_MODEL.
  */
 export async function searchByTextEmbedding(query, limit = 6, minScore = 0.3) {
   if (!query || !String(query).trim()) return [];
@@ -239,7 +235,7 @@ function hybridMerge(embedResults, textResults, limit) {
 
 /**
  * Best-effort search for discount item → DB products.
- * Runs multi-query text search (en / zh / combined) and semantic embedding in parallel,
+ * Runs multi-query text search (en / zh / combined) and Gemini semantic embedding in parallel,
  * then merges results with hybrid scoring.
  * @param {{ en?: string; zh?: string; size?: string }} item - Discount item fields
  * @param {number} limit - Max results (1 for single, N for series)
@@ -253,7 +249,6 @@ export async function searchForDiscountItem(item, limit = 6) {
   if (!fullQuery && !enQuery && !zhQuery) return [];
 
   // Fast-path: exact match against saved flyer_editor combinations via matchKeys index.
-  // This bypasses fuzzy text/embedding search for products the user has already saved.
   try {
     const exactKey = normalize(enQuery) || normalize(zhQuery);
     if (exactKey) {
@@ -273,51 +268,42 @@ export async function searchForDiscountItem(item, limit = 6) {
     console.warn("[searchService] Fast-path matchKeys query failed:", err?.message?.slice(0, 80));
   }
 
-  // Run text search for all distinct query variants (parallel)
   const queries = [...new Set([fullQuery, enQuery, zhQuery].filter(Boolean))];
   const textResultSets = await Promise.all(
     queries.map((q) => searchByText(q, limit * 2, 0.15).catch(() => []))
   );
   const textMerged = mergeByBestScore(textResultSets.flat(), limit * 2);
 
-  // Run embedding on the most informative query
   let embedResults = [];
   try {
     embedResults = await searchByTextEmbedding(fullQuery || enQuery, limit * 2, 0.25);
-  } catch { /* ignore — text search covers it */ }
+  } catch { /* text search covers it */ }
 
-  // Hybrid merge: weight embedding 0.55, text 0.45
   return hybridMerge(embedResults, textMerged, limit);
 }
 
-/* ---------- Image search (embedding + cosine similarity) ---------- */
+/* ---------- Image search ---------- */
 export async function searchByImage(imagePath, limit = 5) {
   let queryEmbedding;
-
   try {
     const res = await getImageEmbedding(imagePath);
     queryEmbedding = res?.embedding;
-  } catch (err) {
-    console.warn("⚠️ Embedding failed — skipping image search");
+  } catch {
     return [];
   }
 
-  if (!Array.isArray(queryEmbedding) || !queryEmbedding.length) {
-    return [];
-  }
+  if (!Array.isArray(queryEmbedding) || !queryEmbedding.length) return [];
 
   const all = await getEmbeddingCache();
-
   if (!all.length) return [];
 
   return all
     .map((p) => ({
       ...p,
-      score: Array.isArray(p.embedding)
-        ? cosineSimilarity(queryEmbedding, p.embedding)
-        : 0,
+      score: Array.isArray(p.embedding) ? cosineSimilarity(queryEmbedding, p.embedding) : 0,
     }))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map(pickPublicFields);
 }
+

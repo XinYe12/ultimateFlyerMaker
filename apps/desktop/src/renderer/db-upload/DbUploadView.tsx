@@ -142,99 +142,6 @@ function DbStatusButton({
   );
 }
 
-type OllamaStatus = "checking" | "available" | "unavailable";
-
-const OLLAMA_CHECK_TIMEOUT_MS = 5000;
-
-function checkOllamaStatus(): Promise<{ ok: boolean; model?: string; error?: string }> {
-  const timeout = new Promise<{ ok: false; error: string }>((resolve) =>
-    setTimeout(() => resolve({ ok: false, error: "Check timed out" }), OLLAMA_CHECK_TIMEOUT_MS)
-  );
-  return Promise.race([
-    window.ufm.checkOllamaStatus(),
-    timeout,
-  ]);
-}
-
-function OllamaStatusButton({
-  status,
-  model,
-  error,
-  onRefresh,
-}: {
-  status: OllamaStatus;
-  model?: string;
-  error: string | null;
-  onRefresh: () => void;
-}) {
-  const modelStr = model ? model.split(":")[0] : "—";
-  let statusLabel = "Checking…";
-  let statusColor = "#868E96";
-  let statusBg = "#F1F3F5";
-
-  if (status === "available") {
-    statusLabel = "Connected";
-    statusColor = "#2F9E44";
-    statusBg = "#D3F9D8";
-  } else if (status === "unavailable") {
-    statusLabel = "Disconnected";
-    statusColor = "#C92A2A";
-    statusBg = "#FFE3E3";
-  } else {
-    statusLabel = "Checking…";
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={onRefresh}
-      title={error ? `Error: ${error}` : "Click to test Ollama embed model"}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "6px 12px",
-        borderRadius: 8,
-        border: "1px solid #DEE2E6",
-        background: "#fff",
-        cursor: "pointer",
-        fontSize: 12,
-        fontWeight: 600,
-      }}
-    >
-      <span style={{ color: "#495057" }}>Embed: {modelStr}</span>
-      <span
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 4,
-          padding: "2px 8px",
-          borderRadius: 6,
-          background: statusBg,
-          color: statusColor,
-        }}
-      >
-        {status === "checking" && (
-          <span
-            style={{
-              display: "inline-block",
-              width: 8,
-              height: 8,
-              border: "2px solid currentColor",
-              borderTopColor: "transparent",
-              borderRadius: "50%",
-              animation: "ufm-spin 0.7s linear infinite",
-            }}
-          />
-        )}
-        {status === "available" && <span>●</span>}
-        {status === "unavailable" && <span>●</span>}
-        {statusLabel}
-      </span>
-    </button>
-  );
-}
-
 function StatusBadge({ item }: { item: DbUploadItem }) {
   const isInProgress = IN_PROGRESS_STATUSES.includes(item.status);
   let bg = "#868E96";
@@ -313,9 +220,6 @@ export default function DbUploadView({ onBack }: Props) {
   const [dbCount, setDbCount] = useState<number | null>(null);
   const [dbStatus, setDbStatus] = useState<DbConnectionStatus>("checking");
   const [dbError, setDbError] = useState<string | null>(null);
-  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus>("checking");
-  const [ollamaModel, setOllamaModel] = useState<string | null>(null);
-  const [ollamaError, setOllamaError] = useState<string | null>(null);
   const [sessionStats, setSessionStats] = useState({ added: 0, duplicates: 0, skipped: 0, errors: 0 });
   const [quota, setQuota] = useState<QuotaStatus | null>(null);
   const [quotaLoading, setQuotaLoading] = useState(false);
@@ -358,28 +262,6 @@ export default function DbUploadView({ onBack }: Props) {
     });
   }, []);
 
-  const refreshOllamaStatus = useCallback(() => {
-    setOllamaStatus("checking");
-    setOllamaError(null);
-    const start = Date.now();
-    checkOllamaStatus().then((res) => {
-      const elapsed = Date.now() - start;
-      const wait = Math.max(0, MIN_CHECK_DISPLAY_MS - elapsed);
-      const apply = () => {
-        if (res.ok) {
-          setOllamaStatus("available");
-          setOllamaModel(res.model ?? null);
-          setOllamaError(null);
-        } else {
-          setOllamaStatus("unavailable");
-          setOllamaError(res.error ?? "Check failed");
-        }
-      };
-      if (wait > 0) setTimeout(apply, wait);
-      else apply();
-    });
-  }, []);
-
   const handleClearCutoutCache = useCallback(async () => {
     setClearingCache(true);
     setCacheCleared(null);
@@ -392,12 +274,11 @@ export default function DbUploadView({ onBack }: Props) {
     }
   }, []);
 
-  // Check DB, Ollama, and quota on mount
+  // Check DB and quota on mount
   useEffect(() => {
     refreshDbConnection();
-    refreshOllamaStatus();
     refreshQuota();
-  }, [refreshDbConnection, refreshOllamaStatus, refreshQuota]);
+  }, [refreshDbConnection, refreshQuota]);
 
   // Subscribe to IPC progress/complete events
   useEffect(() => {
@@ -472,9 +353,8 @@ export default function DbUploadView({ onBack }: Props) {
         )
       );
       if (data.error) console.error("[DbUploadView] batch failed:", data.error);
-      // Refresh DB, Ollama, and quota status
+      // Refresh DB and quota status
       refreshDbConnection();
-      refreshOllamaStatus();
       refreshQuota();
       // Drain next batch if queued
       drainQueue();
@@ -485,7 +365,7 @@ export default function DbUploadView({ onBack }: Props) {
       unsubComplete();
       clearInterval(flushTimer);
     };
-  }, [refreshDbConnection, refreshOllamaStatus, refreshQuota]);
+  }, [refreshDbConnection, refreshQuota]);
 
   const drainQueue = useCallback(() => {
     if (processingRef.current) return;
@@ -548,7 +428,7 @@ export default function DbUploadView({ onBack }: Props) {
     e.target.value = "";
   };
 
-  const [activeTab, setActiveTab] = useState<"upload" | "today">("upload");
+  const [activeTab, setActiveTab] = useState<"upload" | "today" | "search">("upload");
 
   const pendingCount = items.filter((i) => i.status === "pending").length;
   const doneCount = items.filter((i) => i.status === "done").length;
@@ -558,14 +438,13 @@ export default function DbUploadView({ onBack }: Props) {
 
   const handleConfirmAdd = useCallback(
     async (item: DbUploadItem) => {
-      if (item.status !== "needs_confirmation" || !item.embedding?.length) return;
+      if (item.status !== "needs_confirmation") return;
       setConfirmingIds((prev) => new Set(prev).add(item.id));
       try {
         const res = await window.ufm.confirmDbImage(
           item.path,
           "add",
-          item.parsed,
-          item.embedding
+          item.parsed
         );
         if (res.ok && res.productId) {
           setItems((prev) =>
@@ -685,13 +564,8 @@ export default function DbUploadView({ onBack }: Props) {
             error={dbError}
             onRefresh={refreshDbConnection}
           />
-          <OllamaStatusButton
-            status={ollamaStatus}
-            model={ollamaModel ?? undefined}
-            error={ollamaError}
-            onRefresh={refreshOllamaStatus}
-          />
           {quota && <QuotaMeter quota={quota} loading={quotaLoading} onClick={refreshQuota} />}
+          <ReembedButton />
           <ScanNonProductsButton onComplete={refreshDbConnection} />
           <SyncButton onSyncComplete={refreshDbConnection} />
           <button
@@ -733,7 +607,7 @@ export default function DbUploadView({ onBack }: Props) {
 
       {/* Tab bar */}
       <div style={{ display: "flex", borderBottom: "2px solid #E9ECEF", marginBottom: 24 }}>
-        {(["upload", "today"] as const).map(tab => (
+        {(["upload", "today", "search"] as const).map(tab => (
           <button
             key={tab}
             type="button"
@@ -745,12 +619,13 @@ export default function DbUploadView({ onBack }: Props) {
               color: activeTab === tab ? "#228BE6" : "#868E96",
             }}
           >
-            {tab === "upload" ? "Upload" : "This Week's Saves"}
+            {tab === "upload" ? "Upload" : tab === "today" ? "This Week's Saves" : "Search Library"}
           </button>
         ))}
       </div>
 
       {activeTab === "today" ? <TodaysSavesPanel /> : null}
+      {activeTab === "search" ? <ProductSearchPanel /> : null}
 
       {/* Body — two columns (Upload tab) */}
       <div style={{ display: activeTab === "upload" ? "flex" : "none", gap: 24, alignItems: "flex-start" }}>
@@ -995,7 +870,7 @@ export default function DbUploadView({ onBack }: Props) {
                           <button
                             type="button"
                             onClick={() => handleConfirmAdd(item)}
-                            disabled={confirmingIds.has(item.id) || !item.embedding?.length}
+                            disabled={confirmingIds.has(item.id)}
                             style={{
                               padding: "4px 12px",
                               borderRadius: 6,
@@ -1184,6 +1059,76 @@ function QuotaMeter({
         })}
       </div>
     </button>
+  );
+}
+
+type ReembedPhase = "idle" | "running" | "done";
+
+function ReembedButton() {
+  const [phase, setPhase] = useState<ReembedPhase>("idle");
+  const [progress, setProgress] = useState<{ current: number; total: number; label: string } | null>(null);
+  const [result, setResult] = useState<{ updated: number; total: number; errors: number; error?: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsubProgress = window.ufm.onReembedProgress((data) => setProgress(data));
+    const unsubComplete = window.ufm.onReembedComplete((data) => {
+      setPhase("done");
+      setResult(data);
+      setProgress(null);
+    });
+    return () => { unsubProgress(); unsubComplete(); };
+  }, []);
+
+  const handleClick = () => {
+    setPhase("running");
+    setResult(null);
+    setError(null);
+    setProgress(null);
+    window.ufm.reembedAllProducts().catch((err: Error) => {
+      setError(err?.message ?? "Re-embed failed");
+      setPhase("idle");
+    });
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={phase === "running"}
+        title="Re-embed all products without Gemini embeddings"
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 6,
+          padding: "6px 12px", borderRadius: 8, border: "1px solid #DEE2E6",
+          background: "#fff", cursor: phase === "running" ? "default" : "pointer",
+          fontSize: 12, fontWeight: 600, color: "#495057",
+          opacity: phase === "running" ? 0.7 : 1,
+        }}
+      >
+        {phase === "running" && (
+          <span style={{
+            display: "inline-block", width: 10, height: 10,
+            border: "2px solid #CED4DA", borderTopColor: "#228BE6",
+            borderRadius: "50%", animation: "ufm-spin 0.7s linear infinite",
+          }} />
+        )}
+        Re-embed Products
+      </button>
+      {phase === "running" && progress && (
+        <span style={{ fontSize: 11, color: "#868E96", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {progress.current}/{progress.total} — {progress.label}
+        </span>
+      )}
+      {phase === "done" && result && (
+        <span style={{ fontSize: 11, color: "#2F9E44", fontWeight: 600 }}>
+          {result.updated}/{result.total} updated
+          {result.errors > 0 && <span style={{ color: "#C92A2A" }}> · {result.errors} err</span>}
+          {result.error && <span style={{ color: "#C92A2A" }}> · {result.error}</span>}
+        </span>
+      )}
+      {error && <span style={{ fontSize: 11, color: "#C92A2A" }}>{error}</span>}
+    </div>
   );
 }
 
@@ -1532,6 +1477,118 @@ function TodaysSavesPanel() {
             </tbody>
           </table>
         </div>
+      )}
+    </div>
+  );
+}
+
+function ProductSearchPanel() {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<import("../global").DbSearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [searchedOnce, setSearchedOnce] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleSearch = async () => {
+    const q = query.trim();
+    if (!q) return;
+    setLoading(true);
+    try {
+      const res = await window.ufm.searchDatabaseByText(q, 12);
+      setResults(res ?? []);
+      setSearchedOnce(true);
+    } catch (err) {
+      console.error("Library search failed:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ padding: "4px 0 24px" }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 20, maxWidth: 520 }}>
+        <input
+          ref={inputRef}
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+          placeholder="Search by product name…"
+          style={{
+            flex: 1, padding: "9px 12px", fontSize: 13,
+            border: "1px solid #CED4DA", borderRadius: 8, outline: "none",
+          }}
+        />
+        <button
+          type="button"
+          onClick={handleSearch}
+          disabled={loading || !query.trim()}
+          style={{
+            padding: "9px 18px", fontSize: 13, fontWeight: 600,
+            background: "#228BE6", color: "#fff", border: "none",
+            borderRadius: 8, cursor: loading || !query.trim() ? "default" : "pointer",
+            opacity: loading || !query.trim() ? 0.6 : 1,
+          }}
+        >
+          {loading ? "Searching…" : "Search"}
+        </button>
+      </div>
+
+      {loading && (
+        <p style={{ color: "#868E96", fontSize: 13 }}>Searching library…</p>
+      )}
+
+      {!loading && searchedOnce && results.length === 0 && (
+        <p style={{ color: "#C92A2A", fontSize: 13 }}>No products found for "{query}".</p>
+      )}
+
+      {!loading && results.length > 0 && (
+        <>
+          <p style={{ fontSize: 12, color: "#868E96", marginBottom: 12 }}>
+            {results.length} result{results.length !== 1 ? "s" : ""}
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+            {results.map((r) => (
+              <div
+                key={r.id}
+                style={{
+                  border: "1px solid #DEE2E6", borderRadius: 8,
+                  overflow: "hidden", background: "#fff",
+                }}
+              >
+                {r.publicUrl ? (
+                  <img
+                    src={r.publicUrl}
+                    alt={r.englishTitle ?? r.chineseTitle ?? r.id}
+                    style={{ width: "100%", height: 120, objectFit: "contain", display: "block", background: "#F8F9FA" }}
+                  />
+                ) : (
+                  <div style={{ width: "100%", height: 120, background: "#F1F3F5", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <span style={{ fontSize: 11, color: "#ADB5BD" }}>No image</span>
+                  </div>
+                )}
+                <div style={{ padding: "8px 10px" }}>
+                  {r.englishTitle && (
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "#212529", marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {r.englishTitle}
+                    </div>
+                  )}
+                  {r.chineseTitle && (
+                    <div style={{ fontSize: 11, color: "#495057", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {r.chineseTitle}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    {r.size && <span style={{ fontSize: 10, color: "#868E96" }}>{r.size}</span>}
+                    <span style={{ marginLeft: "auto", fontSize: 10, color: "#2F9E44", fontWeight: 600 }}>
+                      {Math.round(r.score * 100)}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

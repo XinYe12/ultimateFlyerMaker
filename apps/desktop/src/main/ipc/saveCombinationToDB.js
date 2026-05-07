@@ -3,7 +3,7 @@
  *
  * Saves flyer editor product cards into product_vectors (Firestore + Storage).
  * Unlike batchIngestToDB, metadata is already known (titles, sizes, prices),
- * so Gemini/OCR is skipped — only Ollama embedding + Storage upload + Firestore write.
+ * so Gemini/OCR is skipped.
  *
  * The saved documents include a `matchKeys` array for O(1) exact-match lookup when
  * a future XLSX upload contains the same product names (via the searchForDiscountItem
@@ -104,7 +104,6 @@ export async function saveCombinationToDb(items, emitProgress, emitComplete) {
 
     try {
       emitProgress({ id, index: i, total: items.length, status: "embedding" });
-
       const embeddingText = [en, zh, size].filter(Boolean).join(" | ") || "product";
       const embedding = await embedText(embeddingText);
 
@@ -125,6 +124,7 @@ export async function saveCombinationToDb(items, emitProgress, emitComplete) {
         category: department || "other",
         cleanTitle,
         embedding: Array.isArray(embedding) && embedding.length > 0 ? embedding : [],
+        embeddingModel: Array.isArray(embedding) && embedding.length > 0 ? "gemini-embedding-2" : "",
         searchTokens,
         matchKeys,
         pHash: "",

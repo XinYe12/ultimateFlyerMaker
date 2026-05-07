@@ -142,7 +142,7 @@ declare global {
       getDiscounts: () => Promise<ParsedDiscount[]>;
       testFirestore: () => Promise<{ ok: boolean; count?: number; sample?: any[]; error?: string }>;
 
-      searchDatabaseByText: (query: string) => Promise<DbSearchResult[]>;
+      searchDatabaseByText: (query: string, limit?: number) => Promise<DbSearchResult[]>;
       downloadAndIngestFromUrl: (publicUrl: string) => Promise<{ path: string; result: IngestResult }>;
       googleImageSearch: (query: string) => Promise<GoogleSearchResult[]>;
       openGoogleSearchWindow: (query: string) => Promise<void>;
@@ -162,13 +162,11 @@ declare global {
       confirmDbImage: (
         imagePath: string,
         action: "add" | "skip",
-        parsed?: object,
-        embedding?: number[]
+        parsed?: object
       ) => Promise<{ ok: boolean; productId?: string; title?: string; publicUrl?: string; duplicate?: boolean; error?: string }>;
       getDbStats: () => Promise<{ count: number; quota?: QuotaStatus; error?: string }>;
       checkDbStorage: () => Promise<DbSyncReport>;
       fixDbStorage: (report: DbSyncReport) => Promise<DbSyncResult>;
-      checkOllamaStatus: () => Promise<{ ok: boolean; model?: string; error?: string }>;
       getQuotaStatus: () => Promise<QuotaStatus>;
       clearCutoutCache: () => Promise<{ cleared: number; error?: string }>;
       onDbBatchProgress: (cb: (data: DbBatchProgressEvent) => void) => () => void;
@@ -202,11 +200,21 @@ declare global {
       deleteDbProduct: (productId: string) => Promise<{ ok: boolean; error?: string }>;
       getTodaysSaves: () => Promise<TodaysSaveItem[]>;
 
+      reembedAllProducts: () => Promise<{ ok: boolean }>;
+      onReembedProgress: (cb: (data: { current: number; total: number; label: string }) => void) => () => void;
+      onReembedComplete: (cb: (data: { updated: number; total: number; errors: number; error?: string }) => void) => () => void;
+
       scanNonProducts: () => Promise<{ ok: boolean }>;
       onScanNonProductsProgress: (cb: (data: ScanNonProductsProgressEvent) => void) => () => void;
       onScanNonProductsComplete: (cb: (data: ScanNonProductsCompleteEvent) => void) => () => void;
       showContextMenu: (itemId: string, actions: Array<{ id: string; label: string; enabled?: boolean }>) => void;
       onContextMenuAction: (cb: (data: { itemId: string; action: string }) => void) => () => void;
+
+      getStartupTiming: () => Promise<{
+        totalMs: number;
+        t0Absolute: number;
+        phases: { whenReady?: number; backendSpawn?: number; backendHealthy?: number; firebase?: number; viteReady?: number; windowCreated?: number };
+      } | null>;
 
       getAppPaths: () => Promise<{ userData: string; firebaseCredential: string; firebaseCredentialExists: boolean }>;
       getMissingKeys: () => Promise<string[]>;

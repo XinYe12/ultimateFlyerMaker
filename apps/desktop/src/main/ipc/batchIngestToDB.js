@@ -3,7 +3,7 @@ import fs from "fs";
 import crypto from "crypto";
 import { getStorage } from "firebase-admin/storage";
 import { db } from "../ingestion/firebase.js";
-import { getImageEmbedding, classifyImageAsProduct } from "../ingestion/imageEmbeddingService.js";
+import { getImageEmbedding, embedText, classifyImageAsProduct } from "../ingestion/imageEmbeddingService.js";
 import { computePHash, hammingDistance } from "../ingestion/pHashService.js";
 import { buildSearchTokens, invalidateEmbeddingCache } from "../ingestion/searchService.js";
 import { FIRESTORE_COLLECTION } from "../config/vectorConfig.js";
@@ -11,7 +11,7 @@ import { assertCanRead, assertCanWrite, trackReads, trackWrites, trackDeletes, t
 
 const PHASH_THRESHOLD = 10;
 
-/** Optional delay (ms) between images to reduce Ollama CPU spikes. Set UFM_BATCH_DELAY_MS=2000 for 2s pause. */
+/** Optional delay (ms) between images. Set UFM_BATCH_DELAY_MS=2000 for a 2s pause. */
 const BATCH_DELAY_MS = Math.max(0, parseInt(process.env.UFM_BATCH_DELAY_MS || "0", 10) || 0);
 
 function sleep(ms) {
@@ -154,13 +154,6 @@ export async function processDbBatch(paths, emitProgress, emitComplete) {
         continue;
       }
 
-      // Only hard-fail if the embedding vector is missing (Ollama down).
-      if (!Array.isArray(embedding) || embedding.length === 0) {
-        emitProgress({ path: imagePath, status: "error", error: "Embedding failed — is Ollama running? Not saved to DB." });
-        errors++;
-        continue;
-      }
-
       // When Gemini (+ DeepSeek fallback) could not return usable parsed data, pause for user confirmation
       const hasMeaningfulParsed =
         (parsed.englishTitle || parsed.cleanTitle || parsed.chineseTitle || parsed.brand || "").trim().length > 0;
@@ -209,7 +202,8 @@ export async function processDbBatch(paths, emitProgress, emitComplete) {
       await db.collection(FIRESTORE_COLLECTION).doc(productId).set({
         id: productId,
         ...parsed,
-        embedding,
+        embedding: Array.isArray(embedding) && embedding.length > 0 ? embedding : [],
+        embeddingModel: Array.isArray(embedding) && embedding.length > 0 ? "gemini-embedding-2" : "",
         pHash,
         searchTokens,
         status: "pending",
@@ -259,14 +253,12 @@ export async function processDbBatch(paths, emitProgress, emitComplete) {
 
 /**
  * Save a single image to DB after user confirms (Gemini failed to parse).
- * Uses provided parsed metadata and embedding from the earlier getImageEmbedding call.
  *
  * @param {string} imagePath - Absolute path to the image
  * @param {object} parsed - Parsed metadata (may have empty fields)
- * @param {number[]} embedding - Precomputed embedding vector
  * @returns {Promise<{ ok: boolean; productId?: string; title?: string; publicUrl?: string; duplicate?: boolean; error?: string }>}
  */
-export async function confirmSingleImageToDb(imagePath, parsed, embedding) {
+export async function confirmSingleImageToDb(imagePath, parsed) {
   const bucket = getStorage().bucket();
 
   // Normalize parsed shape
@@ -280,10 +272,6 @@ export async function confirmSingleImageToDb(imagePath, parsed, embedding) {
     cleanTitle: String(parsed?.cleanTitle ?? "").trim(),
     ocrText: String(parsed?.ocrText ?? "").trim(),
   };
-
-  if (!Array.isArray(embedding) || embedding.length === 0) {
-    return { ok: false, error: "Embedding missing — cannot save." };
-  }
 
   let pHash = null;
   // Optional: check pHash for duplicate
@@ -312,11 +300,23 @@ export async function confirmSingleImageToDb(imagePath, parsed, embedding) {
     const productId = buildProductId(normalized, imagePath);
     const searchTokens = buildSearchTokens(normalized);
 
+    const embeddingText = [
+      normalized.englishTitle,
+      normalized.chineseTitle,
+      normalized.brand,
+      normalized.size,
+      normalized.category,
+      normalized.cleanTitle,
+      normalized.ocrText,
+    ].filter(Boolean).join(" | ") || "product";
+    const embedding = await embedText(embeddingText);
+
     assertCanWrite(2);
     await db.collection(FIRESTORE_COLLECTION).doc(productId).set({
       id: productId,
       ...normalized,
-      embedding,
+      embedding: Array.isArray(embedding) && embedding.length > 0 ? embedding : [],
+      embeddingModel: Array.isArray(embedding) && embedding.length > 0 ? "gemini-embedding-2" : "",
       pHash: pHash ?? null,
       searchTokens,
       status: "pending",

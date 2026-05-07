@@ -22,8 +22,8 @@ contextBridge.exposeInMainWorld("ufm", {
     return ipcRenderer.invoke("ufm:testFirestore");
   },
 
-  searchDatabaseByText: (query) => {
-    return ipcRenderer.invoke("ufm:searchDatabaseByText", query);
+  searchDatabaseByText: (query, limit) => {
+    return ipcRenderer.invoke("ufm:searchDatabaseByText", query, limit);
   },
 
   downloadAndIngestFromUrl: (publicUrl) => {
@@ -193,13 +193,12 @@ contextBridge.exposeInMainWorld("ufm", {
 
   // ---------- DB BATCH UPLOAD ----------
   startDbBatch: (paths) => ipcRenderer.invoke("ufm:startDbBatch", paths),
-  confirmDbImage: (imagePath, action, parsed, embedding) =>
-    ipcRenderer.invoke("ufm:confirmDbImage", imagePath, action, parsed, embedding),
+  confirmDbImage: (imagePath, action, parsed) =>
+    ipcRenderer.invoke("ufm:confirmDbImage", imagePath, action, parsed),
 
   getDbStats: () => ipcRenderer.invoke("ufm:getDbStats"),
   checkDbStorage: () => ipcRenderer.invoke("ufm:checkDbStorage"),
   fixDbStorage: (report) => ipcRenderer.invoke("ufm:fixDbStorage", report),
-  checkOllamaStatus: () => ipcRenderer.invoke("ufm:checkOllamaStatus"),
   getQuotaStatus: () => ipcRenderer.invoke("ufm:getQuotaStatus"),
   clearCutoutCache: () => ipcRenderer.invoke("ufm:clearCutoutCache"),
 
@@ -233,6 +232,18 @@ contextBridge.exposeInMainWorld("ufm", {
 
   deleteDbProduct: (productId) => ipcRenderer.invoke("ufm:deleteDbProduct", productId),
 
+  reembedAllProducts: () => ipcRenderer.invoke("ufm:reembedAllProducts"),
+  onReembedProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:reembedProgress", handler);
+    return () => ipcRenderer.removeListener("ufm:reembedProgress", handler);
+  },
+  onReembedComplete: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:reembedComplete", handler);
+    return () => ipcRenderer.removeListener("ufm:reembedComplete", handler);
+  },
+
   scanNonProducts: () => ipcRenderer.invoke("ufm:scanNonProducts"),
   onScanNonProductsProgress: (callback) => {
     const handler = (_, data) => callback(data);
@@ -261,4 +272,7 @@ contextBridge.exposeInMainWorld("ufm", {
     ipcRenderer.on("ufm:contextMenuAction", handler);
     return () => ipcRenderer.removeListener("ufm:contextMenuAction", handler);
   },
+
+  // ---------- STARTUP TIMING ----------
+  getStartupTiming: () => ipcRenderer.invoke("ufm:getStartupTiming"),
 });

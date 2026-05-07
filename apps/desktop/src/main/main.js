@@ -5,7 +5,7 @@ import fs from "fs";
 import fetch from "node-fetch";
 import FormData from "form-data";
 import { fileURLToPath } from "url";
-import "dotenv/config";
+import "./loadEnv.js";
 
 import { processFlyerImage } from "./imagePipeline.js";
 import { ingestPhoto, ingestPhotoPhase1, ingestPhotoPhase2 } from "./ingestion/ingestPhoto.js";
@@ -29,9 +29,12 @@ import { registerBackendProxyIpc } from "./ipc/backendProxy.js";
 import { processDbBatch, getDbStats, getTodaysSaves, checkDbStorageConsistency, fixDbStorageConsistency, confirmSingleImageToDb, scanAndRemoveNonProducts, deleteProductFromDb } from "./ipc/batchIngestToDB.js";
 import { saveCombinationToDb } from "./ipc/saveCombinationToDB.js";
 import { getQuotaStatus, getLiveQuotaStatus } from "./ipc/quotaTracker.js";
-import { checkOllamaStatus } from "./ingestion/imageEmbeddingService.js";
+import { migrateEmbeddingsIfNeeded, reembedAllProducts } from "./ingestion/migrateEmbeddings.js";
 import "./net/longFetch.js";
 import log from "./logger.js";
+
+/* ---------- Process-level startup clock (captured before app.whenReady()) ---------- */
+const PROCESS_T0 = Date.now();
 
 /* ---------- ESM __dirname fix ---------- */
 const __filename = fileURLToPath(import.meta.url);
@@ -94,7 +97,7 @@ function createSplashWindow() {
 
   splashWindow = new BrowserWindow({
     width: 380,
-    height: 240,
+    height: 260,
     frame: false,
     resizable: false,
     center: true,
@@ -213,6 +216,9 @@ ipcMain.handle("ufm:didCrashLastRun", () => {
   global.__ufmCrashedLastRun = false; // consume once
   return crashed;
 });
+
+/* ---------- IPC: startup timing ---------- */
+ipcMain.handle("ufm:getStartupTiming", () => global.__ufmStartupTiming ?? null);
 
 /* ---------- IPC: request quit (triggers main window close → confirmation dialog) ---------- */
 ipcMain.handle("ufm:requestQuit", () => {
@@ -334,10 +340,10 @@ ipcMain.handle("ingestImages", async (event, ...args) => {
 });
 
 /* ---------- IPC: DB search (Replace → Database Results) ---------- */
-ipcMain.handle("ufm:searchDatabaseByText", async (_, query) => {
+ipcMain.handle("ufm:searchDatabaseByText", async (_, query, limit = 6) => {
   try {
     if (!query || !String(query).trim()) return [];
-    return await searchForDiscountItem({ en: String(query).trim() }, 6);
+    return await searchForDiscountItem({ en: String(query).trim() }, limit);
   } catch (err) {
     console.error("[searchDatabaseByText] error:", err);
     return [];
@@ -449,10 +455,6 @@ ipcMain.handle("ufm:testFirestore", async () => {
     const db = admin.firestore();
     const snap = await db.collection("product_vectors").limit(3).get();
     const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    // Strip embedding arrays to keep the response small
-    for (const doc of docs) {
-      if (doc.embedding) doc.embedding = `[${doc.embedding.length} floats]`;
-    }
     return { ok: true, count: snap.size, totalDocs: snap.size, sample: docs };
   } catch (err) {
     console.error("[testFirestore] error:", err);
@@ -462,7 +464,7 @@ ipcMain.handle("ufm:testFirestore", async () => {
 
 /* ---------- IPC: file picker dialog ---------- */
 ipcMain.handle("ufm:openImageDialog", async () => {
-  const result = await dialog.showOpenDialog({
+  const result = await dialog.showOpenDialog(mainWindow, {
     properties: ["openFile"],
     filters: [
       { name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp"] }
@@ -494,7 +496,7 @@ async function collectImagesRecursive(dirPath) {
 }
 
 ipcMain.handle("ufm:openFolderDialog", async () => {
-  const result = await dialog.showOpenDialog({
+  const result = await dialog.showOpenDialog(mainWindow, {
     properties: ["openDirectory", "multiSelections"],
   });
   if (result.canceled || result.filePaths.length === 0) return [];
@@ -510,7 +512,7 @@ ipcMain.handle("ufm:openFolderDialog", async () => {
 });
 
 ipcMain.handle("ufm:openXlsxDialog", async () => {
-  const result = await dialog.showOpenDialog({
+  const result = await dialog.showOpenDialog(mainWindow, {
     properties: ["openFile"],
     filters: [{ name: "Excel", extensions: ["xlsx", "xls"] }],
   });
@@ -558,14 +560,14 @@ ipcMain.handle("ufm:cancelJob", async (_, jobId) => {
 });
 
 /* ---------- IPC: batch DB upload ---------- */
-ipcMain.handle("ufm:confirmDbImage", async (_, imagePath, action, parsed, embedding) => {
+ipcMain.handle("ufm:confirmDbImage", async (_, imagePath, action, parsed) => {
   if (action !== "add") {
     return { ok: false, error: "Invalid action" };
   }
   if (!imagePath || typeof imagePath !== "string") {
     return { ok: false, error: "Image path required" };
   }
-  return confirmSingleImageToDb(imagePath, parsed || {}, embedding || []);
+  return confirmSingleImageToDb(imagePath, parsed || {});
 });
 
 ipcMain.handle("ufm:startDbBatch", async (_, paths) => {
@@ -658,18 +660,18 @@ ipcMain.handle("ufm:scanNonProducts", async () => {
   return { ok: true };
 });
 
+ipcMain.handle("ufm:reembedAllProducts", async () => {
+  reembedAllProducts((data) => safeSend("ufm:reembedProgress", data))
+    .then((result) => safeSend("ufm:reembedComplete", result))
+    .catch((err) => safeSend("ufm:reembedComplete", { updated: 0, total: 0, errors: 1, error: err.message }));
+  return { ok: true };
+});
+
 ipcMain.handle("ufm:deleteDbProduct", async (_, productId) => {
   await deleteProductFromDb(productId);
   return { ok: true };
 });
 
-ipcMain.handle("ufm:checkOllamaStatus", async () => {
-  try {
-    return await checkOllamaStatus();
-  } catch (err) {
-    return { ok: false, error: err?.message || String(err) };
-  }
-});
 
 ipcMain.handle("ufm:clearCutoutCache", async () => {
   const cutoutDir = path.resolve(__dirname, "../../../exports/cutouts");
@@ -702,11 +704,20 @@ ipcMain.handle("ufm:getCutoutCacheInfo", async () => {
 });
 
 /* ---------- IPC: App paths ---------- */
-ipcMain.handle("ufm:getAppPaths", () => ({
-  userData: app.getPath("userData"),
-  firebaseCredential: path.join(app.getPath("userData"), "firebase-service-account.json"),
-  firebaseCredentialExists: fs.existsSync(path.join(app.getPath("userData"), "firebase-service-account.json")),
-}));
+ipcMain.handle("ufm:getAppPaths", () => {
+  const userDataPath = path.join(app.getPath("userData"), "firebase-service-account.json");
+  const bundledPath = path.join(
+    app.isPackaged ? process.resourcesPath : app.getAppPath(),
+    "backend", "config", "firebase-service-account.json"
+  );
+  const candidates = [process.env.FIREBASE_CREDENTIALS, userDataPath, bundledPath];
+  const foundPath = candidates.find(p => p && fs.existsSync(p));
+  return {
+    userData: app.getPath("userData"),
+    firebaseCredential: userDataPath,
+    firebaseCredentialExists: !!foundPath,
+  };
+});
 
 /* ---------- IPC: API key config ---------- */
 ipcMain.handle("ufm:getMissingKeys", () => global.__ufmMissingKeys ?? []);
@@ -796,6 +807,9 @@ function validateEnv() {
 
 /* ---------- App bootstrap ---------- */
 app.whenReady().then(async () => {
+  const phases = {};
+  phases.whenReady = Date.now() - PROCESS_T0;
+
   // Show splash immediately so the user sees something right away.
   createSplashWindow();
 
@@ -816,10 +830,12 @@ app.whenReady().then(async () => {
     // 1️⃣ Start backend (selector-based)
     updateSplash("Starting image processing service…");
     const backend = await startBackend("cutout");
+    phases.backendSpawn = Date.now() - PROCESS_T0;
 
     // 2️⃣ Wait for backend health
     updateSplash("Waiting for image processing service to be ready…");
-    await waitForBackend(backend);
+    await waitForBackend(backend, (msg) => updateSplash(msg));
+    phases.backendHealthy = Date.now() - PROCESS_T0;
 
     // 2b. Backend confirmed ready — now start the health watch
     startHealthWatch(backend);
@@ -827,13 +843,19 @@ app.whenReady().then(async () => {
     // 3️⃣ Init Firebase (idempotent; returns null if no credentials)
     updateSplash("Connecting to database…");
     const fbApp = initFirebase();
+    phases.firebase = Date.now() - PROCESS_T0;
 
-    // 3b. Verify Firestore in background — skip if no credentials
+    // 3b. Verify Firestore + kick off background embedding migration
     if (fbApp) {
       console.log("[firebase] [post-init] Running test query: product_vectors.limit(1)...");
       admin.firestore().collection("product_vectors").limit(1).get()
         .then(snap => console.log("[firebase] [post-init] ✅ Test query OK. Sample size:", snap.size))
         .catch(err => console.warn("[firebase] [post-init] ❌ Test query failed:", err?.message?.slice(0, 100)));
+
+      // Re-embed any products that still have stale Ollama vectors (fire-and-forget)
+      migrateEmbeddingsIfNeeded().catch(err =>
+        console.warn("[migrateEmbeddings] Background migration failed:", err?.message)
+      );
     } else {
       console.warn("[firebase] [post-init] Skipping test query — Firebase not configured.");
     }
@@ -845,7 +867,23 @@ app.whenReady().then(async () => {
     // 5️⃣ Wait for Vite dev server then create window (avoids ERR_CONNECTION_REFUSED when run with npm run dev)
     updateSplash("Loading interface…");
     await waitForVite("127.0.0.1", 5173, 60, 500);
+    phases.viteReady = Date.now() - PROCESS_T0;
     createWindow();
+    phases.windowCreated = Date.now() - PROCESS_T0;
+
+    const totalMs = Date.now() - PROCESS_T0;
+    log.info(
+      `[startup] Main process ready in ${(totalMs / 1000).toFixed(2)}s` +
+      ` | whenReady: ${phases.whenReady}ms` +
+      ` | backend-spawn: ${phases.backendSpawn}ms` +
+      ` | backend-healthy: ${phases.backendHealthy}ms` +
+      ` | firebase: ${phases.firebase}ms` +
+      ` | vite: ${phases.viteReady}ms` +
+      ` | window: ${phases.windowCreated}ms`
+    );
+
+    // Store timing (including t0Absolute) so the renderer can compute its own delta
+    global.__ufmStartupTiming = { totalMs, t0Absolute: PROCESS_T0, phases };
 
     // Close splash after window is visible
     setTimeout(() => closeSplash(), 400);
