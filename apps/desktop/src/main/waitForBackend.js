@@ -1,10 +1,23 @@
 import http from "http";
 import { getBackendDiagnostics } from "./startBackend.js";
 
-const MAX_RETRIES = 40;   // 20 seconds total (40 × 500 ms)
+const MAX_RETRIES = 360;  // 3 minutes total (360 × 500 ms) — first run downloads rembg model (~1 GB)
 const INTERVAL_MS = 500;
 
-export function waitForBackend(backend) {
+function parseSplashMessage(stderr) {
+  // tqdm download bar: "  15%|#####  | 144M/973M [00:10<00:53, 15.5MB/s]"
+  const dlMatch = stderr.match(/\s*(\d+)%\|[^|]*\|\s*([\d.]+\s*\w+)\/([\d.]+\s*\w+)/);
+  if (dlMatch) {
+    return `Downloading AI model: ${dlMatch[1]}% (${dlMatch[2]} / ${dlMatch[3]})\nFirst run only — this won't happen again.`;
+  }
+  // Model load message
+  if (stderr.includes("loading rembg model") || stderr.includes("birefnet")) {
+    return "Loading background removal model…\nFirst run only — this won't happen again.";
+  }
+  return null;
+}
+
+export function waitForBackend(backend, onProgress) {
   if (!backend?.url) {
     return Promise.reject(
       new Error("waitForBackend called without backend.url")
@@ -13,6 +26,7 @@ export function waitForBackend(backend) {
 
   const url = `${backend.url}/health`;
   let attempts = 0;
+  let lastSplashMsg = null;
 
   return new Promise((resolve, reject) => {
     const check = () => {
@@ -24,6 +38,15 @@ export function waitForBackend(backend) {
       }
 
       attempts++;
+
+      // After 3 s, start forwarding download/model-load progress to splash
+      if (onProgress && attempts > 6 && diag.stderr) {
+        const msg = parseSplashMessage(diag.stderr);
+        if (msg && msg !== lastSplashMsg) {
+          lastSplashMsg = msg;
+          onProgress(msg);
+        }
+      }
 
       const req = http.get(url, (res) => {
         if (res.statusCode === 200) {
@@ -114,7 +137,7 @@ function buildStartupError(name, diag) {
 
   // Generic timeout — no stderr captured ────────────────────────────────────
   return new Error(
-    `Image processing service [${name}] did not become ready within 20 seconds.\n\n` +
+    `Image processing service [${name}] did not become ready within 3 minutes.\n\n` +
     (stderr
       ? `Last output:\n${stderr.slice(-400)}`
       : "No output was captured. Verify that PYTHON_BIN is set correctly in your .env file.")

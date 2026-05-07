@@ -187,7 +187,12 @@ export class JobProcessor extends EventEmitter {
 
       try {
         if (job.discount.type === "xlsx") {
-          discountItems = await parseDiscountXlsx(null, job.discount.source, job.department);
+          if (job.discount.parsedItems?.length > 0) {
+            discountItems = job.discount.parsedItems;
+            console.log(`[JobProcessor] Using ${discountItems.length} pre-parsed discount items`);
+          } else {
+            discountItems = await parseDiscountXlsx(null, job.discount.source, job.department);
+          }
         } else {
           discountItems = await parseDiscountText(null, job.discount.source);
         }
@@ -311,8 +316,9 @@ export class JobProcessor extends EventEmitter {
               try {
                 const serperResults = await serperImageSearch(queryDisplay, 10);
                 console.log(`[JobProcessor] Serper returned ${serperResults.length} results for "${queryDisplay}"`);
+                let backendDown = false;
                 for (const sr of serperResults) {
-                  if (!sr.url) continue;
+                  if (!sr.url || backendDown) continue;
                   let ext;
                   try { ext = path.extname(new URL(sr.url).pathname) || ".jpg"; } catch { ext = ".jpg"; }
                   const safeExt = /^\.(jpg|jpeg|png|gif|webp)$/i.test(ext) ? ext : ".jpg";
@@ -324,13 +330,17 @@ export class JobProcessor extends EventEmitter {
                     let serperOk = false;
                     try {
                       const cutoutPath = await ingestCutoutOnly(tempPath);
-                      console.log(`[JobProcessor] Serper cutout result: cutoutPath=${cutoutPath ? 'YES' : 'NO'}`);
                       if (cutoutPath) {
                         result = buildResultFromDi(di, cutoutPath, null, 0, "serper", true);
                         serperOk = true;
                       }
                     } catch (ingestErr) {
-                      console.warn(`[JobProcessor] Serper cutout failed: ${ingestErr.message}`);
+                      if (ingestErr.message?.includes("ECONNREFUSED")) {
+                        console.warn(`[JobProcessor] Python backend (:17890) is down — skipping remaining Serper results`);
+                        backendDown = true;
+                      } else {
+                        console.warn(`[JobProcessor] Background removal failed for Serper image: ${ingestErr.message}`);
+                      }
                     } finally {
                       fs.promises.unlink(tempPath).catch(() => {});
                     }

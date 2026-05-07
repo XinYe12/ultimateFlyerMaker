@@ -18,13 +18,12 @@ type Props = {
   onViewFlyer: (job: FlyerJob) => void;
   onOpenDraft?: (job: FlyerJob) => void;
   jobQueueHook: ReturnType<typeof useJobQueue>;
-  onOpenSettings?: () => void;
   onExportDone?: () => void;
   triggerExport?: boolean;
   onTriggerExportConsumed?: () => void;
 };
 
-export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDraft, jobQueueHook, onOpenSettings, onExportDone, triggerExport, onTriggerExportConsumed }: Props) {
+export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDraft, jobQueueHook, onExportDone, triggerExport, onTriggerExportConsumed }: Props) {
   const {
     jobs,
     createJob,
@@ -184,6 +183,12 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
     try {
       const result = await window.ufm.parseAllDepartmentsXlsx(filePath);
       setBulkParsed(result);
+      const discountsByDept: Record<string, any> = {};
+      for (const [dept, items] of Object.entries(result)) {
+        discountsByDept[dept] = { type: "xlsx", source: filePath, parsedItems: items, status: "done" };
+      }
+      await bulkApplyAndStart({ templateId, discountsByDept, availableDepts: availableDepartments });
+      setBulkApplied(true);
     } catch (err: any) {
       setBulkError(err?.message ?? "Failed to parse file");
     } finally {
@@ -191,21 +196,13 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
     }
   };
 
-  const handleBulkApply = async () => {
-    if (!bulkParsed) return;
-    const discountsByDept: Record<string, any> = {};
-    for (const [dept, items] of Object.entries(bulkParsed)) {
-      discountsByDept[dept] = { type: "xlsx", source: bulkFile, parsedItems: items, status: "done" };
-    }
-    await bulkApplyAndStart({ templateId, discountsByDept, availableDepts: availableDepartments });
-    setBulkApplied(true);
-  };
-
   const DEPT_LABELS: Record<string, string> = {
     grocery: "Grocery", frozen: "Frozen", hot_food: "Hot Food",
     sushi: "Sushi", meat: "Meat", seafood: "Seafood",
     fruit: "Fruit", vegetable: "Vegetable", hot_sale: "Hot Sale", produce: "Produce",
   };
+
+  const flyerStatus = templateConfig ? checkExportReadiness(templateConfig, jobs) : null;
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
@@ -223,55 +220,6 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
         templateId={templateId}
         onDepartmentClick={handleDepartmentClick}
       />
-
-      {/* Action Buttons */}
-      <div style={{ marginTop: 24, display: "flex", gap: 12, justifyContent: "center", alignItems: "center" }}>
-        <Button
-          variant="primary"
-          size="lg"
-          onClick={handleExportClick}
-          style={{
-            padding: "14px 32px",
-            boxShadow: "0 4px 12px rgba(76, 110, 245, 0.35)",
-          }}
-        >
-          Export Flyer to PDF
-        </Button>
-        <button
-          onClick={() => window.ufm.openLogFile()}
-          title="Open the application log file"
-          style={{
-            background: "none",
-            border: "none",
-            color: "var(--color-text-muted)",
-            fontSize: "var(--text-sm)",
-            cursor: "pointer",
-            padding: "4px 8px",
-            opacity: 0.6,
-            textDecoration: "underline",
-          }}
-        >
-          Open Log
-        </button>
-        {onOpenSettings && (
-          <button
-            onClick={onOpenSettings}
-            title="Open settings"
-            style={{
-              background: "none",
-              border: "none",
-              color: "var(--color-text-muted)",
-              fontSize: "var(--text-sm)",
-              cursor: "pointer",
-              padding: "4px 8px",
-              opacity: 0.6,
-              textDecoration: "underline",
-            }}
-          >
-            Settings
-          </button>
-        )}
-      </div>
 
       {/* ── Bulk Discount Upload ── */}
       <div style={{
@@ -359,27 +307,69 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
                 </span>
               ))}
             </div>
-            {bulkApplied ? (
+            {bulkApplied && (
               <div style={{ fontSize: 13, color: "#16a34a", fontWeight: 600 }}>
-                Discounts applied to all matching departments.
+                All departments started — processing now.
               </div>
-            ) : (
-              <button
-                onClick={handleBulkApply}
-                style={{
-                  padding: "8px 18px", fontSize: 13, fontWeight: 700,
-                  background: "#16a34a", border: "none", borderRadius: 8,
-                  cursor: "pointer", color: "#fff",
-                }}
-                onMouseEnter={e => e.currentTarget.style.background = "#15803d"}
-                onMouseLeave={e => e.currentTarget.style.background = "#16a34a"}
-              >
-                Start All Departments
-              </button>
             )}
           </div>
         )}
       </div>
+
+      {/* ── Flyer Status Panel ── */}
+      {flyerStatus?.canExport && (
+        <div style={{
+          marginTop: 24,
+          background: "#f8fafc",
+          border: "1px solid #e2e8f0",
+          borderRadius: 12,
+          padding: "16px 20px",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 15, color: "#1e293b" }}>Flyer Status</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                {flyerStatus.departments.map(dept => {
+                  const chipStyle =
+                    dept.status === "ready"
+                      ? { bg: "#dcfce7", color: "#166534", border: "#bbf7d0", icon: "✓" }
+                      : dept.status === "in-progress"
+                      ? { bg: "#fefce8", color: "#854d0e", border: "#fde68a", icon: "◑" }
+                      : { bg: "#f8fafc", color: "#94a3b8", border: "#e2e8f0", icon: "○" };
+                  return (
+                    <span key={dept.department} style={{
+                      display: "inline-flex", alignItems: "center", gap: 4,
+                      background: chipStyle.bg, color: chipStyle.color,
+                      border: `1px solid ${chipStyle.border}`,
+                      borderRadius: 20, padding: "3px 10px", fontSize: 12, fontWeight: 600,
+                    }}>
+                      <span style={{ fontSize: 11 }}>{chipStyle.icon}</span>
+                      {dept.label}
+                    </span>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 13, color: "#64748b", marginTop: 8 }}>
+                {flyerStatus.allReady
+                  ? `All ${flyerStatus.readyCount} departments ready!`
+                  : `${flyerStatus.readyCount} of ${flyerStatus.departments.length} departments ready`}
+              </div>
+            </div>
+            <button
+              onClick={handleExportClick}
+              style={{
+                padding: "8px 18px", fontSize: 13, fontWeight: 700,
+                background: "#3b82f6", border: "none", borderRadius: 8,
+                cursor: "pointer", color: "#fff", whiteSpace: "nowrap",
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = "#2563eb"; }}
+              onMouseLeave={e => { e.currentTarget.style.background = "#3b82f6"; }}
+            >
+              Export Ready Departments →
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Job Creation Panel - shown when drafting */}
       {draftingJob && (

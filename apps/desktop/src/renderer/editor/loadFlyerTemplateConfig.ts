@@ -164,7 +164,7 @@ function buildDepartments(page: CustomTemplatePage): Record<string, DepartmentDe
       page.departmentAreas.map(d => {
         const region = expandSqueezedRegion(d.productRegion, cw, ch);
         return [
-          d.label,
+          d.departmentKey,
           {
             region,
             rows: d.rows,

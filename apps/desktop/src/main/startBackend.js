@@ -66,6 +66,13 @@ function resolveBackendCommand(cfg) {
   }
 
   const backendRoot = path.join(app.getAppPath(), "backend", "src");
+
+  // On macOS/Linux prepend common bin dirs; on Windows just pass PATH as-is
+  // (Windows uses ";" separators and drive letters — mixing in Unix paths breaks DLL resolution)
+  const pathEnv = process.platform === "win32"
+    ? process.env.PATH || ""
+    : ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin", process.env.PATH || ""].join(":");
+
   return {
     cmd: pythonBin,
     args: [
@@ -76,13 +83,7 @@ function resolveBackendCommand(cfg) {
     cwd: backendRoot,
     env: {
       ...process.env,
-      PATH: [
-        "/usr/local/bin",
-        "/opt/homebrew/bin",
-        "/usr/bin",
-        "/bin",
-        process.env.PATH || "",
-      ].join(":"),
+      PATH: pathEnv,
       PYTHONPATH: backendRoot,
     },
   };
@@ -193,6 +194,7 @@ export async function startBackend(name = "cutout") {
     // inherit stdout so backend logs appear in terminal during dev;
     // pipe stderr so we can capture it for diagnostics.
     stdio: ["ignore", "inherit", "pipe"],
+    windowsHide: true,
   });
 
   // Collect stderr for diagnostics, and forward it to the parent's stderr

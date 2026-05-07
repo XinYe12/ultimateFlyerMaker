@@ -470,7 +470,6 @@ export default function AddImageModal({ slotIndex, onLocalFile, onItemReady, onC
                         ref={webviewRef as any}
                         src={webviewUrl}
                         style={{ width: "100%", height: "100%" }}
-                        allowpopups={true}
                       />
                     </div>
                     <div

@@ -25,13 +25,18 @@
     "dotenv": "^17.2.3",
     "electron-log": "^5.4.3",
     "firebase-admin": "^13.6.0",
+    "form-data": "^4.0.5",
     "get-port": "^7.1.0",
+    "google-auth-library": "^9.15.1",
+    "image-size": "^2.0.1",
+    "sharp": "^0.33.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.1.0",
     "node-fetch": "^3.3.2",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "undici": "^7.18.2",
+    "uuid": "^11.1.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
@@ -63,6 +68,18 @@
     ],
     "extraResources": [
       {
+        "from": ".env",
+        "to": ".env"
+      },
+      {
+        "from": "../shared",
+        "to": "shared"
+      },
+      {
+        "from": "backend/config/firebase-service-account.json",
+        "to": "backend/config/firebase-service-account.json"
+      },
+      {
         "from": "backend/dist/cutout_service",
         "to": "backend/cutout_service",
         "filter": ["**/*"]
@@ -70,7 +87,7 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.png"
     }
   }
 }

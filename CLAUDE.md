@@ -98,16 +98,9 @@ Required in `apps/desktop/.env`:
 ```
 DEEPSEEK_API_KEY=sk-...
 PYTHON_BIN=/path/to/python3.11
+GEMINI_API_KEY=AI...    # used for vision (Gemini Flash) AND embeddings (text-embedding-004, free)
 UFM_PORT=17890
 UFM_HOST=127.0.0.1
-
-# Product Library: Ollama for vision + embeddings (free, local)
-# Run: ollama pull qwen2.5vl
-# Run: ollama pull nomic-embed-text
-OLLAMA_BASE_URL=http://localhost:11434   # optional, default shown
-OLLAMA_VISION_MODEL=qwen2.5vl            # optional, default shown
-OLLAMA_EMBED_MODEL=nomic-embed-text      # optional, default shown
-UFM_BATCH_DELAY_MS=2000                  # optional; pause between images to reduce Ollama CPU spikes (default 0)
 
 # Firestore (if using non-default database or emulator)
 FIRESTORE_DATABASE_ID=(default)          # optional; use your database ID if not default

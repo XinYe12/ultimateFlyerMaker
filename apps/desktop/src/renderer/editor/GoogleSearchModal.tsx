@@ -300,7 +300,6 @@ export default function GoogleSearchModal({ itemId, initialQuery, currentImageSr
               ref={webviewRef as any}
               src={webviewUrl}
               style={{ width: "100%", height: "100%" }}
-              allowpopups={true}
             />
           </div>
         </div>

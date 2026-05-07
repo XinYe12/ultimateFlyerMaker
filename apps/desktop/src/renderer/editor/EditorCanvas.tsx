@@ -97,6 +97,7 @@ export default function EditorCanvas({
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   const [addImageModalSlot, setAddImageModalSlot] = useState<number | null>(null);
   const [addImageModalCardId, setAddImageModalCardId] = useState<string | null>(null);
+  const [removingBgIds, setRemovingBgIds] = useState<Set<string>>(new Set());
   // load template config; for custom templates with no background image, set imageSize from canvas dims
   useEffect(() => {
     setImageSize(null);
@@ -136,6 +137,25 @@ export default function EditorCanvas({
     });
     return unsub;
   }, [onEditTitle, onGoogleSearch, onChooseDatabaseResults, onPickSeriesFlavors]);
+
+  useEffect(() => {
+    const unsub = (window as any).ufm.onCutoutComplete((id: string) => {
+      setRemovingBgIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    });
+    return unsub;
+  }, []);
+
+  const handleRemoveBackground = (itemId: string) => {
+    const item = items.find((it: any) => it.id === itemId);
+    const inputPath = item?.result?.inputPath;
+    if (!inputPath) return;
+    setRemovingBgIds(prev => new Set(prev).add(itemId));
+    (window as any).ufm.startCutout(itemId, inputPath);
+  };
 
   const page = config ? findPageForDepartment(config, department) : null;
   const region = page?.departments?.[department] ?? null;
@@ -1717,6 +1737,8 @@ export default function EditorCanvas({
                   onGoogleSearch={onGoogleSearch}
                   onEditTitle={onEditTitle}
                   onPickSeriesFlavors={onPickSeriesFlavors}
+                  onRemoveBackground={handleRemoveBackground}
+                  removingBgIds={removingBgIds}
                   cardMode
                   cardRects={cardRects}
                   cardLayout={cardLayout ?? undefined}
@@ -2032,6 +2054,8 @@ export default function EditorCanvas({
               onGoogleSearch={onGoogleSearch}
               onEditTitle={onEditTitle}
               onPickSeriesFlavors={onPickSeriesFlavors}
+              onRemoveBackground={handleRemoveBackground}
+              removingBgIds={removingBgIds}
               isLocked={isLocked}
             />
           )}

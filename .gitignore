@@ -125,3 +125,6 @@ apps/desktop/output/
 apps/desktop/apps/desktop/project_assets/cutouts/
 apps/desktop/backend/uploads/
 apps/desktop/backend/src/**/cutouts/
+
+# Claude Code local settings (machine-specific paths)
+.claude/

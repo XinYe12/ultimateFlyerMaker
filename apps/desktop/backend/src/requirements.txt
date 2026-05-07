@@ -5,5 +5,5 @@ paddlepaddle
 paddleocr
 opencv-python
 numpy
-rembg
+rembg[cpu]
 

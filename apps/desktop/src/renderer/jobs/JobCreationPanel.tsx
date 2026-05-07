@@ -3,10 +3,23 @@
 
 import { useState, useEffect, useRef } from "react";
 import { FlyerJob, DepartmentId, DiscountInput } from "../types";
-import DepartmentSelector from "../components/DepartmentSelector";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 import { listCustomTemplates } from "../editor/customTemplateStorage";
+
+const DEPARTMENT_LABELS: Record<string, string> = {
+  grocery: "Grocery",
+  frozen: "Frozen",
+  hot_food: "Hot Food",
+  sushi: "Sushi",
+  meat: "Meat",
+  seafood: "Seafood",
+  fruit: "Fruit",
+  vegetable: "Vegetable",
+  hot_sale: "Hot Sale",
+  produce: "Produce",
+  cosmetics: "Cosmetics",
+};
 
 const TEMPLATE_OPTIONS = [
   { id: "weekly_v1", label: "Weekly V1" },
@@ -100,11 +113,23 @@ export default function JobCreationPanel({
           <label style={{ display: "block", marginBottom: 8, fontWeight: 500 }}>
             Department
           </label>
-          <DepartmentSelector
+          <select
             value={department}
-            onChange={d => setDepartment(d as DepartmentId)}
-            departments={availableDepartments}
-          />
+            onChange={e => setDepartment(e.target.value as DepartmentId)}
+            style={{
+              width: "100%", padding: "8px 12px",
+              border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)",
+              fontSize: "var(--text-base)", fontFamily: "var(--font-sans)",
+              background: "var(--color-bg)", color: "var(--color-text)",
+              cursor: "pointer", boxSizing: "border-box",
+            }}
+          >
+            {availableDepartments.map(dept => (
+              <option key={dept} value={dept}>
+                {DEPARTMENT_LABELS[dept] || dept}
+              </option>
+            ))}
+          </select>
         </div>
 
         <Button variant="primary" size="lg" onClick={() => onCreate(lockedTemplateId ?? templateId, department)}>
@@ -178,6 +203,7 @@ export default function JobCreationPanel({
           onChange={e => onSetName(e.target.value)}
           placeholder="Job name..."
           disabled={isProcessing}
+          autoFocus
           style={{
             width: "100%",
             padding: "10px 12px",
@@ -187,6 +213,7 @@ export default function JobCreationPanel({
             fontWeight: "var(--font-semibold)",
             opacity: isProcessing ? 0.6 : 1,
             fontFamily: "var(--font-sans)",
+            boxSizing: "border-box",
           }}
         />
       </div>
@@ -219,11 +246,25 @@ export default function JobCreationPanel({
           <label style={{ display: "block", marginBottom: 4, fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>
             Department
           </label>
-          <DepartmentSelector
+          <select
             value={job.department}
-            onChange={d => onSetDepartment(d as DepartmentId)}
-            departments={availableDepartments}
-          />
+            onChange={e => onSetDepartment(e.target.value as DepartmentId)}
+            disabled={isProcessing}
+            style={{
+              width: "100%", padding: "7px 10px",
+              border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)",
+              fontSize: "var(--text-base)", fontFamily: "var(--font-sans)",
+              background: "var(--color-bg)", color: "var(--color-text)",
+              cursor: isProcessing ? "not-allowed" : "pointer", boxSizing: "border-box",
+              opacity: isProcessing ? 0.6 : 1,
+            }}
+          >
+            {availableDepartments.map(dept => (
+              <option key={dept} value={dept}>
+                {DEPARTMENT_LABELS[dept] || dept}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
