@@ -7,6 +7,7 @@ import "dotenv/config";
 import fetch from "node-fetch";
 import { BACKENDS } from "./backendRegistry.js";
 import { getPythonThreadLimitEnv, getPythonModelEnv } from "./resourceProfile.js";
+import { readUserConfig } from "./ipc/configStore.js";
 
 let backendProcess = null;
 let backendInfo = null;
@@ -193,9 +194,14 @@ export async function startBackend(name = "cutout") {
 
   const { cmd, args, cwd, env } = resolveBackendCommand(cfg);
 
+  // User config (Settings) takes priority over .env for model selection.
+  // loadUserConfig() skips keys already in process.env so .env would otherwise win.
+  const userCfgModel = readUserConfig().UFM_REMBG_MODEL;
+  const modelOverride = userCfgModel ? { UFM_REMBG_MODEL: userCfgModel } : {};
+
   backendProcess = spawn(cmd, args, {
     cwd,
-    env: { ...env, ...getPythonThreadLimitEnv(), ...getPythonModelEnv() },
+    env: { ...env, ...getPythonThreadLimitEnv(), ...getPythonModelEnv(), ...modelOverride },
     // inherit stdout so backend logs appear in terminal during dev;
     // pipe stderr so we can capture it for diagnostics.
     stdio: ["ignore", "inherit", "pipe"],
