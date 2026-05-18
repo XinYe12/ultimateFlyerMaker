@@ -105,6 +105,10 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
 
     // If there's a job with work (images or discount-only processed), open it in editor
     if (jobToOpen && jobHasWork(jobToOpen)) {
+      if (jobToOpen.status === "queued" || jobToOpen.status === "processing") {
+        // Pipeline still running — don't open editor mid-flight
+        return;
+      }
       onOpenDraft?.(jobToOpen);
       return;
     }
@@ -440,7 +444,17 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
             </h3>
             <div style={{ display: "flex", gap: "var(--space-2)" }}>
               {jobHasWork(draftingJob) && (
-                <Button variant="primary" size="sm" onClick={handleOpenInEditor}>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleOpenInEditor}
+                  disabled={draftingJob.status === "queued" || draftingJob.status === "processing"}
+                  title={
+                    draftingJob.status === "queued" || draftingJob.status === "processing"
+                      ? "Please wait for the pipeline to finish"
+                      : undefined
+                  }
+                >
                   Open in Editor
                 </Button>
               )}

@@ -90,6 +90,8 @@ export default function App() {
   const [seriesPickerItemId, setSeriesPickerItemId] = useState<string | null>(null);
   // Track which series items have already been auto-shown (so we don't re-open after Cancel)
   const seriesAutoShownRef = useRef<Set<string>>(new Set());
+  // Holds accepted Serper items for DB promotion on export (updated whenever editor queue changes)
+  const serperPromotionRef = useRef<Array<{ en: string; zh: string; size: string; cutoutPath: string }>>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showAddProductDialog, setShowAddProductDialog] = useState(false);
   const [originalDiscounts, setOriginalDiscounts] = useState<any[]>([]);
@@ -783,6 +785,20 @@ export default function App() {
     setGoogleSearchItemId(itemId);
   };
 
+  // Keep the Serper promotion ref in sync with editor items so we always have
+  // the latest accepted Serper images ready to promote on export.
+  useEffect(() => {
+    if (view !== "editor") return;
+    serperPromotionRef.current = editorQueue
+      .filter((item: any) => item.status === "done" && item.result?.matchSource === "serper" && item.result?.cutoutPath)
+      .map((item: any) => ({
+        en: item.result?.discount?.en ?? item.result?.title?.en ?? "",
+        zh: item.result?.discount?.zh ?? item.result?.title?.zh ?? "",
+        size: item.result?.discount?.size ?? item.result?.title?.size ?? "",
+        cutoutPath: item.result.cutoutPath as string,
+      }));
+  }, [view, editorQueue]);
+
   // ---------------- SERIES FLAVOR SELECTION ----------------
 
   // Auto-open picker once when editor loads with pending series items
@@ -1298,6 +1314,13 @@ export default function App() {
   const [triggerExport, setTriggerExport] = useState(false);
 
   const handleWorkflowNavigate = (step: number) => {
+    if (step === 3 /* editor */) {
+      const isRunning = jobs.some(j => j.status === "processing" || j.status === "queued");
+      if (isRunning) {
+        setToastState({ visible: true, message: "Please wait for the pipeline to finish before opening the editor.", variant: "error" });
+        return;
+      }
+    }
     // Clean up editor state when leaving the editor view
     if (view === "editor" && step !== 3) {
       setViewingJob(null);
@@ -1314,6 +1337,14 @@ export default function App() {
 
   const handleProgressBarExport = () => {
     if (view === "editor") {
+      // Fire-and-forget: promote accepted Serper images to the product DB
+      const toPromote = serperPromotionRef.current;
+      if (toPromote.length > 0) {
+        (window as any).ufm.promoteSerperResults(toPromote).catch((err: unknown) =>
+          console.warn("[App] promoteSerperResults failed:", err)
+        );
+        serperPromotionRef.current = [];
+      }
       setViewingJob(null);
       editorSyncRunCount.current = 0;
     }
@@ -1511,7 +1542,17 @@ export default function App() {
             onViewFlyer={handleViewFlyer}
             onOpenDraft={handleOpenDraft}
             jobQueueHook={jobQueueHook}
-            onExportDone={() => setFlyerExported(true)}
+            onExportDone={() => {
+              setFlyerExported(true);
+              // Promote any Serper images that were in the editor at export time
+              const toPromote = serperPromotionRef.current;
+              if (toPromote.length > 0) {
+                (window as any).ufm.promoteSerperResults(toPromote).catch((err: unknown) =>
+                  console.warn("[App] promoteSerperResults failed:", err)
+                );
+                serperPromotionRef.current = [];
+              }
+            }}
             triggerExport={triggerExport}
             onTriggerExportConsumed={() => setTriggerExport(false)}
           />

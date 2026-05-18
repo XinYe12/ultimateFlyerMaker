@@ -273,6 +273,9 @@ contextBridge.exposeInMainWorld("ufm", {
     return () => ipcRenderer.removeListener("ufm:scanNonProductsComplete", handler);
   },
 
+  // ---------- SERPER PROMOTION ----------
+  promoteSerperResults: (items) => ipcRenderer.invoke("ufm:promoteSerperResults", items),
+
   // ---------- APP PATHS ----------
   getAppPaths: () => ipcRenderer.invoke("ufm:getAppPaths"),
 

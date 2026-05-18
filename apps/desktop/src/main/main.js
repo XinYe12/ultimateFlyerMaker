@@ -31,6 +31,7 @@ import { processDbBatch, requestBatchStop, getDbStats, getTodaysSaves, checkDbSt
 import { saveCombinationToDb } from "./ipc/saveCombinationToDB.js";
 import { getQuotaStatus, getLiveQuotaStatus } from "./ipc/quotaTracker.js";
 import { reembedAllProducts } from "./ingestion/migrateEmbeddings.js";
+import { promoteSerperResults } from "./ingestion/promoteSerperResults.js";
 import { testGeminiConnection } from "./ingestion/imageEmbeddingService.js";
 import "./net/longFetch.js";
 import log from "./logger.js";
@@ -696,6 +697,13 @@ ipcMain.handle("ufm:scanNonProducts", async () => {
       error: err.message,
     });
   });
+  return { ok: true };
+});
+
+ipcMain.handle("ufm:promoteSerperResults", async (_, items) => {
+  promoteSerperResults(items).catch((err) =>
+    console.warn("[promoteSerperResults] Background promotion failed:", err.message)
+  );
   return { ok: true };
 });
 

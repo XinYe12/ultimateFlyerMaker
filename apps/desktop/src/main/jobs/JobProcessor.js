@@ -12,6 +12,7 @@ import { parseDiscountText } from "../ipc/parseDiscountText.js";
 import { parseDiscountXlsx } from "../ipc/parseDiscountXlsx.js";
 import { exportDiscountImages } from "../ipc/exportDiscountImages.js";
 import { serperImageSearch, serperKeysPresent } from "../ingestion/serperImageSearchService.js";
+import { buildSerperQuery } from "../ingestion/buildSerperQuery.js";
 import { runCutout, waitForCutoutReady } from "../cutoutClient.js";
 import { addShadowToCutout } from "../ingestion/addShadow.js";
 import sizeOf from "image-size";
@@ -461,7 +462,13 @@ export class JobProcessor extends EventEmitter {
                 const tSerp = performance.now();
                 let serperResults = [];
                 try {
-                  serperResults = await serperImageSearch(queryDisplay, 10);
+                  const { primary: serperQuery, fallback: serperQueryFallback } = buildSerperQuery(di);
+                  console.log(`[JobProcessor] Serper query: "${serperQuery}"`);
+                  serperResults = await serperImageSearch(serperQuery, 10);
+                  if (serperResults.length === 0 && serperQueryFallback && serperQueryFallback !== serperQuery) {
+                    console.log(`[JobProcessor] Serper zero results — retrying with fallback: "${serperQueryFallback}"`);
+                    serperResults = await serperImageSearch(serperQueryFallback, 10);
+                  }
                 } finally {
                   ps.serperApiMs = roundMs(performance.now() - tSerp);
                 }
