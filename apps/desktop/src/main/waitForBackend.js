@@ -50,10 +50,22 @@ export function waitForBackend(backend, onProgress) {
 
       const req = http.get(url, (res) => {
         if (res.statusCode === 200) {
-          console.log(`✅ Backend [${backend.name}] is healthy`);
-          // Mark info object so startBackend knows health was confirmed.
-          if (backend.healthy !== undefined) backend.healthy = true;
-          resolve();
+          let data = "";
+          res.on("data", chunk => { data += chunk; });
+          res.on("end", () => {
+            try {
+              const body = JSON.parse(data);
+              if (body.ready) {
+                console.log(`✅ Backend [${backend.name}] is healthy and ready`);
+                if (backend.healthy !== undefined) backend.healthy = true;
+                resolve();
+              } else {
+                retry();
+              }
+            } catch {
+              retry();
+            }
+          });
         } else {
           retry();
         }

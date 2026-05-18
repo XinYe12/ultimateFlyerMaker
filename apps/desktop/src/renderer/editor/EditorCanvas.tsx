@@ -51,6 +51,7 @@ export default function EditorCanvas({
   onChooseDatabaseResults,
   onGoogleSearch,
   onEditTitle,
+  onEditBannerDays,
   onPickSeriesFlavors,
   onAddItem,
   slotOverrides,
@@ -63,6 +64,7 @@ export default function EditorCanvas({
   editMode,
   onSubImageUpdate,
   onDeleteSubImage,
+  flyerWeekStart,
 }: {
   editorQueue: any[];
   templateId: string;
@@ -70,8 +72,9 @@ export default function EditorCanvas({
   discountLabels?: {
     id: string;
     title?: { en: string; zh: string; size: string; regularPrice: string };
-    price?: { display: string; quantity?: number | null; unit?: string; regular?: string };
+    price?: { display: string; quantity?: number | null; unit?: string; regular?: string; days?: string[] };
   }[];
+  flyerWeekStart?: string;
   isLocked?: boolean;
   onEnqueue?: (paths: string[], options?: { slotIndex?: number }) => Promise<void>;
   onRemove?: (id: string) => void;
@@ -80,6 +83,7 @@ export default function EditorCanvas({
   onChooseDatabaseResults?: (itemId: string) => void;
   onGoogleSearch?: (itemId: string) => void;
   onEditTitle?: (itemId: string) => void;
+  onEditBannerDays?: (itemId: string) => void;
   onPickSeriesFlavors?: (itemId: string) => void;
   onAddItem?: (item: IngestItem) => void;
   slotOverrides?: Record<number, SlotRect>;
@@ -98,17 +102,23 @@ export default function EditorCanvas({
   const [addImageModalSlot, setAddImageModalSlot] = useState<number | null>(null);
   const [addImageModalCardId, setAddImageModalCardId] = useState<string | null>(null);
   const [removingBgIds, setRemovingBgIds] = useState<Set<string>>(new Set());
-  // load template config; for custom templates with no background image, set imageSize from canvas dims
+  // load template config (only when template changes, not on every dept switch)
   useEffect(() => {
-    setImageSize(null);
     loadFlyerTemplateConfig(templateId).then(cfg => {
       setConfig(cfg);
-      const p = cfg.pages.find((pg: any) => pg.departments && pg.departments[department]);
-      if (p && !p.imagePath && p.canvasWidth && p.canvasHeight) {
-        setImageSize({ width: p.canvasWidth, height: p.canvasHeight });
-      }
     });
-  }, [templateId, department]);
+  }, [templateId]);
+
+  // derive canvas size from config + department (no null flash between dept switches)
+  useEffect(() => {
+    if (!config) return;
+    const p = config.pages.find((pg: any) => pg.departments && pg.departments[department]);
+    if (p && !p.imagePath && p.canvasWidth && p.canvasHeight) {
+      setImageSize({ width: p.canvasWidth, height: p.canvasHeight });
+    } else {
+      setImageSize(null);
+    }
+  }, [config, department]);
 
   // editorQueue is already glued content
   const items = editorQueue;
@@ -231,6 +241,16 @@ export default function EditorCanvas({
 
   // ── Image pan drag state ──
   const [imagePanDrag, setImagePanDrag] = useState<{
+    itemId: string;
+    startX: number; startY: number;
+    startOffsetX: number; startOffsetY: number;
+  } | null>(null);
+
+  // ── Active toolbar section (set when user clicks title/price/banner element) ──
+  const [activeToolbarSection, setActiveToolbarSection] = useState<'title' | 'price' | 'banner' | null>(null);
+
+  // ── Banner pan drag state ──
+  const [bannerPanDrag, setBannerPanDrag] = useState<{
     itemId: string;
     startX: number; startY: number;
     startOffsetX: number; startOffsetY: number;
@@ -461,6 +481,23 @@ export default function EditorCanvas({
       e.preventDefault();
       e.stopPropagation();
       setImagePanDrag({ itemId, startX: e.clientX, startY: e.clientY, startOffsetX, startOffsetY });
+    },
+    [onCardLayoutChange]
+  );
+
+  const handleElementSelect = useCallback(
+    (_itemId: string, element: 'title' | 'price' | 'banner' | null) => {
+      setActiveToolbarSection(element);
+    },
+    []
+  );
+
+  const handleBannerPanStart = useCallback(
+    (itemId: string, startOffsetX: number, startOffsetY: number, e: React.MouseEvent) => {
+      if (!onCardLayoutChange) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setBannerPanDrag({ itemId, startX: e.clientX, startY: e.clientY, startOffsetX, startOffsetY });
     },
     [onCardLayoutChange]
   );
@@ -801,6 +838,30 @@ export default function EditorCanvas({
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [imagePanDrag, cardLayout, onCardLayoutChange]);
+
+  // Global mouse handlers for banner pan drag
+  useEffect(() => {
+    if (!bannerPanDrag || !onCardLayoutChange || !cardLayout) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const dx = (e.clientX - bannerPanDrag.startX) / PREVIEW_SCALE;
+      const dy = (e.clientY - bannerPanDrag.startY) / PREVIEW_SCALE;
+      const newX = Math.round(bannerPanDrag.startOffsetX + dx);
+      const newY = Math.round(bannerPanDrag.startOffsetY + dy);
+      const updated = cardLayout.map(c =>
+        c.itemId === bannerPanDrag.itemId ? { ...c, bannerOffsetX: newX, bannerOffsetY: newY } : c
+      );
+      onCardLayoutChange(updated);
+    };
+
+    const handleMouseUp = () => setBannerPanDrag(null);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [bannerPanDrag, cardLayout, onCardLayoutChange]);
 
   // Global mouse handlers for sub-image pan drag
   useEffect(() => {
@@ -1595,11 +1656,12 @@ export default function EditorCanvas({
       );
     })()}
 
-    {/* Global font toolbar — always visible for card-mode departments */}
-    {isCard && editMode && cardLayout && onCardLayoutChange && (() => {
+    {/* Contextual font toolbar — only shown when user has clicked a title/price/banner element */}
+    {isCard && editMode && cardLayout && onCardLayoutChange && activeToolbarSection && (() => {
       const firstCard = cardLayout.find(c => c.itemId);
       return (
         <GlobalFontToolbar
+          activeSection={activeToolbarSection}
           titleFont={firstCard?.titleFontFamily}
           titleColor={firstCard?.titleColor ?? "#000000"}
           titleItalic={cardLayout.some(c => c.titleItalic)}
@@ -1612,6 +1674,7 @@ export default function EditorCanvas({
           onPriceFontChange={handleAllPriceFontChange}
           onPriceColorChange={handleAllPriceColorChange}
           onShowDollarToggle={handleShowDollarToggleAll}
+          onClose={() => setActiveToolbarSection(null)}
         />
       );
     })()}
@@ -1704,12 +1767,13 @@ export default function EditorCanvas({
                   items={items}
                   placements={cardPlacements}
                   discountLabels={discountLabels as any}
+                  flyerWeekStart={flyerWeekStart}
                   editMode={editMode}
                   activeScaleDrag={elementScaleDrag}
                   onElementDragStart={onCardLayoutChange && editMode ? handleElementScaleDragStart : undefined}
                   onRotateDragStart={onCardLayoutChange && editMode ? handleElementRotateDragStart : undefined}
-                  onEditTitle={undefined}
-                  onEditPrice={undefined}
+                  onEditTitle={onEditTitle && editMode ? onEditTitle : undefined}
+                  onEditPrice={onEditTitle && editMode ? onEditTitle : undefined}
                   onSubImageScaleDragStart={onSubImageUpdate && editMode ? handleSubImageScaleDragStart : undefined}
                   onSubImageRotateDragStart={onSubImageUpdate && editMode ? handleSubImageRotateDragStart : undefined}
                   onDeleteSubImage={onDeleteSubImage && editMode ? onDeleteSubImage : undefined}
@@ -1718,6 +1782,9 @@ export default function EditorCanvas({
                   onOrientationChange={onCardLayoutChange && editMode ? handleOrientationChange : undefined}
                   onCropDragStart={onCardLayoutChange && editMode ? handleCropDragStart : undefined}
                   onSubImageCropDragStart={onSubImageUpdate && editMode ? handleSubImageCropDragStart : undefined}
+                  onBannerPanStart={onCardLayoutChange && editMode ? handleBannerPanStart : undefined}
+                  onEditBannerDays={onEditBannerDays && editMode ? onEditBannerDays : undefined}
+                  onElementSelect={editMode ? handleElementSelect : undefined}
                 />
               )}
 
@@ -2038,6 +2105,7 @@ export default function EditorCanvas({
               items={items}
               placements={placements}
               discountLabels={discountLabels as any}
+              flyerWeekStart={flyerWeekStart}
             />
           )}
 

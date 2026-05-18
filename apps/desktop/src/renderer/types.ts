@@ -15,6 +15,7 @@ export type ParsedDiscount = {
   isSeries: boolean;
   flavorCount: number;
   price: { display: string };
+  days?: string[];   // e.g. ["mon","wed","fri"] — undefined means all days
 };
 
 export type OCRResult = Array<{
@@ -163,6 +164,7 @@ export type DiscountLabel = {
     quantity?: number | null;
     unit?: string;
     regular?: string;
+    days?: string[];
   };
 };
 
@@ -195,6 +197,8 @@ export type CardDef = {
   priceFontFamily?: string;
   priceColor?: string;
   priceShowDollar?: boolean;
+  bannerOffsetX?: number;
+  bannerOffsetY?: number;
 };
 
 export type CardLayout = CardDef[];
@@ -205,6 +209,22 @@ export type CardLayout = CardDef[];
 
 export type JobStatus = "drafting" | "queued" | "processing" | "completed" | "failed";
 
+/** Per-item flyer automation pipeline segment times (ms), from JobProcessor. */
+export type FlyerJobPipelineStepMs = {
+  discountSearchInitialMs?: number;
+  dbBuildInitialMs?: number;
+  discountSearchTextOnlyMs?: number;
+  dbBuildTextOnlyMs?: number;
+  serperApiMs?: number;
+  serperFetchMs?: number;
+  serperRembgMs?: number;
+  serperShadowMs?: number;
+  serperLastResortMs?: number;
+  ingestPhotoMs?: number;
+  totalMs: number;
+  itemFailed?: boolean;
+};
+
 export type ImageTask = {
   id: string;
   path: string;
@@ -212,6 +232,10 @@ export type ImageTask = {
   result?: IngestResult;
   error?: string;
   slotIndex?: number;
+  /** Filled when job processor finishes an item (XLSX row or uploaded image). */
+  pipelineStepMs?: FlyerJobPipelineStepMs;
+  /** Discount query or image filename for timing rows. */
+  queryLabel?: string;
 };
 
 export type DiscountInput = {
@@ -256,4 +280,7 @@ export type FlyerJob = {
 
   /** Card layouts for card-based departments (departmentId → cards) */
   cardLayouts?: Record<string, CardLayout>;
+
+  /** ISO date string (yyyy-MM-dd) of the Friday that starts this flyer's Fri–Thu cycle */
+  flyerWeekStart?: string;
 };

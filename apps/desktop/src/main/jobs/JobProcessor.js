@@ -12,10 +12,11 @@ import { parseDiscountText } from "../ipc/parseDiscountText.js";
 import { parseDiscountXlsx } from "../ipc/parseDiscountXlsx.js";
 import { exportDiscountImages } from "../ipc/exportDiscountImages.js";
 import { serperImageSearch, serperKeysPresent } from "../ingestion/serperImageSearchService.js";
-import { runCutout } from "../cutoutClient.js";
+import { runCutout, waitForCutoutReady } from "../cutoutClient.js";
 import { addShadowToCutout } from "../ingestion/addShadow.js";
 import sizeOf from "image-size";
 import { decideSizeFromAspectRatio } from "../../../../shared/flyer/layout/sizeFromImage.js";
+import { getResourceProfile, getDiscountSearchTimeoutMs } from "../resourceProfile.js";
 
 const BROWSER_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -26,11 +27,21 @@ const BROWSER_HEADERS = {
 
 // Session-level blocklist: domains confirmed to reject all connections.
 // Automatically populated on first connection failure — no manual maintenance needed.
-const blockedDomains = new Set(["weeecdn.com"]);
+const blockedDomains = new Set();
+
+/** Never skip or auto-block these hosts — they carry our own DB/product images (Firebase/GCS). */
+function isTrustedProductImageHost(hostname) {
+  return (
+    hostname === "firebasestorage.googleapis.com" ||
+    hostname === "storage.googleapis.com" ||
+    hostname.endsWith(".firebasestorage.app")
+  );
+}
 
 function isBlockedUrl(url) {
   try {
     const { hostname } = new URL(url);
+    if (isTrustedProductImageHost(hostname)) return false;
     return [...blockedDomains].some(d => hostname === d || hostname.endsWith("." + d));
   } catch { return false; }
 }
@@ -38,6 +49,7 @@ function isBlockedUrl(url) {
 function blockDomain(url) {
   try {
     const { hostname } = new URL(url);
+    if (isTrustedProductImageHost(hostname)) return;
     if (!blockedDomains.has(hostname)) {
       blockedDomains.add(hostname);
       console.warn(`[fetchImage] Added to session blocklist: ${hostname}`);
@@ -76,6 +88,48 @@ const __dirname = path.dirname(__filename);
 // which resolves to apps/exports/cutouts. We are in apps/desktop/src/main/jobs/ so need ../../../../
 const EXPORT_ROOT = path.resolve(__dirname, "../../../../exports/cutouts");
 
+function sleep(ms) {
+  return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();
+}
+
+function roundMs(ms) {
+  return Math.round(Number(ms) || 0);
+}
+
+/** Mutable per-item pipeline timing (ms) for flyer automation jobs. */
+function emptyPipelineSteps() {
+  return {
+    discountSearchInitialMs: 0,
+    dbBuildInitialMs: 0,
+    discountSearchTextOnlyMs: 0,
+    dbBuildTextOnlyMs: 0,
+    serperApiMs: 0,
+    serperFetchMs: 0,
+    serperRembgMs: 0,
+    serperShadowMs: 0,
+    serperLastResortMs: 0,
+    ingestPhotoMs: 0,
+    totalMs: 0,
+  };
+}
+
+/** rembg + shadow with per-phase accumulation on `ps` (includes time on failure/abort). */
+async function runCutoutWithShadowMs(tempPath, signal, ps) {
+  const t0 = performance.now();
+  let baseCutoutPath;
+  try {
+    baseCutoutPath = await runCutout(tempPath, signal);
+  } finally {
+    ps.serperRembgMs += roundMs(performance.now() - t0);
+  }
+  const t1 = performance.now();
+  try {
+    return await addShadowToCutout(baseCutoutPath);
+  } finally {
+    ps.serperShadowMs += roundMs(performance.now() - t1);
+  }
+}
+
 async function ensureExportRoot() {
   await fs.promises.mkdir(EXPORT_ROOT, { recursive: true });
 }
@@ -92,13 +146,6 @@ async function downloadToCutoutsDir(url, suffix) {
   return localPath;
 }
 
-/** Run only cutout+shadow (no OCR, no DeepSeek). Returns cutoutPath. */
-async function ingestCutoutOnly(tempPath) {
-  const baseCutoutPath = await runCutout(tempPath);
-  const cutoutPath = await addShadowToCutout(baseCutoutPath);
-  return cutoutPath;
-}
-
 /** Get layout size from a cutout image path. */
 function getLayoutFromPath(cutoutPath) {
   let layout = { size: "SMALL" };
@@ -113,12 +160,13 @@ function getLayoutFromPath(cutoutPath) {
 /** Build a result object from discount item data (no OCR/LLM). */
 function buildResultFromDi(di, cutoutPath, cutoutPaths, matchScore, matchSource, lowConfidence) {
   const layout = cutoutPath ? getLayoutFromPath(cutoutPath) : { size: "SMALL" };
+  const seriesImages = cutoutPaths?.length > 1 && di.isSeries === true;
   return {
     inputPath: cutoutPath || null,
     cutoutPath: cutoutPath || null,
-    cutoutPaths: cutoutPaths?.length > 1 ? cutoutPaths : undefined,
-    allFlavorPaths: cutoutPaths?.length > 1 ? cutoutPaths : undefined,
-    pendingFlavorSelection: cutoutPaths?.length > 1 ? true : undefined,
+    cutoutPaths: seriesImages ? cutoutPaths : undefined,
+    allFlavorPaths: seriesImages ? cutoutPaths : undefined,
+    pendingFlavorSelection: seriesImages ? true : undefined,
     layout,
     title: { en: di.en || "", zh: di.zh || "", size: di.size || "", confidence: "high", source: "xlsx" },
     aiTitle: { en: di.en || "", zh: di.zh || "", size: di.size || "", confidence: "high", source: "xlsx" },
@@ -137,10 +185,12 @@ export class JobProcessor extends EventEmitter {
     this.isProcessing = false;
     this.currentJobId = null;
     this.abortedJobs = new Set();
+    this._abortResolvers = new Map(); // jobId → resolve fn for mid-item abort
   }
 
   cancelJob(jobId) {
     this.abortedJobs.add(jobId);
+    this._abortResolvers.get(jobId)?.(); // wake any in-flight Promise.race immediately
   }
 
   enqueue(job) {
@@ -177,8 +227,16 @@ export class JobProcessor extends EventEmitter {
   }
 
   async processJob(job) {
+    const rp = getResourceProfile();
     const totalImages = job.images?.length || 0;
     let discountItems = [];
+
+    // Abort promise — resolves to this sentinel when cancelJob() is called mid-item.
+    // Allows Promise.race to break out of ingestPhoto() without waiting for it to finish.
+    const _ABORTED = {};
+    let _abortResolve;
+    const _abortPromise = new Promise(res => { _abortResolve = () => res(_ABORTED); });
+    this._abortResolvers.set(job.id, _abortResolve);
 
     // 1. Parse discounts if provided
     if (job.discount && job.discount.source) {
@@ -196,7 +254,14 @@ export class JobProcessor extends EventEmitter {
         } else {
           discountItems = await parseDiscountText(null, job.discount.source);
         }
-        console.log(`[JobProcessor] Parsed ${discountItems.length} discount items:`, JSON.stringify(discountItems, null, 2));
+        if (process.env.UFM_DEBUG_DISCOUNTS === "1" && discountItems.length > 0) {
+          console.log(
+            `[JobProcessor] Parsed ${discountItems.length} discount items (UFM_DEBUG_DISCOUNTS sample):`,
+            discountItems.slice(0, 3)
+          );
+        } else {
+          console.log(`[JobProcessor] Parsed ${discountItems.length} discount items`);
+        }
       } catch (err) {
         console.error("[JobProcessor] Discount parsing failed:", err);
         // For xlsx-only jobs, this is fatal — surface the error
@@ -231,8 +296,19 @@ export class JobProcessor extends EventEmitter {
     if (totalImages === 0 && discountItems.length > 0) {
       const { searchForDiscountItem } = await import("../ingestion/searchService.js");
 
-      // Emit "started" so renderer can create skeleton cards
-      this.emit("started", job.id, { itemCount: discountItems.length, discountItems });
+      const bulkXlsxLite =
+        job.discount?.type === "xlsx" && discountItems.length >= rp.bulkXlsxRowThreshold;
+      if (bulkXlsxLite) {
+        console.log(
+          `[JobProcessor] Bulk xlsx (${discountItems.length} rows, threshold ${rp.bulkXlsxRowThreshold}): ` +
+            "skipping Serper/rembg and semantic embed (text + exact DB match only). " +
+            "Adjust UFM_BULK_XLSX_ROW_THRESHOLD or use a smaller sheet for full matching."
+        );
+      }
+
+      // Emit "started" for UI only — do NOT send full discountItems over IPC (large .xlsx can be MBs
+      // and breaks or stalls structured clone, leaving the job stuck on "Queued" in the renderer).
+      this.emit("started", job.id, { itemCount: discountItems.length });
 
       for (let i = 0; i < discountItems.length; i++) {
         if (this.abortedJobs.has(job.id)) {
@@ -255,89 +331,185 @@ export class JobProcessor extends EventEmitter {
           discountItems.length
         );
 
-        const DB_CONFIDENCE_THRESHOLD = 0.60;
-        const SEARCH_TIMEOUT_MS = 8_000;
-        // Pipeline budget: 8s DB search + 7s Serper API + 3s download + 8s cutout+shadow = ~26s worst case.
-        // 20s was too tight — Serper cutout completed but the timeout fired first, discarding the result.
-        const ITEM_TIMEOUT_MS = 45_000;
+        const SEARCH_TIMEOUT_MS = getDiscountSearchTimeoutMs();
+        // Initial budget covers DB search + early work; Serper/rembg gets a fresh budget when entered.
+        const ITEM_TIMEOUT_MS = 90_000;
+        const ITEM_SERPER_PHASE_MS = 120_000;
 
-        const runItem = async () => {
+        const runItem = async (signal, armDeadline, serperPhaseMs) => {
           let result = null;
-          let matchScore = 0;
-          let matchSource = "none";
+          const ps = emptyPipelineSteps();
+          const itemBegin = performance.now();
 
-          try {
-            const searchPromise = searchForDiscountItem(di, limit);
-            const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error(`searchForDiscountItem timed out after ${SEARCH_TIMEOUT_MS}ms`)), SEARCH_TIMEOUT_MS)
-            );
-            const matches = await Promise.race([searchPromise, timeoutPromise]);
-            matchScore = matches.length > 0 ? (matches[0].score ?? 0) : 0;
+          const runSearchWithTimeout = async (searchOpts) => {
+            let timeoutId;
+            const searchP = searchForDiscountItem(di, limit, searchOpts);
+            try {
+              return await Promise.race([
+                searchP.then((rows) => {
+                  clearTimeout(timeoutId);
+                  return rows;
+                }),
+                new Promise((_, reject) => {
+                  timeoutId = setTimeout(
+                    () => reject(new Error(`TIMEOUT:${SEARCH_TIMEOUT_MS}`)),
+                    SEARCH_TIMEOUT_MS
+                  );
+                }),
+              ]);
+            } catch (e) {
+              clearTimeout(timeoutId);
+              throw e;
+            }
+          };
 
-            if (matches.length > 0) {
-              const cutoutPaths = [];
-
-              for (let j = 0; j < matches.length; j++) {
-                const m = matches[j];
-                if (!m?.publicUrl) continue;
-                try {
-                  const localPath = await downloadToCutoutsDir(m.publicUrl, `${i}-${j}`);
-                  cutoutPaths.push(localPath);
-                } catch (err) {
-                  console.warn(`[JobProcessor] DB image download failed for "${queryDisplay}" j=${j}:`, err.message);
-                }
-              }
-
-              if (cutoutPaths.length > 0) {
-                matchSource = "db";
-                const lowConfidence = matchScore < 0.50;
-                result = buildResultFromDi(di, cutoutPaths[0], cutoutPaths, matchScore, matchSource, lowConfidence);
+          const tryBuildDbResult = async (matches) => {
+            if (!matches?.length) return null;
+            const matchScore = matches[0].score ?? 0;
+            const cutoutPaths = [];
+            for (let j = 0; j < matches.length; j++) {
+              const m = matches[j];
+              if (!m?.publicUrl) continue;
+              try {
+                const localPath = await downloadToCutoutsDir(m.publicUrl, `${i}-${j}`);
+                cutoutPaths.push(localPath);
+              } catch (err) {
+                console.warn(`[JobProcessor] DB image download failed for "${queryDisplay}" j=${j}:`, err.message);
               }
             }
-          } catch (err) {
-            console.warn(`[JobProcessor] DB search/download failed for "${queryDisplay}":`, err.message);
+            if (cutoutPaths.length === 0) return null;
+            const lowConfidence = matchScore < 0.50;
+            return buildResultFromDi(di, cutoutPaths[0], cutoutPaths, matchScore, "db", lowConfidence);
+          };
+
+          let searchTimedOut = false;
+          let matches = [];
+
+          {
+            const tSearch = performance.now();
+            try {
+              matches = await runSearchWithTimeout({ skipSemanticEmbed: bulkXlsxLite });
+            } catch (err) {
+              const msg = err?.message || String(err);
+              if (msg.startsWith("TIMEOUT:")) {
+                searchTimedOut = true;
+                console.warn(`[JobProcessor] Discount search timed out (${SEARCH_TIMEOUT_MS}ms) for "${queryDisplay}"`);
+              } else {
+                console.warn(`[JobProcessor] Discount search failed for "${queryDisplay}":`, msg);
+              }
+            } finally {
+              ps.discountSearchInitialMs = roundMs(performance.now() - tSearch);
+            }
+          }
+          if (matches?.length) {
+            const tBuild = performance.now();
+            try {
+              result = await tryBuildDbResult(matches);
+            } finally {
+              ps.dbBuildInitialMs = roundMs(performance.now() - tBuild);
+            }
           }
 
-          // Fall back to Serper if: (a) no DB result at all, or (b) DB score is below threshold
-          const dbIsPoor = result?.matchSource === "db" && matchScore < DB_CONFIDENCE_THRESHOLD;
-          const needsSerper = !result?.cutoutPath || dbIsPoor;
+          if (!result?.cutoutPath && !bulkXlsxLite) {
+            // Only retry text-only when the search returned EARLY with no results (true DB miss).
+            // If it timed out the network is degraded — a text-only retry hits the same connection and wastes another full timeout.
+            const needTextOnlyFallback = !searchTimedOut && !matches?.length;
+            if (needTextOnlyFallback) {
+              let matchesText = [];
+              {
+                const tSearch2 = performance.now();
+                try {
+                  console.log(`[JobProcessor] Retrying discount match (text-only, no semantic embed) for "${queryDisplay}"`);
+                  matchesText = await runSearchWithTimeout({ skipSemanticEmbed: true });
+                } catch (err2) {
+                  const msg2 = err2?.message || String(err2);
+                  if (msg2.startsWith("TIMEOUT:")) {
+                    console.warn(
+                      `[JobProcessor] Text-only discount search timed out (${SEARCH_TIMEOUT_MS}ms) for "${queryDisplay}"`
+                    );
+                  } else {
+                    console.warn(`[JobProcessor] Text-only discount search failed for "${queryDisplay}":`, msg2);
+                  }
+                } finally {
+                  ps.discountSearchTextOnlyMs = roundMs(performance.now() - tSearch2);
+                }
+              }
+              if (matchesText?.length) {
+                const tBuild2 = performance.now();
+                try {
+                  const r2 = await tryBuildDbResult(matchesText);
+                  if (r2) result = r2;
+                } finally {
+                  ps.dbBuildTextOnlyMs = roundMs(performance.now() - tBuild2);
+                }
+              }
+            }
+          }
+
+          // Bulk xlsx: never hit Serper/rembg (keeps Python memory/CPU predictable).
+          const needsSerper =
+            !bulkXlsxLite && (!result?.cutoutPath || result?.lowConfidence);
 
           if (needsSerper) {
-            const dbFallback = dbIsPoor ? result : null;
-            if (dbIsPoor) result = null;
-
             if (!serperKeysPresent()) {
               console.log(`[JobProcessor] Serper skipped (no SERPER_API_KEY): "${queryDisplay}"`);
-              if (dbFallback) result = dbFallback;
             } else {
-              const reason = !result?.cutoutPath ? "no DB result" : `DB score too low (${matchScore.toFixed(3)})`;
+              armDeadline(serperPhaseMs);
               this.emitProgress(job.id, `Google image search: "${queryDisplay}"...`, i, discountItems.length);
-              console.log(`[JobProcessor] Trying Serper (${reason}): "${queryDisplay}"`);
+              console.log(`[JobProcessor] Trying Serper (no DB result): "${queryDisplay}"`);
               try {
-                const serperResults = await serperImageSearch(queryDisplay, 10);
+                const tSerp = performance.now();
+                let serperResults = [];
+                try {
+                  serperResults = await serperImageSearch(queryDisplay, 10);
+                } finally {
+                  ps.serperApiMs = roundMs(performance.now() - tSerp);
+                }
                 console.log(`[JobProcessor] Serper returned ${serperResults.length} results for "${queryDisplay}"`);
+                const cutoutReady = await waitForCutoutReady({ maxWaitMs: 20000, intervalMs: 400 });
+                if (!cutoutReady) {
+                  console.warn(`[JobProcessor] Cutout backend not ready after wait — proceeding; cutouts may fail until Python is up`);
+                }
                 let backendDown = false;
-                for (const sr of serperResults) {
+                for (const [srIdx, sr] of serperResults.entries()) {
                   if (!sr.url || backendDown) continue;
                   let ext;
                   try { ext = path.extname(new URL(sr.url).pathname) || ".jpg"; } catch { ext = ".jpg"; }
                   const safeExt = /^\.(jpg|jpeg|png|gif|webp)$/i.test(ext) ? ext : ".jpg";
                   const tempPath = path.join(os.tmpdir(), `ufm-serper-${Date.now()}-${i}${safeExt}`);
+                  console.log(`[JobProcessor] Serper [${srIdx + 1}/${serperResults.length}]: ${sr.url}`);
                   try {
+                    const tFetch = performance.now();
                     await fetchImageToFile(sr.url, tempPath);
+                    ps.serperFetchMs += roundMs(performance.now() - tFetch);
                     const fileSize = (await fs.promises.stat(tempPath)).size;
-                    if (fileSize < 5000) continue;
+                    if (fileSize < 5000) {
+                      if (rp.serperStepDelayMs > 0) await sleep(rp.serperStepDelayMs);
+                      continue;
+                    }
                     let serperOk = false;
                     try {
-                      const cutoutPath = await ingestCutoutOnly(tempPath);
+                      const cutoutPath = await runCutoutWithShadowMs(tempPath, signal, ps);
                       if (cutoutPath) {
                         result = buildResultFromDi(di, cutoutPath, null, 0, "serper", true);
                         serperOk = true;
                       }
                     } catch (ingestErr) {
-                      if (ingestErr.message?.includes("ECONNREFUSED")) {
-                        console.warn(`[JobProcessor] Python backend (:17890) is down — skipping remaining Serper results`);
-                        backendDown = true;
+                      const isConnErr = ingestErr.message?.includes("ECONNREFUSED") || ingestErr.message?.includes("ECONNRESET");
+                      if (isConnErr) {
+                        console.warn(`[JobProcessor] Python backend not ready — waiting 5s then retrying…`);
+                        await new Promise(r => setTimeout(r, 5000));
+                        await waitForCutoutReady({ maxWaitMs: 15000, intervalMs: 500 });
+                        try {
+                          const cutoutPath = await runCutoutWithShadowMs(tempPath, signal, ps);
+                          if (cutoutPath) {
+                            result = buildResultFromDi(di, cutoutPath, null, 0, "serper", true);
+                            serperOk = true;
+                          }
+                        } catch (retryErr) {
+                          console.warn(`[JobProcessor] Retry also failed — skipping remaining Serper results: ${retryErr.message}`);
+                          backendDown = true;
+                        }
                       } else {
                         console.warn(`[JobProcessor] Background removal failed for Serper image: ${ingestErr.message}`);
                       }
@@ -349,15 +521,40 @@ export class JobProcessor extends EventEmitter {
                     console.warn(`[JobProcessor] Serper download failed: ${dlErr.message}`);
                     fs.promises.unlink(tempPath).catch(() => {});
                   }
+                  if (rp.serperStepDelayMs > 0) await sleep(rp.serperStepDelayMs);
+                }
+
+                // Last resort: if every result was skipped due to a blocked domain,
+                // force-try the first URL ignoring the session blocklist.
+                if (!result?.cutoutPath && !backendDown && serperResults.length > 0) {
+                  const firstSr = serperResults[0];
+                  if (firstSr?.url) {
+                    let lrExt; try { lrExt = path.extname(new URL(firstSr.url).pathname) || ".jpg"; } catch { lrExt = ".jpg"; }
+                    const lrSafeExt = /^\.(jpg|jpeg|png|gif|webp)$/i.test(lrExt) ? lrExt : ".jpg";
+                    const lrTempPath = path.join(os.tmpdir(), `ufm-serper-last-${Date.now()}${lrSafeExt}`);
+                    console.log(`[JobProcessor] Last-resort Serper attempt: ${firstSr.url}`);
+                    const tLast = performance.now();
+                    try {
+                      const lrRes = await fetch(firstSr.url, { signal: AbortSignal.timeout(15000), headers: BROWSER_HEADERS });
+                      if (lrRes.ok) {
+                        const ab = await lrRes.arrayBuffer();
+                        await fs.promises.writeFile(lrTempPath, Buffer.from(ab));
+                        const lrSize = (await fs.promises.stat(lrTempPath)).size;
+                        if (lrSize >= 5000) {
+                          const lrCutout = await runCutoutWithShadowMs(lrTempPath, signal, ps);
+                          if (lrCutout) result = buildResultFromDi(di, lrCutout, null, 0, "serper", true);
+                        }
+                      }
+                    } catch (lastErr) {
+                      console.warn(`[JobProcessor] Last-resort Serper attempt failed: ${lastErr.message}`);
+                    } finally {
+                      ps.serperLastResortMs += roundMs(performance.now() - tLast);
+                      fs.promises.unlink(lrTempPath).catch(() => {});
+                    }
+                  }
                 }
               } catch (err) {
                 console.warn(`[JobProcessor] Serper fallback failed for "${queryDisplay}":`, err.message);
-              }
-
-              // If Serper failed, restore DB result as last resort
-              if (!result?.cutoutPath && dbFallback?.cutoutPath) {
-                console.log(`[JobProcessor] Serper failed; restoring DB result (score=${matchScore.toFixed(3)}) for "${queryDisplay}"`);
-                result = dbFallback;
               }
             }
           }
@@ -367,6 +564,9 @@ export class JobProcessor extends EventEmitter {
           }
           result.discount = di;
 
+          ps.totalMs = roundMs(performance.now() - itemBegin);
+          console.log(`[JobProcessor] Pipeline timing (ms) "${queryDisplay}":`, ps);
+
           const itemId = uuidv4();
           const processedImage = {
             id: itemId,
@@ -374,6 +574,8 @@ export class JobProcessor extends EventEmitter {
             status: "done",
             result,
             slotIndex: i,
+            pipelineStepMs: { ...ps },
+            queryLabel: queryDisplay,
           };
 
           // Label generation moved outside runItem — canvas rendering blocks the event loop
@@ -381,22 +583,43 @@ export class JobProcessor extends EventEmitter {
           return { processedImage };
         };
 
+        const timerState = { id: null };
+        const itemAbort = new AbortController();
+        function armItemDeadline(ms) {
+          if (timerState.id != null) clearTimeout(timerState.id);
+          timerState.id = setTimeout(() => {
+            itemAbort.abort(new Error(`Item ${i + 1} timed out after ${ms}ms`));
+          }, ms);
+        }
+        armItemDeadline(ITEM_TIMEOUT_MS);
+
+        const itemWallStart = performance.now();
         let itemOutput;
         try {
-          itemOutput = await Promise.race([
-            runItem(),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error(`Item ${i + 1} timed out after ${ITEM_TIMEOUT_MS}ms`)), ITEM_TIMEOUT_MS)
-            ),
-          ]);
+          itemOutput = await runItem(itemAbort.signal, armItemDeadline, ITEM_SERPER_PHASE_MS);
         } catch (err) {
-          console.warn(`[JobProcessor] Item ${i + 1} failed/timed out:`, err.message);
+          const msg = itemAbort.signal.reason?.message || err.message;
+          console.warn(`[JobProcessor] Item ${i + 1} failed/timed out:`, msg);
           const fallbackResult = buildResultFromDi(di, null, null, 0, "none", true);
           fallbackResult.discount = di;
           const itemId = uuidv4();
           itemOutput = {
-            processedImage: { id: itemId, path: "", status: "done", result: fallbackResult, slotIndex: i },
+            processedImage: {
+              id: itemId,
+              path: "",
+              status: "done",
+              result: fallbackResult,
+              slotIndex: i,
+              pipelineStepMs: {
+                ...emptyPipelineSteps(),
+                totalMs: roundMs(performance.now() - itemWallStart),
+                itemFailed: true,
+              },
+              queryLabel: queryDisplay,
+            },
           };
+        } finally {
+          if (timerState.id != null) clearTimeout(timerState.id);
         }
 
         processedImages.push(itemOutput.processedImage);
@@ -409,6 +632,7 @@ export class JobProcessor extends EventEmitter {
           index: i,
           total: discountItems.length,
         });
+        await sleep(rp.discountRowDelayMs);
       }
 
       // Generate labels for all XLSX items in one batch pass after the loop.
@@ -438,6 +662,10 @@ export class JobProcessor extends EventEmitter {
         return;
       }
 
+      if (i > 0 && rp.batchDelayMs > 0) {
+        await sleep(rp.batchDelayMs);
+      }
+
       const imageTask = job.images[i];
       this.emitProgress(
         job.id,
@@ -447,32 +675,70 @@ export class JobProcessor extends EventEmitter {
       );
 
       const INGEST_TIMEOUT_MS = 60_000;
+      const ingestWallStart = performance.now();
+      const queryLabel = path.basename(imageTask.path || "") || imageTask.path || `image-${i + 1}`;
       try {
         const result = await Promise.race([
           ingestPhoto(imageTask.path),
+          _abortPromise,
           new Promise((_, reject) =>
             setTimeout(() => reject(new Error(`ingestPhoto timed out after ${INGEST_TIMEOUT_MS}ms`)), INGEST_TIMEOUT_MS)
           ),
         ]);
+        if (result === _ABORTED) break;
 
         // Attach discount info if available and matches by index
         if (discountItems[i]) {
           result.discount = discountItems[i];
         }
 
-        processedImages.push({
+        const ingestPhotoMs = roundMs(performance.now() - ingestWallStart);
+        const doneImg = {
           ...imageTask,
           status: "done",
           result,
+          pipelineStepMs: { ...emptyPipelineSteps(), ingestPhotoMs, totalMs: ingestPhotoMs },
+          queryLabel,
+        };
+        processedImages.push(doneImg);
+        this.emit("itemComplete", job.id, {
+          processedImage: doneImg,
+          discountLabel: null,
+          index: i,
+          total: totalImages,
         });
       } catch (err) {
         console.error(`[JobProcessor] Image ${i + 1} failed:`, err);
-        processedImages.push({
+        const errImg = {
           ...imageTask,
           status: "error",
           error: err.message || String(err),
+          pipelineStepMs: {
+            ...emptyPipelineSteps(),
+            totalMs: roundMs(performance.now() - ingestWallStart),
+            itemFailed: true,
+          },
+          queryLabel,
+        };
+        processedImages.push(errImg);
+        this.emit("itemComplete", job.id, {
+          processedImage: errImg,
+          discountLabel: null,
+          index: i,
+          total: totalImages,
         });
       }
+    }
+
+    // Clean up abort resolver — job is no longer in the per-item loop
+    this._abortResolvers.delete(job.id);
+
+    // If abort was signalled mid-item (broke out of loop), handle it now
+    if (this.abortedJobs.has(job.id)) {
+      this.abortedJobs.delete(job.id);
+      clearTimeout(watchdogTimer);
+      this.emit("aborted", job.id);
+      return;
     }
 
     // 3. For image-based jobs: generate labels in batch (streaming isn't used for image jobs)

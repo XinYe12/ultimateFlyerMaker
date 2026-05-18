@@ -18,6 +18,16 @@ function normalizeOptionalString(value) {
   return String(value).trim();
 }
 
+// Columns 6–12 map Mon–Sun. Truthy values: Y, yes, x, ✓, 1, true (case-insensitive).
+const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+function isDayChecked(val) {
+  if (val === true) return true;   // boolean TRUE written by a Form Control checkbox
+  if (!val && val !== 1) return false;
+  const s = String(val).trim().toLowerCase();
+  return s === "y" || s === "yes" || s === "true" || s === "1" || s === "✓" || s === "x";
+}
+
 /** Extract numeric price; for "2/4.99" use 4.99 not 24.99. */
 function extractPriceForDisplay(salePrice, isMultiBuy) {
   const raw = String(salePrice ?? "").trim();
@@ -203,6 +213,8 @@ function rowsToItems(rows) {
         unit = "";
       }
 
+      const days = DAY_KEYS.filter((_, i) => isDayChecked(row[6 + i]));
+
       return {
         en,
         zh,
@@ -214,6 +226,7 @@ function rowsToItems(rows) {
         unit,
         quantity,
         price: { display: buildPriceDisplay({ salePrice, unit, quantity }) },
+        days: days.length > 0 ? days : undefined,
       };
     });
 }

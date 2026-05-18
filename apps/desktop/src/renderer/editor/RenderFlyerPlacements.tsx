@@ -4,6 +4,7 @@
 // Titles use Maven Pro, Prices use Trade Winds
 
 import React, { useState, useCallback, useRef, useLayoutEffect, useEffect } from "react";
+import { formatDaysOnlyBanner, getCycleStartFriday } from "../utils/flyerCycle";
 
 // Helper to parse price display into parts for rendering
 function parsePriceDisplay(display: string) {
@@ -34,6 +35,82 @@ function parsePriceDisplay(display: string) {
   }
 
   return null;
+}
+
+const DAY_ABBR: Record<string, string> = {
+  mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun",
+};
+const CYCLE_ORDER = ["fri","sat","sun","mon","tue","wed","thu"];
+
+// Pill-shaped overlay positioned at the top-center of the card, matching the
+// "3 DAYS ONLY / May 15, 16, 17" promotional badge style.
+function DaysOnlyBanner({
+  days,
+  flyerWeekStart,
+  cardWidth,
+  offsetX = 0,
+  offsetY = 0,
+  editMode,
+  onPanStart,
+  onSelect,
+  onEdit,
+}: {
+  days: string[];
+  flyerWeekStart?: string;
+  cardWidth: number;
+  offsetX?: number;
+  offsetY?: number;
+  editMode?: boolean;
+  onPanStart?: (startOffsetX: number, startOffsetY: number, e: React.MouseEvent) => void;
+  onSelect?: () => void;
+  onEdit?: () => void;
+}) {
+  const cycleStart = flyerWeekStart
+    ? new Date(flyerWeekStart + "T00:00:00")
+    : getCycleStartFriday(new Date());
+  const { count, dateStr } = formatDaysOnlyBanner(days, cycleStart);
+  const topLine = count === 1 ? "1 DAY ONLY" : `${count} DAYS ONLY`;
+  const bottomLine = dateStr;
+
+  const mainSize = Math.max(8, Math.min(14, Math.round(cardWidth * 0.058)));
+  const subSize  = Math.max(7, Math.min(11, Math.round(cardWidth * 0.044)));
+  const padH     = Math.round(cardWidth * 0.06);
+
+  return (
+    <div
+      onMouseDown={editMode && onPanStart
+        ? (e) => { e.stopPropagation(); e.preventDefault(); onPanStart(offsetX, offsetY, e); }
+        : undefined}
+      onClick={editMode && onSelect ? (e) => { e.stopPropagation(); onSelect(); } : undefined}
+      onDoubleClick={editMode && onEdit ? (e) => { e.stopPropagation(); onEdit(); } : undefined}
+      style={{
+        position: "absolute",
+        top: `calc(8% + ${offsetY}px)`,
+        right: `calc(6% - ${offsetX}px)`,
+        left: "auto",
+        transform: `rotate(6deg)`,
+        zIndex: 20,
+        background: "#fff",
+        border: "2px solid #f97316",
+        borderRadius: 100,
+        padding: `3px ${padH}px 4px`,
+        display: "inline-flex",
+        flexDirection: "column",
+        alignItems: "center",
+        whiteSpace: "nowrap",
+        boxShadow: "0 0 10px 3px rgba(249,115,22,0.45), 0 2px 6px rgba(0,0,0,0.12)",
+        pointerEvents: editMode ? "auto" : "none",
+        cursor: editMode ? "move" : undefined,
+      }}
+    >
+      <span style={{ fontSize: mainSize, fontWeight: 800, color: "#f97316", letterSpacing: 0.5, lineHeight: 1.3, textTransform: "uppercase" }}>
+        {topLine}
+      </span>
+      <span style={{ fontSize: subSize, color: "#f97316", lineHeight: 1.2, fontWeight: 600 }}>
+        {bottomLine}
+      </span>
+    </div>
+  );
 }
 
 /** Scale (naturalW × naturalH) to fit inside (cellW × cellH), preserving aspect ratio. */
@@ -67,6 +144,7 @@ type DiscountLabel = {
     quantity?: number | null;
     unit?: string;
     regular?: string;
+    days?: string[];
   };
 };
 
@@ -210,14 +288,17 @@ function RotationDial({
 }
 
 function PlacementCard({
-  p, item, label, editMode, activeScaleDrag, onElementDragStart, onRotateDragStart, onEditTitle, onEditPrice,
+  p, item, label, flyerWeekStart, editMode, activeScaleDrag, onElementDragStart, onRotateDragStart, onEditTitle, onEditPrice,
   onSubImageScaleDragStart, onSubImageRotateDragStart, onDeleteSubImage,
   onImagePanStart, onSubImagePanStart, onOrientationChange, onCropDragStart, onSubImageCropDragStart,
+  onBannerPanStart, onEditBanner,
+  onElementSelect,
   onContextMenu,
 }: {
   p: any;
   item: any;
   label: DiscountLabel | null;
+  flyerWeekStart?: string;
   editMode?: boolean;
   activeScaleDrag?: { itemId: string; type: string } | null;
   onElementDragStart?: (type: 'image' | 'title' | 'price', corner: 'tl' | 'tr' | 'bl' | 'br', startScale: number, e: React.MouseEvent) => void;
@@ -232,6 +313,9 @@ function PlacementCard({
   onOrientationChange?: (orientation: 'vertical' | 'horizontal' | 'top') => void;
   onCropDragStart?: (side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds?: { width: number; height: number }) => void;
   onSubImageCropDragStart?: (subIdx: number, side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds: { width: number; height: number }) => void;
+  onBannerPanStart?: (startOffsetX: number, startOffsetY: number, e: React.MouseEvent) => void;
+  onEditBanner?: () => void;
+  onElementSelect?: (element: 'title' | 'price' | 'banner' | null) => void;
   onContextMenu?: () => void;
 }) {
   const [imgInfo, setImgInfo] = useState<{
@@ -243,6 +327,8 @@ function PlacementCard({
   // Suppresses spurious click-to-edit after a corner-handle drag ends inside the text div.
   const suppressClickRef = useRef(false);
   const cardRef = useRef<HTMLDivElement>(null);
+  const onElementSelectRef = useRef(onElementSelect);
+  onElementSelectRef.current = onElementSelect;
   const [titleDrag, setTitleDrag] = useState<{
     active: boolean;
     hoveredZone: 'vertical' | 'horizontal' | 'top' | null;
@@ -256,6 +342,7 @@ function PlacementCard({
     const handleOutside = (e: MouseEvent) => {
       if (cardRef.current && !cardRef.current.contains(e.target as Node)) {
         setSelectedEl(null);
+        onElementSelectRef.current?.(null);
       }
     };
     document.addEventListener('mousedown', handleOutside);
@@ -819,7 +906,51 @@ function PlacementCard({
   // Nothing to render at all
   if (!imgSrc && !imgSrcs?.length && !hasLabel) return null;
 
-  // ── Low-confidence detection ──
+  // ── Confidence badge (automation slots only) ──
+  const matchSource = item?.result?.matchSource;
+  const isAutoSlot = matchSource === "db" || matchSource === "serper";
+  const isLow = item?.result?.lowConfidence === true;
+  const confidenceBadge = editMode && isAutoSlot ? (
+    <div style={{
+      position: "absolute", top: 4, right: 4, zIndex: 10,
+      padding: "2px 6px", borderRadius: 3,
+      fontSize: 9, fontWeight: 700, letterSpacing: "0.05em",
+      pointerEvents: "none",
+      background: isLow ? "#FF922B" : "#40C057",
+      color: "white",
+    }}>
+      {isLow ? "LOW" : "HIGH"}
+    </div>
+  ) : null;
+
+  // ── Days-only promotional badge overlay ──
+  const daysBanner = label?.price?.days && label.price.days.length > 0 ? (
+    <DaysOnlyBanner
+      days={label.price.days}
+      flyerWeekStart={flyerWeekStart}
+      cardWidth={p.width}
+      offsetX={p.bannerOffsetX ?? 0}
+      offsetY={p.bannerOffsetY ?? 0}
+      editMode={editMode}
+      onPanStart={onBannerPanStart}
+      onSelect={onElementSelect ? () => onElementSelect('banner') : undefined}
+      onEdit={onEditBanner}
+    />
+  ) : null;
+
+  // ── No-image placeholder — only during streaming before labels arrive ──
+  // Once hasLabel=true, fall through to the normal layout so title/price use proper placement styling.
+  if (!imgSrc && !imgSrcs?.length && matchSource === "none" && !hasLabel) {
+    return (
+      <div style={{
+        position: "absolute", left: p.x, top: p.y,
+        width: p.width, height: p.height,
+        background: "#F1F3F5",
+        border: "1.5px dashed #ADB5BD",
+        borderRadius: 4,
+      }} />
+    );
+  }
 
   // ── Horizontal layout ──
   if (p.orientation === 'horizontal') {
@@ -830,7 +961,7 @@ function PlacementCard({
           position: "absolute", left: p.x, top: p.y,
           width: p.width, height: p.height, overflow: "visible",
         }}
-        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl(null); if (selectedSubIdx !== null) setSelectedSubIdx(null); } : undefined}
+        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl(null); onElementSelect?.(null); if (selectedSubIdx !== null) setSelectedSubIdx(null); } : undefined}
       >
         {/* Content wrapper — crop applied only to image div below */}
         <div style={{ position: 'absolute', inset: 0, overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden' }}>
@@ -851,7 +982,7 @@ function PlacementCard({
           {/* Left 55% — image; crop applied in renderImg */}
           <div
             onMouseDown={editMode && onImagePanStart ? (e) => { e.stopPropagation(); onImagePanStart(imgOffsetX, imgOffsetY, e); } : undefined}
-            onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('image'); } : undefined}
+            onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('image'); onElementSelect?.(null); } : undefined}
             style={{ width: '55%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden', cursor: editMode ? 'grab' : undefined }}
           >
             {displaySrcs && displaySrcs.length > 1
@@ -931,7 +1062,8 @@ function PlacementCard({
                     userSelect: editMode ? 'none' : undefined,
                   }}
                   onMouseDown={handleTitleMouseDown}
-                  onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('title'); if (suppressClickRef.current) return; onEditTitle?.(); } : undefined}
+                  onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('title'); onElementSelect?.('title'); } : undefined}
+                  onDoubleClick={editMode && onEditTitle ? (e) => { e.stopPropagation(); onEditTitle(); } : undefined}
                 >
                   {editMode && onElementDragStart && selectedEl === 'title' && (
                     <>
@@ -970,7 +1102,8 @@ function PlacementCard({
                   opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'price') ? 0.5 : 1,
                   cursor: editMode ? 'pointer' : undefined,
                 }}
-                onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('price'); if (suppressClickRef.current) return; onEditPrice?.(); } : undefined}
+                onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('price'); onElementSelect?.('price'); } : undefined}
+                onDoubleClick={editMode && onEditPrice ? (e) => { e.stopPropagation(); onEditPrice(); } : undefined}
               >
                 {editMode && onElementDragStart && selectedEl === 'price' && (
                   <>
@@ -1010,6 +1143,8 @@ function PlacementCard({
           </div>
         </div>
         </div>{/* end content clip wrapper */}
+        {daysBanner}
+        {confidenceBadge}
       </div>
     );
   }
@@ -1023,7 +1158,7 @@ function PlacementCard({
           position: "absolute", left: p.x, top: p.y,
           width: p.width, height: p.height, overflow: "visible",
         }}
-        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl(null); if (selectedSubIdx !== null) setSelectedSubIdx(null); } : undefined}
+        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl(null); onElementSelect?.(null); if (selectedSubIdx !== null) setSelectedSubIdx(null); } : undefined}
       >
         {/* Content wrapper — crop applied only to image div below */}
         <div style={{ position: 'absolute', inset: 0, overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden' }}>
@@ -1054,7 +1189,8 @@ function PlacementCard({
                 userSelect: editMode ? 'none' : undefined,
               }}
               onMouseDown={handleTitleMouseDown}
-              onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('title'); if (suppressClickRef.current) return; onEditTitle?.(); } : undefined}
+              onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('title'); onElementSelect?.('title'); } : undefined}
+              onDoubleClick={editMode && onEditTitle ? (e) => { e.stopPropagation(); onEditTitle(); } : undefined}
             >
               {editMode && onElementDragStart && selectedEl === 'title' && (
                 <>
@@ -1086,7 +1222,7 @@ function PlacementCard({
           {/* Image: centered in remaining flex space; crop applied in renderImg; handles inside wrapper for alignment */}
           <div
             onMouseDown={editMode && onImagePanStart ? (e) => { e.stopPropagation(); onImagePanStart(imgOffsetX, imgOffsetY, e); } : undefined}
-            onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('image'); } : undefined}
+            onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('image'); onElementSelect?.(null); } : undefined}
             style={{ flex: 1, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden', minHeight: 0, cursor: editMode ? 'grab' : undefined }}
           >
             {displaySrcs && displaySrcs.length > 1
@@ -1155,7 +1291,8 @@ function PlacementCard({
               opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'price') ? 0.5 : 1,
               cursor: editMode ? 'pointer' : undefined,
             }}
-            onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('price'); if (suppressClickRef.current) return; onEditPrice?.(); } : undefined}
+            onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('price'); onElementSelect?.('price'); } : undefined}
+            onDoubleClick={editMode && onEditPrice ? (e) => { e.stopPropagation(); onEditPrice(); } : undefined}
           >
             {editMode && onElementDragStart && selectedEl === 'price' && (
               <>
@@ -1193,6 +1330,8 @@ function PlacementCard({
           </div>
         )}
         </div>{/* end content clip wrapper */}
+        {daysBanner}
+        {confidenceBadge}
       </div>
     );
   }
@@ -1205,7 +1344,7 @@ function PlacementCard({
         position: "absolute", left: p.x, top: p.y,
         width: p.width, height: p.height, overflow: "visible",
       }}
-      onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl(null); if (selectedSubIdx !== null) setSelectedSubIdx(null); } : undefined}
+      onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl(null); onElementSelect?.(null); if (selectedSubIdx !== null) setSelectedSubIdx(null); } : undefined}
     >
       {/* Content wrapper — crop is applied only to image zone below */}
       <div style={{ position: 'absolute', inset: 0, overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden' }}>
@@ -1228,7 +1367,7 @@ function PlacementCard({
         onMouseDown={editMode && !(displaySrcs && displaySrcs.length > 1) && onImagePanStart
           ? (e) => { e.stopPropagation(); onImagePanStart(imgOffsetX, imgOffsetY, e); }
           : undefined}
-        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('image'); } : undefined}
+        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('image'); onElementSelect?.(null); } : undefined}
         style={{
         position: "absolute",
         top: topPad, left: SIDE_PAD,
@@ -1377,7 +1516,8 @@ function PlacementCard({
           userSelect: editMode ? "none" : undefined,
         }}
         onMouseDown={handleTitleMouseDown}
-        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('title'); if (suppressClickRef.current) return; onEditTitle?.(); } : undefined}
+        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('title'); onElementSelect?.('title'); } : undefined}
+        onDoubleClick={editMode && onEditTitle ? (e) => { e.stopPropagation(); onEditTitle(); } : undefined}
         >
           {editMode && onElementDragStart && selectedEl === 'title' && (
             <>
@@ -1418,7 +1558,8 @@ function PlacementCard({
           opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'price') ? 0.5 : 1,
           cursor: editMode ? "pointer" : undefined,
         }}
-        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('price'); if (suppressClickRef.current) return; onEditPrice?.(); } : undefined}
+        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('price'); onElementSelect?.('price'); } : undefined}
+        onDoubleClick={editMode && onEditPrice ? (e) => { e.stopPropagation(); onEditPrice(); } : undefined}
         >
           {editMode && onElementDragStart && selectedEl === 'price' && (
             <>
@@ -1478,6 +1619,10 @@ function PlacementCard({
           </div>
         </div>
       )}
+      {/* Days-only promotional badge */}
+      {daysBanner}
+      {/* Confidence badge (automation slots) */}
+      {confidenceBadge}
       {/* Cutout failed badge — card still fully interactive */}
       {item?.status === "cutout_error" && (
         <div style={{ position: "absolute", bottom: 4, right: 4, zIndex: 200, pointerEvents: "none",
@@ -1496,6 +1641,7 @@ export default function RenderFlyerPlacements({
   items,
   placements,
   discountLabels,
+  flyerWeekStart,
   editMode,
   activeScaleDrag,
   onElementDragStart,
@@ -1510,11 +1656,15 @@ export default function RenderFlyerPlacements({
   onOrientationChange,
   onCropDragStart,
   onSubImageCropDragStart,
+  onBannerPanStart,
+  onEditBannerDays,
+  onElementSelect,
   onCardContextMenu,
 }: {
   items: any[];
   placements: any[];
   discountLabels?: DiscountLabel[];
+  flyerWeekStart?: string;
   editMode?: boolean;
   activeScaleDrag?: { itemId: string; type: string } | null;
   onElementDragStart?: (
@@ -1535,6 +1685,9 @@ export default function RenderFlyerPlacements({
   onOrientationChange?: (itemId: string, orientation: 'vertical' | 'horizontal' | 'top') => void;
   onCropDragStart?: (itemId: string, side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds?: { width: number; height: number }) => void;
   onSubImageCropDragStart?: (itemId: string, subIdx: number, side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds: { width: number; height: number }) => void;
+  onBannerPanStart?: (itemId: string, startOffsetX: number, startOffsetY: number, e: React.MouseEvent) => void;
+  onEditBannerDays?: (itemId: string) => void;
+  onElementSelect?: (itemId: string, element: 'title' | 'price' | 'banner' | null) => void;
   onCardContextMenu?: (itemId: string) => void;
 }) {
   if (!Array.isArray(items) || !Array.isArray(placements)) return null;
@@ -1609,6 +1762,7 @@ export default function RenderFlyerPlacements({
             p={p}
             item={item}
             label={label}
+            flyerWeekStart={flyerWeekStart}
             editMode={editMode}
             activeScaleDrag={activeScaleDrag}
             onElementDragStart={handleElementDrag}
@@ -1638,6 +1792,15 @@ export default function RenderFlyerPlacements({
               : undefined}
             onSubImageCropDragStart={onSubImageCropDragStart
               ? (subIdx, side, startValue, e, bounds) => onSubImageCropDragStart(p.itemId, subIdx, side, startValue, e, bounds)
+              : undefined}
+            onBannerPanStart={onBannerPanStart
+              ? (startOffsetX, startOffsetY, e) => onBannerPanStart(p.itemId, startOffsetX, startOffsetY, e)
+              : undefined}
+            onEditBanner={onEditBannerDays && p.itemId
+              ? () => onEditBannerDays(p.itemId)
+              : undefined}
+            onElementSelect={onElementSelect && p.itemId
+              ? (element) => onElementSelect(p.itemId, element)
               : undefined}
             onContextMenu={onCardContextMenu ? () => onCardContextMenu(p.itemId) : undefined}
           />

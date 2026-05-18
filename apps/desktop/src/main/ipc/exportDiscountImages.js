@@ -113,6 +113,7 @@ export async function exportDiscountImages(items) {
         quantity: quantity,
         unit: unit || "",
         regular: before || "",
+        days: Array.isArray(discount.days) && discount.days.length > 0 ? discount.days : undefined,
       },
     });
   }

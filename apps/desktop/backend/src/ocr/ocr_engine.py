@@ -1,7 +1,12 @@
 import os
 import sys
 import json
+import logging
 from typing import List, Dict, Any
+
+# Suppress PaddleOCR/PaddleX verbose init logs (replaces the removed show_log arg)
+logging.getLogger("paddleocr").setLevel(logging.ERROR)
+logging.getLogger("paddlex").setLevel(logging.ERROR)
 
 # -----------------------------
 # Hard caps for low-end machines
@@ -20,9 +25,9 @@ def _get_ocr() -> PaddleOCR:
     global _ocr
     if _ocr is None:
         _ocr = PaddleOCR(
-            use_angle_cls=False,
+            use_textline_orientation=False,  # v3 name for use_angle_cls
             lang="en",
-            show_log=False
+            # show_log removed — no longer a valid arg in PaddleOCR 3.x
         )
     return _ocr
 
@@ -47,50 +52,28 @@ def run_ocr(image_path: str) -> List[Dict[str, Any]]:
     ocr = _get_ocr()
 
     try:
-        result = ocr.ocr(image_path, cls=False)
-        print("=== RAW OCR RESULT ===")
-        print(result)
-        print("======================")
-
+        # predict() is the v3 API; ocr() is a deprecated alias for it
+        results = ocr.predict(image_path)
     except Exception as e:
         # Fail closed, never crash caller
         return [{"rec_texts": [], "rec_scores": []}]
 
-    rec_texts = []
-    rec_scores = []
+    rec_texts: List[str] = []
+    rec_scores: List[float] = []
 
-    # PaddleOCR may return:
-    # Shape A: [ [box, (text, score)], ... ]
-    # Shape B: [ [ [box, (text, score)], ... ] ]
-    pages = result if isinstance(result, list) else []
-
-    for page in pages:
-        if not isinstance(page, list):
-            continue
-
-        for line in page:
-            if not isinstance(line, (list, tuple)) or len(line) != 2:
-                continue
-
-            box, rec = line
-            if not isinstance(rec, (list, tuple)) or len(rec) != 2:
-                continue
-
-            text, score = rec
-            if not isinstance(text, str) or not text.strip():
-                continue
-
-            rec_texts.append(text.strip())
+    # results is a list of OCRResult (dict-like) objects:
+    # each has "rec_texts": [str, ...] and "rec_scores": [float, ...]
+    for res in results:
+        for text in res.get("rec_texts", []):
+            if isinstance(text, str) and text.strip():
+                rec_texts.append(text.strip())
+        for score in res.get("rec_scores", []):
             try:
                 rec_scores.append(float(score))
             except Exception:
                 rec_scores.append(0.0)
 
-
-    return [{
-        "rec_texts": rec_texts,
-        "rec_scores": rec_scores
-    }]
+    return [{"rec_texts": rec_texts, "rec_scores": rec_scores}]
 
 
 # -----------------------------

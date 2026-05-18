@@ -21,15 +21,17 @@ import { googleImageSearch, googleKeysPresent } from "./ingestion/googleImageSea
 import os from "os";
 
 import { startBackend, stopBackend, startHealthWatch } from "./startBackend.js";
+import { getResourceProfile } from "./resourceProfile.js";
 import { waitForBackend } from "./waitForBackend.js";
 import { loadUserConfig, readUserConfig, writeUserConfig } from "./ipc/configStore.js";
 import { initFirebase, admin } from "./firebase.js";
 import { registerBackendIpc } from "./ipc/backend.js";
 import { registerBackendProxyIpc } from "./ipc/backendProxy.js";
-import { processDbBatch, getDbStats, getTodaysSaves, checkDbStorageConsistency, fixDbStorageConsistency, confirmSingleImageToDb, scanAndRemoveNonProducts, deleteProductFromDb } from "./ipc/batchIngestToDB.js";
+import { processDbBatch, requestBatchStop, getDbStats, getTodaysSaves, checkDbStorageConsistency, fixDbStorageConsistency, confirmSingleImageToDb, scanAndRemoveNonProducts, deleteProductFromDb, cleanMessyTitleProducts } from "./ipc/batchIngestToDB.js";
 import { saveCombinationToDb } from "./ipc/saveCombinationToDB.js";
 import { getQuotaStatus, getLiveQuotaStatus } from "./ipc/quotaTracker.js";
-import { migrateEmbeddingsIfNeeded, reembedAllProducts } from "./ingestion/migrateEmbeddings.js";
+import { reembedAllProducts } from "./ingestion/migrateEmbeddings.js";
+import { testGeminiConnection } from "./ingestion/imageEmbeddingService.js";
 import "./net/longFetch.js";
 import log from "./logger.js";
 
@@ -147,6 +149,33 @@ function createWindow() {
 
   mainWindow.loadURL("http://localhost:5173");
   if (!app.isPackaged) mainWindow.webContents.openDevTools();
+
+  // Zoom shortcuts. We own all three (in/out/reset) so Chromium's native zoom
+  // (which uses a different scale) can't produce inconsistent results.
+  // On Windows, Ctrl+Shift+= reports input.key="=" (not "+") because Ctrl
+  // suppresses shift-character mapping — so we check both key and code.
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown" || !input.control || input.alt || input.meta) return;
+    const key = input.key;
+    const code = input.code;
+
+    const zoomIn  = key === "+" || key === "=" || code === "Equal" || code === "NumpadAdd";
+    const zoomOut = key === "-" || key === "_" || code === "Minus" || code === "NumpadSubtract";
+    const zoomReset = !input.shift && (key === "0" || code === "Digit0" || code === "Numpad0");
+
+    if (zoomIn) {
+      event.preventDefault();
+      const next = Math.min(3.0, Math.round((mainWindow.webContents.getZoomFactor() + 0.1) * 10) / 10);
+      mainWindow.webContents.setZoomFactor(next);
+    } else if (zoomOut) {
+      event.preventDefault();
+      const next = Math.max(0.3, Math.round((mainWindow.webContents.getZoomFactor() - 0.1) * 10) / 10);
+      mainWindow.webContents.setZoomFactor(next);
+    } else if (zoomReset) {
+      event.preventDefault();
+      mainWindow.webContents.setZoomFactor(1.0);
+    }
+  });
 
   // Confirm before closing
   mainWindow.on("close", (e) => {
@@ -424,6 +453,7 @@ ipcMain.handle("ufm:downloadAndIngestFromUrl", async (_, publicUrl) => {
         "Referer": "https://www.google.com/",
       },
     });
+    if (res.status === 403) throw new Error("Image blocked (403 Forbidden). Save the image to your computer and drag the local file instead.");
     if (!res.ok) throw new Error(`Download failed: ${res.status}`);
 
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
@@ -460,6 +490,10 @@ ipcMain.handle("ufm:testFirestore", async () => {
     console.error("[testFirestore] error:", err);
     return { ok: false, error: err.message };
   }
+});
+
+ipcMain.handle("ufm:testGemini", async () => {
+  return testGeminiConnection();
 });
 
 /* ---------- IPC: file picker dialog ---------- */
@@ -588,6 +622,11 @@ ipcMain.handle("ufm:startDbBatch", async (_, paths) => {
   return { ok: true };
 });
 
+ipcMain.handle("ufm:stopDbBatch", () => {
+  requestBatchStop();
+  return { ok: true };
+});
+
 ipcMain.handle("ufm:saveCombinationToDb", async (_, items) => {
   saveCombinationToDb(
     items,
@@ -664,6 +703,17 @@ ipcMain.handle("ufm:reembedAllProducts", async () => {
   reembedAllProducts((data) => safeSend("ufm:reembedProgress", data))
     .then((result) => safeSend("ufm:reembedComplete", result))
     .catch((err) => safeSend("ufm:reembedComplete", { updated: 0, total: 0, errors: 1, error: err.message }));
+  return { ok: true };
+});
+
+ipcMain.handle("ufm:cleanMessyTitles", async () => {
+  cleanMessyTitleProducts(
+    (data) => safeSend("ufm:cleanMessyTitlesProgress", data),
+    (data) => safeSend("ufm:cleanMessyTitlesComplete", data)
+  ).catch((err) => {
+    console.error("[cleanMessyTitles] Failed:", err);
+    safeSend("ufm:cleanMessyTitlesComplete", { deleted: 0, total: 0, errors: 1, error: err.message });
+  });
   return { ok: true };
 });
 
@@ -746,6 +796,15 @@ ipcMain.handle("ufm:saveConfig", (_, patch) => {
   writeUserConfig(safe);
   global.__ufmMissingKeys = getMissingRequiredKeys().map(k => k.key);
   return { ok: true, missingKeys: global.__ufmMissingKeys };
+});
+
+ipcMain.handle("ufm:getRembgModel", () => {
+  return readUserConfig().UFM_REMBG_MODEL || getResourceProfile().rembgModel;
+});
+
+ipcMain.handle("ufm:setRembgModel", (_, model) => {
+  writeUserConfig({ UFM_REMBG_MODEL: String(model) });
+  return { ok: true };
 });
 
 ipcMain.handle("ufm:getQuotaStatus", async () => {
@@ -852,10 +911,7 @@ app.whenReady().then(async () => {
         .then(snap => console.log("[firebase] [post-init] ✅ Test query OK. Sample size:", snap.size))
         .catch(err => console.warn("[firebase] [post-init] ❌ Test query failed:", err?.message?.slice(0, 100)));
 
-      // Re-embed any products that still have stale Ollama vectors (fire-and-forget)
-      migrateEmbeddingsIfNeeded().catch(err =>
-        console.warn("[migrateEmbeddings] Background migration failed:", err?.message)
-      );
+      // Re-embedding is triggered manually via the "Re-embed Products" button in DbUploadView.
     } else {
       console.warn("[firebase] [post-init] Skipping test query — Firebase not configured.");
     }

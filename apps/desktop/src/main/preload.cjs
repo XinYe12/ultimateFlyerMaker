@@ -22,6 +22,10 @@ contextBridge.exposeInMainWorld("ufm", {
     return ipcRenderer.invoke("ufm:testFirestore");
   },
 
+  testGemini: () => {
+    return ipcRenderer.invoke("ufm:testGemini");
+  },
+
   searchDatabaseByText: (query, limit) => {
     return ipcRenderer.invoke("ufm:searchDatabaseByText", query, limit);
   },
@@ -193,6 +197,7 @@ contextBridge.exposeInMainWorld("ufm", {
 
   // ---------- DB BATCH UPLOAD ----------
   startDbBatch: (paths) => ipcRenderer.invoke("ufm:startDbBatch", paths),
+  stopDbBatch: () => ipcRenderer.invoke("ufm:stopDbBatch"),
   confirmDbImage: (imagePath, action, parsed) =>
     ipcRenderer.invoke("ufm:confirmDbImage", imagePath, action, parsed),
 
@@ -244,6 +249,18 @@ contextBridge.exposeInMainWorld("ufm", {
     return () => ipcRenderer.removeListener("ufm:reembedComplete", handler);
   },
 
+  cleanMessyTitles: () => ipcRenderer.invoke("ufm:cleanMessyTitles"),
+  onCleanMessyTitlesProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:cleanMessyTitlesProgress", handler);
+    return () => ipcRenderer.removeListener("ufm:cleanMessyTitlesProgress", handler);
+  },
+  onCleanMessyTitlesComplete: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:cleanMessyTitlesComplete", handler);
+    return () => ipcRenderer.removeListener("ufm:cleanMessyTitlesComplete", handler);
+  },
+
   scanNonProducts: () => ipcRenderer.invoke("ufm:scanNonProducts"),
   onScanNonProductsProgress: (callback) => {
     const handler = (_, data) => callback(data);
@@ -263,6 +280,8 @@ contextBridge.exposeInMainWorld("ufm", {
   getMissingKeys: () => ipcRenderer.invoke("ufm:getMissingKeys"),
   getConfig: () => ipcRenderer.invoke("ufm:getConfig"),
   saveConfig: (patch) => ipcRenderer.invoke("ufm:saveConfig", patch),
+  getRembgModel: () => ipcRenderer.invoke("ufm:getRembgModel"),
+  setRembgModel: (model) => ipcRenderer.invoke("ufm:setRembgModel", model),
 
   // ---------- NATIVE CONTEXT MENU ----------
   showContextMenu: (itemId, actions) =>

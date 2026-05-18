@@ -30,6 +30,17 @@ export type DbParsedMetadata = {
   cleanTitle: string;
 };
 
+/** Per-image DB batch pipeline segment durations (main process, ms). */
+export type DbPipelineTimingMs = {
+  hashing: number;
+  dedup: number;
+  analyzing?: number;
+  savingSet?: number;
+  uploading?: number;
+  savingUpdate?: number;
+  total: number;
+};
+
 export type DbBatchProgressEvent = {
   path: string;
   status:
@@ -50,6 +61,7 @@ export type DbBatchProgressEvent = {
   error?: string;
   parsed?: DbParsedMetadata & { isProduct?: boolean; ocrText?: string };
   embedding?: number[];
+  pipelineTimingMs?: DbPipelineTimingMs;
 };
 
 export type DbBatchCompleteEvent = {
@@ -58,6 +70,7 @@ export type DbBatchCompleteEvent = {
   skipped: number;
   errors: number;
   error?: string;
+  stopped?: boolean;
 };
 
 export type ScanNonProductsProgressEvent = {
@@ -141,6 +154,7 @@ declare global {
       ingestImages: (paths: string[]) => Promise<IngestResult[]>;
       getDiscounts: () => Promise<ParsedDiscount[]>;
       testFirestore: () => Promise<{ ok: boolean; count?: number; sample?: any[]; error?: string }>;
+      testGemini: () => Promise<{ apiKeyPresent: boolean; vision: { ok: boolean; status?: number; body?: string; error?: string } | null; embed: { ok: boolean; status?: number; body?: string; error?: string } | null; error?: string }>;
 
       searchDatabaseByText: (query: string, limit?: number) => Promise<DbSearchResult[]>;
       downloadAndIngestFromUrl: (publicUrl: string) => Promise<{ path: string; result: IngestResult }>;
@@ -159,6 +173,7 @@ declare global {
       requestQuit: () => Promise<void>;
 
       startDbBatch: (paths: string[]) => Promise<{ ok: boolean }>;
+      stopDbBatch: () => Promise<{ ok: boolean }>;
       confirmDbImage: (
         imagePath: string,
         action: "add" | "skip",
@@ -204,6 +219,10 @@ declare global {
       onReembedProgress: (cb: (data: { current: number; total: number; label: string }) => void) => () => void;
       onReembedComplete: (cb: (data: { updated: number; total: number; errors: number; error?: string }) => void) => () => void;
 
+      cleanMessyTitles: () => Promise<{ ok: boolean }>;
+      onCleanMessyTitlesProgress: (cb: (data: { current: number; total: number; title: string }) => void) => () => void;
+      onCleanMessyTitlesComplete: (cb: (data: { deleted: number; total: number; errors: number; error?: string }) => void) => () => void;
+
       scanNonProducts: () => Promise<{ ok: boolean }>;
       onScanNonProductsProgress: (cb: (data: ScanNonProductsProgressEvent) => void) => () => void;
       onScanNonProductsComplete: (cb: (data: ScanNonProductsCompleteEvent) => void) => () => void;
@@ -223,6 +242,8 @@ declare global {
         optionalKeys: Array<{ key: string; label: string; description: string; url: string; value: string; isSet: boolean }>;
       }>;
       saveConfig: (patch: Record<string, string>) => Promise<{ ok: boolean; missingKeys: string[] }>;
+      getRembgModel: () => Promise<string>;
+      setRembgModel: (model: string) => Promise<{ ok: boolean }>;
     };
   }
 }

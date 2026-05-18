@@ -1,6 +1,7 @@
 import fetch from "node-fetch";
 
-const OCR_TIMEOUT_MS = 15_000;
+// PaddleOCR 3.x downloads models lazily on first use — allow up to 90s
+const OCR_TIMEOUT_MS = 90_000;
 
 /**
  * Calls Python OCR service.

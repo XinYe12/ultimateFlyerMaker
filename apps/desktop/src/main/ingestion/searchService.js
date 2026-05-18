@@ -1,7 +1,98 @@
 import { db } from "./firebase.js";
 import { FIRESTORE_COLLECTION } from "../config/vectorConfig.js";
 import { getImageEmbedding, embedText } from "./imageEmbeddingService.js";
-import { cosineSimilarity } from "./vectorUtils.js";
+import { cosineUnitToRaw, normalizeL2 } from "./vectorUtils.js";
+import { getResourceProfile } from "../resourceProfile.js";
+
+const FIRESTORE_RETRY_ATTEMPTS = 3;
+const FIRESTORE_RETRY_BASE_MS = 250;
+
+// ── Firestore circuit breaker ─────────────────────────────────────────────────
+// gRPC channels can go stale (NAT timeout, proxy drop). When this happens every
+// query hangs for up to 300 s before failing. After CIRCUIT_OPEN_AFTER consecutive
+// timeouts we skip DB lookups entirely for CIRCUIT_COOLDOWN_MS, then allow one
+// probe to check whether the channel recovered.
+const CIRCUIT_OPEN_AFTER  = 2;
+const CIRCUIT_COOLDOWN_MS = 5 * 60_000; // 5 min
+
+let _circuitFails  = 0;
+let _circuitOpenAt = 0;
+
+function _circuitOpen() {
+  if (_circuitFails < CIRCUIT_OPEN_AFTER) return false;
+  if (Date.now() - _circuitOpenAt > CIRCUIT_COOLDOWN_MS) {
+    _circuitFails = CIRCUIT_OPEN_AFTER - 1; // allow one probe
+    return false;
+  }
+  return true;
+}
+
+function _onFirestoreOk() {
+  if (_circuitFails > 0) {
+    console.log("[searchService] Firestore circuit CLOSED — connection recovered");
+    _circuitFails = 0;
+    _circuitOpenAt = 0;
+  }
+}
+
+function _onFirestoreTimeout() {
+  _circuitFails++;
+  if (_circuitFails === CIRCUIT_OPEN_AFTER) {
+    _circuitOpenAt = Date.now();
+    console.warn(`[searchService] Firestore circuit OPEN (${CIRCUIT_OPEN_AFTER} consecutive timeouts) — skipping DB for ${CIRCUIT_COOLDOWN_MS / 60_000} min`);
+  }
+}
+
+/** Reset the circuit breaker (call after re-initialising Firebase or on app resume). */
+export function resetFirestoreCircuit() {
+  _circuitFails = 0;
+  _circuitOpenAt = 0;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** True for gRPC/network flakes worth a short bounded retry. */
+function isTransientFirestoreError(err) {
+  if (!err) return false;
+  const code = err.code;
+  const msg = String(err.message || err.reason || err.details || "");
+  if (code === 14 || code === 4 || code === "14" || code === "4") return true;
+  const c = String(code || "").toLowerCase();
+  if (c === "unavailable" || c === "deadline-exceeded" || c === "aborted") return true;
+  return /UNAVAILABLE|DEADLINE_EXCEEDED|ETIMEDOUT|ECONNRESET|EAI_AGAIN|ENOTFOUND|socket hang up|RST_STREAM|Internal error/i.test(
+    msg
+  );
+}
+
+/**
+ * Run a Firestore read with bounded exponential backoff on transient errors.
+ * @template T
+ * @param {() => Promise<T>} operation
+ * @param {{ maxAttempts?: number; baseDelayMs?: number }} [opts]
+ * @returns {Promise<T>}
+ */
+export async function withFirestoreRetry(operation, opts = {}) {
+  const maxAttempts = opts.maxAttempts ?? FIRESTORE_RETRY_ATTEMPTS;
+  const baseDelayMs = opts.baseDelayMs ?? FIRESTORE_RETRY_BASE_MS;
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await operation();
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientFirestoreError(err) || attempt === maxAttempts) throw err;
+      const delay = baseDelayMs * 2 ** (attempt - 1);
+      console.warn(
+        `[searchService] Firestore transient error (attempt ${attempt}/${maxAttempts}), retry in ${delay}ms:`,
+        err?.message?.slice(0, 120)
+      );
+      await sleep(Math.min(delay, 4000));
+    }
+  }
+  throw lastErr;
+}
 
 /* ---------- Shared response shape (no embeddings) ---------- */
 function pickPublicFields(p) {
@@ -99,6 +190,22 @@ export function buildSearchTokens(parsed) {
   return tokenize(buildHaystack(parsed));
 }
 
+/**
+ * Build canonical match keys for O(1) exact lookup via Firestore array-contains.
+ * Written by all three save paths (bulk upload, single confirm, editor lock).
+ */
+export function buildMatchKeys(en, zh, size) {
+  const candidates = [
+    normalize(en),
+    normalize(zh),
+    normalize(`${en} ${size}`),
+    normalize(`${zh} ${size}`),
+    en ? en.toLowerCase().trim() : "",
+    zh ? zh.trim() : "",
+  ];
+  return [...new Set(candidates.filter(Boolean))];
+}
+
 /* ---------- Embedding cache ---------- */
 const GEMINI_EMBED_MODEL = "gemini-embedding-2";
 
@@ -116,12 +223,14 @@ async function getEmbeddingCache() {
   if (_embeddingCache) return _embeddingCache;
   if (!_embeddingCacheLoad) {
     _embeddingCacheLoad = Promise.race([
-      db
-        .collection(FIRESTORE_COLLECTION)
-        .where("status", "==", "active")
-        .where("embeddingModel", "==", GEMINI_EMBED_MODEL)
-        .select("id", "englishTitle", "chineseTitle", "brand", "size", "category", "publicUrl", "embedding")
-        .get(),
+      withFirestoreRetry(() =>
+        db
+          .collection(FIRESTORE_COLLECTION)
+          .where("status", "==", "active")
+          .where("embeddingModel", "==", GEMINI_EMBED_MODEL)
+          .select("id", "englishTitle", "chineseTitle", "brand", "size", "category", "publicUrl", "embedding")
+          .get()
+      ),
       new Promise((_, reject) =>
         setTimeout(() => {
           _embeddingCacheLoad = null;
@@ -157,13 +266,20 @@ export async function searchByText(query, limit = 6, minScore = 0.15) {
   if (!queryTokens.length) return [];
 
   const QUERY_TIMEOUT_MS = 6_000;
+  const scanCap = getResourceProfile().discountFirestoreScanCap;
   const snapshot = await Promise.race([
-    db
-      .collection(FIRESTORE_COLLECTION)
-      .where("searchTokens", "array-contains-any", queryTokens.slice(0, 10))
-      .get(),
+    withFirestoreRetry(() =>
+      db
+        .collection(FIRESTORE_COLLECTION)
+        .where("searchTokens", "array-contains-any", queryTokens.slice(0, 10))
+        .limit(scanCap)
+        .get()
+    ).then(r => { _onFirestoreOk(); return r; }),
     new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("searchByText Firestore query timed out")), QUERY_TIMEOUT_MS)
+      setTimeout(() => {
+        _onFirestoreTimeout();
+        reject(new Error("searchByText Firestore query timed out"));
+      }, QUERY_TIMEOUT_MS)
     ),
   ]);
 
@@ -182,10 +298,11 @@ export async function searchByText(query, limit = 6, minScore = 0.15) {
 }
 
 /**
- * Semantic search using Gemini text-embedding-004 vectors.
+ * Semantic search using Gemini text-embedding vectors.
  * Only searches products tagged with embeddingModel === GEMINI_EMBED_MODEL.
+ * @param {Set<string>|null} candidateIds - When set, scores only those ids (avoids O(catalog) work per query).
  */
-export async function searchByTextEmbedding(query, limit = 6, minScore = 0.3) {
+export async function searchByTextEmbedding(query, limit = 6, minScore = 0.3, candidateIds = null) {
   if (!query || !String(query).trim()) return [];
 
   const queryEmbedding = await embedText(String(query).trim());
@@ -194,12 +311,18 @@ export async function searchByTextEmbedding(query, limit = 6, minScore = 0.3) {
   const all = await getEmbeddingCache();
   if (!all.length) return [];
 
-  return all
+  const queryUnit = normalizeL2(queryEmbedding);
+  if (!queryUnit) return [];
+
+  const rows = candidateIds && candidateIds.size > 0 ? all.filter((p) => candidateIds.has(p.id)) : all;
+
+  return rows
     .map((p) => ({
       ...p,
-      score: Array.isArray(p.embedding) && p.embedding.length === queryEmbedding.length
-        ? cosineSimilarity(queryEmbedding, p.embedding)
-        : 0,
+      score:
+        Array.isArray(p.embedding) && p.embedding.length === queryEmbedding.length
+          ? cosineUnitToRaw(queryUnit, p.embedding)
+          : 0,
     }))
     .filter((p) => p.score >= minScore)
     .sort((a, b) => b.score - a.score)
@@ -235,13 +358,20 @@ function hybridMerge(embedResults, textResults, limit) {
 
 /**
  * Best-effort search for discount item → DB products.
- * Runs multi-query text search (en / zh / combined) and Gemini semantic embedding in parallel,
- * then merges results with hybrid scoring.
- * @param {{ en?: string; zh?: string; size?: string }} item - Discount item fields
- * @param {number} limit - Max results (1 for single, N for series)
- * @returns {Promise<Array>} Products with publicUrl, scores
+ * Runs multi-query text search (en / zh / combined) and Gemini semantic embedding,
+ * then merges results with hybrid scoring. Embedding similarity is restricted to a
+ * text-search candidate pool by default (resource profile `embedTextCandidateCap`) to avoid
+ * O(catalog × rows) CPU during bulk .xlsx runs.
+ * @param {{ skipSemanticEmbed?: boolean }} [options] - When skipSemanticEmbed, skips Gemini embed entirely (text + exact path only).
  */
-export async function searchForDiscountItem(item, limit = 6) {
+export async function searchForDiscountItem(item, limit = 6, options = {}) {
+  // Skip DB entirely when the gRPC channel is known stale
+  if (_circuitOpen()) {
+    console.log("[searchService] Firestore circuit open — skipping DB lookup");
+    return [];
+  }
+
+  const skipSemanticEmbed = options.skipSemanticEmbed === true;
   const enQuery   = (item?.en   || "").trim();
   const zhQuery   = (item?.zh   || "").trim();
   const fullQuery = [item?.en, item?.zh, item?.size].filter(Boolean).map(String).map((s) => s.trim()).join(" ").trim();
@@ -249,16 +379,28 @@ export async function searchForDiscountItem(item, limit = 6) {
   if (!fullQuery && !enQuery && !zhQuery) return [];
 
   // Fast-path: exact match against saved flyer_editor combinations via matchKeys index.
+  // Capped at 4 s — previously had no timeout, causing 300 s background promise leaks.
+  const FAST_PATH_TIMEOUT_MS = 4_000;
   try {
     const exactKey = normalize(enQuery) || normalize(zhQuery);
     if (exactKey) {
-      const snap = await db.collection(FIRESTORE_COLLECTION)
-        .where("matchKeys", "array-contains", exactKey)
-        .limit(3)
-        .get();
+      const snap = await Promise.race([
+        withFirestoreRetry(() =>
+          db.collection(FIRESTORE_COLLECTION)
+            .where("matchKeys", "array-contains", exactKey)
+            .limit(3)
+            .get()
+        ).then(r => { _onFirestoreOk(); return r; }),
+        new Promise((_, reject) =>
+          setTimeout(() => {
+            _onFirestoreTimeout();
+            reject(new Error("fast-path matchKeys timed out"));
+          }, FAST_PATH_TIMEOUT_MS)
+        ),
+      ]);
       const hits = snap.docs
         .map(d => ({ ...d.data(), id: d.id }))
-        .filter(d => d.source === "flyer_editor" && d.status === "active");
+        .filter(d => d.status === "active");
       if (hits.length > 0) {
         console.log(`[searchService] Fast-path exact match (${hits.length}): "${exactKey}"`);
         return hits.map(p => ({ ...pickPublicFields(p), score: 0.98 }));
@@ -269,17 +411,41 @@ export async function searchForDiscountItem(item, limit = 6) {
   }
 
   const queries = [...new Set([fullQuery, enQuery, zhQuery].filter(Boolean))];
-  const textResultSets = await Promise.all(
-    queries.map((q) => searchByText(q, limit * 2, 0.15).catch(() => []))
-  );
-  const textMerged = mergeByBestScore(textResultSets.flat(), limit * 2);
+  const profile = getResourceProfile();
+  let textResultSets;
+  if (profile.serializeDiscountTextSearch) {
+    textResultSets = [];
+    for (const q of queries) {
+      textResultSets.push(await searchByText(q, limit * 2, 0.15).catch(() => []));
+    }
+  } else {
+    textResultSets = await Promise.all(
+      queries.map((q) => searchByText(q, limit * 2, 0.15).catch(() => []))
+    );
+  }
+  const textFlat = textResultSets.flat();
+  const textMerged = mergeByBestScore(textFlat, limit * 2);
 
   let embedResults = [];
-  try {
-    embedResults = await searchByTextEmbedding(fullQuery || enQuery, limit * 2, 0.25);
-  } catch { /* text search covers it */ }
+  if (!skipSemanticEmbed) {
+    try {
+      const embedPool = mergeByBestScore(textFlat, profile.embedTextCandidateCap);
+      const candidateIds = new Set(embedPool.map((r) => r.id));
+      const forceFull =
+        process.env.UFM_EMBED_FORCE_FULL_SCAN === "1" || process.env.UFM_EMBED_FORCE_FULL_SCAN === "true";
+      const narrowIds = candidateIds.size > 0 && !forceFull ? candidateIds : null;
+      embedResults = await searchByTextEmbedding(fullQuery || enQuery, limit * 2, 0.25, narrowIds);
+    } catch {
+      /* text search covers it */
+    }
+  }
 
-  return hybridMerge(embedResults, textMerged, limit);
+  const finalResults = hybridMerge(embedResults, textMerged, limit);
+  if (finalResults.length > 0) return finalResults;
+
+  // Nothing passed the score threshold — return the single closest text match regardless.
+  // JobProcessor sets lowConfidence based on the score.
+  return searchByText(fullQuery || enQuery, 1, 0);
 }
 
 /* ---------- Image search ---------- */
@@ -297,10 +463,15 @@ export async function searchByImage(imagePath, limit = 5) {
   const all = await getEmbeddingCache();
   if (!all.length) return [];
 
+  const queryUnit = normalizeL2(queryEmbedding);
+  if (!queryUnit) return [];
+
   return all
     .map((p) => ({
       ...p,
-      score: Array.isArray(p.embedding) ? cosineSimilarity(queryEmbedding, p.embedding) : 0,
+      score: Array.isArray(p.embedding) && p.embedding.length === queryEmbedding.length
+        ? cosineUnitToRaw(queryUnit, p.embedding)
+        : 0,
     }))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)

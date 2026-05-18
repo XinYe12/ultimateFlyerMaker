@@ -16,7 +16,7 @@ import crypto from "crypto";
 import { getStorage } from "firebase-admin/storage";
 import { db } from "../ingestion/firebase.js";
 import { embedText } from "../ingestion/imageEmbeddingService.js";
-import { normalize, buildSearchTokens, invalidateEmbeddingCache } from "../ingestion/searchService.js";
+import { normalize, buildSearchTokens, invalidateEmbeddingCache, buildMatchKeys } from "../ingestion/searchService.js";
 import { FIRESTORE_COLLECTION } from "../config/vectorConfig.js";
 import { assertCanWrite, trackWrites, trackStorageUpload } from "./quotaTracker.js";
 
@@ -38,21 +38,6 @@ function buildProductId(en, zh, imagePath) {
   return `${base}_${shortHash}`;
 }
 
-/**
- * Build a canonical set of match keys for fast exact lookup.
- * Stored in Firestore `matchKeys` array field; queried via array-contains.
- */
-function buildMatchKeys(en, zh, size) {
-  const candidates = [
-    normalize(en),
-    normalize(zh),
-    normalize(`${en} ${size}`),
-    normalize(`${zh} ${size}`),
-    en ? en.toLowerCase().trim() : "",
-    zh ? zh.trim() : "",
-  ];
-  return [...new Set(candidates.filter(Boolean))];
-}
 
 async function uploadToStorage(bucket, productId, imagePath) {
   const ext = path.extname(imagePath).replace(".", "") || "jpg";

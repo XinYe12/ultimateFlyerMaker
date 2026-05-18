@@ -5,6 +5,7 @@ import { useState, useEffect, useRef } from "react";
 import { useJobQueue } from "../hooks/useJobQueue";
 import Button from "../components/ui/Button";
 import { FlyerJob, DepartmentId } from "../types";
+import { getCycleStartFriday } from "../utils/flyerCycle";
 import { loadFlyerTemplateConfig, FlyerTemplateConfig } from "../editor/loadFlyerTemplateConfig";
 import DepartmentOverview from "./DepartmentOverview";
 import JobCreationPanel from "./JobCreationPanel";
@@ -34,6 +35,8 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
     setJobDepartment,
     startJob,
     bulkApplyAndStart,
+    setAllJobsWeekStart,
+    cancelAllJobs,
     deleteJob,
     getJob,
   } = jobQueueHook;
@@ -52,6 +55,10 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkError, setBulkError] = useState<string>("");
   const [bulkApplied, setBulkApplied] = useState(false);
+  const [bulkAborted, setBulkAborted] = useState(false);
+  const [flyerWeekStart, setFlyerWeekStart] = useState<string>(
+    () => getCycleStartFriday(new Date()).toISOString().slice(0, 10)
+  );
 
   // Load template config to get available departments
   useEffect(() => {
@@ -179,6 +186,7 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
     setBulkError("");
     setBulkParsed(null);
     setBulkApplied(false);
+    setBulkAborted(false);
     setBulkFile(filePath);
     try {
       const result = await window.ufm.parseAllDepartmentsXlsx(filePath);
@@ -187,13 +195,20 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
       for (const [dept, items] of Object.entries(result)) {
         discountsByDept[dept] = { type: "xlsx", source: filePath, parsedItems: items, status: "done" };
       }
-      await bulkApplyAndStart({ templateId, discountsByDept, availableDepts: availableDepartments });
+      await bulkApplyAndStart({ templateId, discountsByDept, availableDepts: availableDepartments, flyerWeekStart });
       setBulkApplied(true);
     } catch (err: any) {
       setBulkError(err?.message ?? "Failed to parse file");
     } finally {
       setBulkLoading(false);
     }
+  };
+
+  const hasActiveJobs = jobs.some(j => j.status === "queued" || j.status === "processing");
+
+  const handleAbortAll = () => {
+    cancelAllJobs();
+    setBulkAborted(true);
   };
 
   const DEPT_LABELS: Record<string, string> = {
@@ -234,6 +249,24 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
             <div style={{ fontWeight: 700, fontSize: 15, color: "#1e293b" }}>Bulk Discount Upload</div>
             <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
               Upload one .xlsx file with all departments to set discounts at once
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+              <label style={{ fontSize: 12, color: "#64748b", fontWeight: 600, whiteSpace: "nowrap" }}>
+                Flyer week (Fri):
+              </label>
+              <input
+                type="date"
+                value={flyerWeekStart}
+                onChange={e => {
+                  setFlyerWeekStart(e.target.value);
+                  setAllJobsWeekStart(templateId, e.target.value);
+                }}
+                style={{
+                  fontSize: 12, padding: "3px 6px",
+                  border: "1px solid #cbd5e1", borderRadius: 6,
+                  background: "#fff", color: "#1e293b",
+                }}
+              />
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -308,8 +341,33 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
               ))}
             </div>
             {bulkApplied && (
-              <div style={{ fontSize: 13, color: "#16a34a", fontWeight: 600 }}>
-                All departments started — processing now.
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                {bulkAborted ? (
+                  <div style={{ fontSize: 13, color: "#dc2626", fontWeight: 600 }}>
+                    Processing aborted.
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 13, color: "#16a34a", fontWeight: 600 }}>
+                      All departments started — processing now.
+                    </div>
+                    {hasActiveJobs && (
+                      <button
+                        onClick={handleAbortAll}
+                        style={{
+                          padding: "5px 12px", fontSize: 12, fontWeight: 700,
+                          background: "#fef2f2", border: "1px solid #fca5a5",
+                          borderRadius: 6, cursor: "pointer", color: "#dc2626",
+                          whiteSpace: "nowrap",
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = "#fee2e2"; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = "#fef2f2"; }}
+                      >
+                        Abort All
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
             )}
           </div>

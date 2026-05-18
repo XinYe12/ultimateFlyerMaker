@@ -6,6 +6,7 @@ import { app } from "electron";
 import "dotenv/config";
 import fetch from "node-fetch";
 import { BACKENDS } from "./backendRegistry.js";
+import { getPythonThreadLimitEnv, getPythonModelEnv } from "./resourceProfile.js";
 
 let backendProcess = null;
 let backendInfo = null;
@@ -107,7 +108,7 @@ function isBackendAlive(host, port) {
         done(res.statusCode === 200, `status ${res.statusCode}`);
       }
     );
-    req.setTimeout(3000, () => { req.destroy(); done(false, "timeout"); });
+    req.setTimeout(10_000, () => { req.destroy(); done(false, "timeout"); });
     req.on("error", (err) => done(false, err.message));
   });
 }
@@ -175,6 +176,10 @@ export async function startBackend(name = "cutout") {
 
   // Reuse if already running externally
   if (await isBackendAlive(cfg.host, cfg.port)) {
+    console.warn(
+      `[startBackend] Reusing existing server at ${cfg.host}:${cfg.port}. ` +
+        "Do not start a second uvicorn (or packaged binary) on this port — duplicate Python processes load the rembg model twice and can use multiple GB RAM."
+    );
     backendInfo = {
       name,
       pid: null,
@@ -190,7 +195,7 @@ export async function startBackend(name = "cutout") {
 
   backendProcess = spawn(cmd, args, {
     cwd,
-    env,
+    env: { ...env, ...getPythonThreadLimitEnv(), ...getPythonModelEnv() },
     // inherit stdout so backend logs appear in terminal during dev;
     // pipe stderr so we can capture it for diagnostics.
     stdio: ["ignore", "inherit", "pipe"],
@@ -233,6 +238,11 @@ export async function startBackend(name = "cutout") {
     url: `http://${cfg.host}:${cfg.port}`,
     healthy: false, // set to true by waitForBackend on success
   };
+
+  console.log(
+    `[startBackend] Spawned ${name} backend (pid ${backendProcess.pid}) on ${cfg.host}:${cfg.port}. ` +
+      "Only one instance should listen on this port."
+  );
 
   return backendInfo;
 }

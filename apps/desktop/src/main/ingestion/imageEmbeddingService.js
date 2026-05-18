@@ -19,7 +19,10 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 function readImageForGemini(imagePath) {
   const ext = path.extname(imagePath).toLowerCase().replace(".", "");
   const mimeType = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+  const stat = fs.statSync(imagePath);
+  if (stat.size < 100) throw new Error(`Image file too small to be valid (${stat.size} bytes): ${imagePath}`);
   const data = fs.readFileSync(imagePath, { encoding: "base64" });
+  if (!data) throw new Error(`Image read returned empty data: ${imagePath}`);
   return { data, mimeType };
 }
 
@@ -79,7 +82,6 @@ Return ONLY a JSON object — no markdown, no explanation.
             },
           ],
           generationConfig: {
-            responseMimeType: "application/json",
             temperature: 0,
             maxOutputTokens: 1024,
           },
@@ -104,6 +106,7 @@ Return ONLY a JSON object — no markdown, no explanation.
     if (!text) throw new Error("Gemini returned empty content");
 
     const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+    console.log("[imageEmbedding] Gemini raw response:", cleaned.slice(0, 300));
     return JSON.parse(cleaned);
   } catch (err) {
     clearTimeout(timeout);
@@ -442,3 +445,78 @@ export async function getImageEmbedding(imagePath) {
   return { embedding, parsed };
 }
 
+/**
+ * Minimal connectivity test for both Gemini endpoints.
+ * Logs full details to the backend terminal and returns a structured result.
+ * Does NOT count against quota tracking.
+ */
+export async function testGeminiConnection() {
+  const apiKey = String(process.env.GEMINI_API_KEY || "").trim();
+  const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+  const result = { apiKeyPresent: !!apiKey, vision: null, embed: null };
+
+  console.log("\n=== [testGemini] Starting connection test ===");
+  console.log(`  API key: ${apiKey ? apiKey.slice(0, 8) + "…" + apiKey.slice(-4) : "(missing)"}`);
+  console.log(`  Vision model: ${model}`);
+
+  if (!apiKey) {
+    console.log("  RESULT: FAIL — GEMINI_API_KEY not set in .env");
+    return { ...result, error: "GEMINI_API_KEY not set in .env" };
+  }
+
+  // --- Vision (text-only ping — no image needed) ---
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts: [{ text: "Reply with the single word: ok" }] }] }),
+        signal: AbortSignal.timeout(15_000),
+      }
+    );
+    const body = await res.text();
+    if (res.ok) {
+      console.log(`  [vision] OK (HTTP ${res.status})`);
+      result.vision = { ok: true, status: res.status };
+    } else {
+      console.log(`  [vision] FAIL HTTP ${res.status}:\n  ${body}`);
+      result.vision = { ok: false, status: res.status, body };
+    }
+  } catch (err) {
+    console.log(`  [vision] FAIL (network error): ${err.message}`);
+    result.vision = { ok: false, error: err.message };
+  }
+
+  // --- Embed ---
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "models/gemini-embedding-2",
+          content: { parts: [{ text: "test" }] },
+          outputDimensionality: 8,
+        }),
+        signal: AbortSignal.timeout(15_000),
+      }
+    );
+    const body = await res.text();
+    if (res.ok) {
+      console.log(`  [embed]  OK (HTTP ${res.status})`);
+      result.embed = { ok: true, status: res.status };
+    } else {
+      console.log(`  [embed]  FAIL HTTP ${res.status}:\n  ${body}`);
+      result.embed = { ok: false, status: res.status, body };
+    }
+  } catch (err) {
+    console.log(`  [embed]  FAIL (network error): ${err.message}`);
+    result.embed = { ok: false, error: err.message };
+  }
+
+  const allOk = result.vision?.ok && result.embed?.ok;
+  console.log(`=== [testGemini] Result: ${allOk ? "ALL OK" : "FAILED"} ===\n`);
+  return result;
+}

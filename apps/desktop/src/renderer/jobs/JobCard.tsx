@@ -2,6 +2,7 @@
 // Displays a single job with status, progress, and actions
 
 import { FlyerJob } from "../types";
+import JobPipelineTimingsSummary from "./JobPipelineTimingsSummary";
 
 const DEPARTMENT_LABELS: Record<string, string> = {
   grocery: "Grocery",
@@ -125,6 +126,10 @@ export default function JobCard({ job, onViewFlyer, onDelete }: Props) {
         >
           {job.error}
         </div>
+      )}
+
+      {(job.status === "processing" || job.status === "completed") && (
+        <JobPipelineTimingsSummary processedImages={job.result?.processedImages ?? []} />
       )}
 
       {/* Actions */}

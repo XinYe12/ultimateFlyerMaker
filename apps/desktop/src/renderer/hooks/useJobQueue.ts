@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { FlyerJob, ImageTask, DiscountInput, DepartmentId, JobStatus, IngestItem, CardLayout } from "../types";
 import { loadJobsFromFile, saveJobsToFile } from "../services/jobPersistence";
+import { getCycleStartFriday } from "../utils/flyerCycle";
 
 declare global {
   interface Window {
@@ -198,6 +199,7 @@ export function useJobQueue() {
         discount: null,
         status: "drafting",
         createdAt: Date.now(),
+        flyerWeekStart: getCycleStartFriday(new Date()).toISOString().slice(0, 10),
         progress: {
           totalImages: 0,
           processedImages: 0,
@@ -341,8 +343,10 @@ export function useJobQueue() {
       templateId: string;
       discountsByDept: Record<string, DiscountInput>;
       availableDepts: string[];
+      flyerWeekStart?: string;
     }) => {
-      const { templateId: tplId, discountsByDept, availableDepts } = opts;
+      const { templateId: tplId, discountsByDept, availableDepts, flyerWeekStart } = opts;
+      const weekStart = flyerWeekStart ?? getCycleStartFriday(new Date()).toISOString().slice(0, 10);
       const jobsToStart: FlyerJob[] = [];
 
       setJobs(prev => {
@@ -362,6 +366,7 @@ export function useJobQueue() {
               discount,
               status: "queued" as JobStatus,
               startedAt: Date.now(),
+              flyerWeekStart: weekStart,
               progress: { ...existing.progress, currentStep: "Queued" },
             };
             const idx = next.findIndex(j => j.id === existing.id);
@@ -377,6 +382,7 @@ export function useJobQueue() {
               status: "queued" as JobStatus,
               createdAt: Date.now(),
               startedAt: Date.now(),
+              flyerWeekStart: weekStart,
               progress: { totalImages: 0, processedImages: 0, currentStep: "Queued" },
             };
             next.unshift(jobObj);
@@ -405,6 +411,21 @@ export function useJobQueue() {
   const deleteJob = useCallback((jobId: string) => {
     setJobs(prev => prev.filter(j => j.id !== jobId));
   }, []);
+
+  // Update flyerWeekStart for all jobs on a given template
+  const setAllJobsWeekStart = useCallback((tplId: string, dateStr: string) => {
+    setJobs(prev => prev.map(j => j.templateId === tplId ? { ...j, flyerWeekStart: dateStr } : j));
+  }, []);
+
+  // Cancel all queued or processing jobs
+  const cancelAllJobs = useCallback(() => {
+    const active = jobs.filter(j => j.status === "queued" || j.status === "processing");
+    active.forEach(job => {
+      window.ufm.cancelJob(job.id).catch((err: unknown) => {
+        console.error("[useJobQueue] Failed to cancel job:", job.id, err);
+      });
+    });
+  }, [jobs]);
 
   // Sync current editor items + discount labels back to a drafting job (updates draft in job queue UI)
   const syncJobFromEditorItems = useCallback(
@@ -467,6 +488,8 @@ export function useJobQueue() {
     setJobDepartment,
     startJob,
     bulkApplyAndStart,
+    setAllJobsWeekStart,
+    cancelAllJobs,
     deleteJob,
     getJob,
     syncJobFromEditorItems,

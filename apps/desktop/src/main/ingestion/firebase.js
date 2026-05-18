@@ -71,7 +71,12 @@ try {
       ? getFirestore(fbApp, databaseId)
       : getFirestore(fbApp);
 
-    LOG("init", "Firestore client ready. Collection: product_vectors");
+    // Switch to HTTP/1.1 REST transport. gRPC channels go stale on Windows
+    // (NAT/proxy drops the TCP connection and the channel never reconnects).
+    // All our Firestore calls are one-shot .get() queries so REST is fine.
+    db.settings({ preferRest: true });
+
+    LOG("init", "Firestore client ready (REST transport). Collection: product_vectors");
   }
 } catch (err) {
   LOG("init", "❌ Firebase init failed: " + err.message);

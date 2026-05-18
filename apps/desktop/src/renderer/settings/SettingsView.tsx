@@ -27,6 +27,10 @@ export default function SettingsView({ onBack }: Props) {
   const [keySaving, setKeySaving] = useState(false);
   const [keySaved, setKeySaved] = useState(false);
 
+  const [rembgModel, setRembgModel] = useState<string>("birefnet-general");
+  const [rembgSaving, setRembgSaving] = useState(false);
+  const [rembgSaved, setRembgSaved] = useState(false);
+
   const [appPaths, setAppPaths] = useState<{ userData: string; firebaseCredential: string; firebaseCredentialExists: boolean } | null>(null);
 
   const loadCacheInfo = useCallback(async () => {
@@ -41,6 +45,7 @@ export default function SettingsView({ onBack }: Props) {
       setOptionalKeys(cfg.optionalKeys);
     });
     void window.ufm.getAppPaths().then(setAppPaths);
+    void window.ufm.getRembgModel().then(setRembgModel);
   }, [loadCacheInfo]);
 
   const handleClearCache = useCallback(async () => {
@@ -75,6 +80,17 @@ export default function SettingsView({ onBack }: Props) {
       void window.ufm.getConfig().then((cfg: { requiredKeys: KeyEntry[]; optionalKeys: KeyEntry[] }) => { setRequiredKeys(cfg.requiredKeys); setOptionalKeys(cfg.optionalKeys); });
     } finally {
       setKeySaving(false);
+    }
+  };
+
+  const handleSaveRembgModel = async () => {
+    setRembgSaving(true);
+    try {
+      await window.ufm.setRembgModel(rembgModel);
+      setRembgSaved(true);
+      setTimeout(() => setRembgSaved(false), 3000);
+    } finally {
+      setRembgSaving(false);
     }
   };
 
@@ -143,6 +159,80 @@ export default function SettingsView({ onBack }: Props) {
             {keySaving ? "Saving…" : "Save Keys"}
           </Button>
           {keySaved && <span style={{ fontSize: 13, color: "#22c55e" }}>✓ Saved</span>}
+        </div>
+      </Card>
+
+      {/* Background removal model section */}
+      <Card style={{ padding: 24, marginBottom: 16 }}>
+        <h3 style={{ margin: "0 0 4px", fontSize: "var(--text-lg)", fontWeight: "var(--font-semibold)" }}>
+          Background Removal Model
+        </h3>
+        <p style={{ margin: "0 0 16px", fontSize: "var(--text-sm)", color: "var(--color-text-muted)", lineHeight: 1.5 }}>
+          Controls the AI model used to remove backgrounds from product images. Takes effect after restarting the app.
+        </p>
+
+        {([
+          {
+            id: "birefnet-general",
+            label: "birefnet-general",
+            badge: null,
+            desc: "Best quality — handles complex and transparent backgrounds. Downloads ~973 MB on first use. Uses ~7 GB RAM during inference.",
+          },
+          {
+            id: "birefnet-general-lite",
+            label: "birefnet-general-lite",
+            badge: null,
+            desc: "BiRefNet lite — same architecture as birefnet-general so it handles transparent/clear packaging well. Lighter download (~300–400 MB). Higher RAM use than isnet.",
+          },
+          {
+            id: "isnet-general-use",
+            label: "isnet-general-use",
+            badge: "Recommended",
+            desc: "Better quality than u2net on most products (~176 MB). Good balance of quality and memory. Struggles with fully transparent packaging.",
+          },
+          {
+            id: "u2net",
+            label: "u2net",
+            badge: null,
+            desc: "Fastest and lowest memory (~170 MB). Good for office PCs with limited RAM. Struggles with transparent products.",
+          },
+        ] as const).map((m) => (
+          <label
+            key={m.id}
+            style={{
+              display: "flex", alignItems: "flex-start", gap: 10,
+              marginBottom: 12, cursor: "pointer",
+            }}
+          >
+            <input
+              type="radio"
+              name="rembgModel"
+              value={m.id}
+              checked={rembgModel === m.id}
+              onChange={() => setRembgModel(m.id)}
+              style={{ marginTop: 2, cursor: "pointer" }}
+            />
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#1e293b" }}>
+                {m.label}
+                {m.badge && (
+                  <span style={{ marginLeft: 6, fontSize: 11, color: "#6366f1", fontWeight: 400 }}>{m.badge}</span>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 1 }}>{m.desc}</div>
+            </div>
+          </label>
+        ))}
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
+          <Button variant="primary" size="sm" onClick={handleSaveRembgModel} disabled={rembgSaving}>
+            {rembgSaving ? "Saving…" : "Save"}
+          </Button>
+          {rembgSaved && (
+            <span style={{ fontSize: 13, color: "#f59e0b" }}>
+              ✓ Saved — restart the app to apply
+            </span>
+          )}
         </div>
       </Card>
 

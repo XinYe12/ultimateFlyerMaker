@@ -99,6 +99,7 @@ function FontDropdown({ value, onChange, label }: FontDropdownProps) {
 }
 
 interface GlobalFontToolbarProps {
+  activeSection: 'title' | 'price' | 'banner';
   titleFont?: string;
   titleColor?: string;
   titleItalic?: boolean;
@@ -111,9 +112,11 @@ interface GlobalFontToolbarProps {
   onPriceFontChange: (v: string) => void;
   onPriceColorChange: (v: string) => void;
   onShowDollarToggle: () => void;
+  onClose: () => void;
 }
 
 export default function GlobalFontToolbar({
+  activeSection,
   titleFont,
   titleColor = "#000000",
   titleItalic,
@@ -126,7 +129,10 @@ export default function GlobalFontToolbar({
   onPriceFontChange,
   onPriceColorChange,
   onShowDollarToggle,
+  onClose,
 }: GlobalFontToolbarProps) {
+  const sectionLabel = activeSection === 'title' ? 'TITLE' : activeSection === 'price' ? 'PRICE' : 'BANNER';
+
   return (
     <div
       onMouseDown={(e) => e.stopPropagation()}
@@ -144,90 +150,108 @@ export default function GlobalFontToolbar({
         marginBottom: 10,
       }}
     >
-      {/* ── Title section ── */}
+      {/* Section label */}
       <span style={{ fontSize: 11, fontWeight: 700, color: "#374151", whiteSpace: "nowrap", letterSpacing: "0.04em" }}>
-        TITLE
+        {sectionLabel}
       </span>
 
-      <FontDropdown label="Font:" value={titleFont} onChange={onTitleFontChange} />
+      {/* ── Title controls ── */}
+      {activeSection === 'title' && (
+        <>
+          <FontDropdown label="Font:" value={titleFont} onChange={onTitleFontChange} />
 
-      {/* Title color */}
-      <label
-        title="Title color"
-        style={{
-          width: 26, height: 26, borderRadius: 6,
-          border: "1px solid #d1d5db", background: titleColor,
-          cursor: "pointer", display: "flex", alignItems: "center",
-          justifyContent: "center", overflow: "hidden", position: "relative",
-        }}
-      >
-        <input
-          type="color"
-          value={titleColor}
-          onChange={(e) => onTitleColorChange(e.target.value)}
-          style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%", cursor: "pointer", padding: 0, border: "none" }}
-        />
-      </label>
+          <label
+            title="Title color"
+            style={{
+              width: 26, height: 26, borderRadius: 6,
+              border: "1px solid #d1d5db", background: titleColor,
+              cursor: "pointer", display: "flex", alignItems: "center",
+              justifyContent: "center", overflow: "hidden", position: "relative",
+            }}
+          >
+            <input
+              type="color"
+              value={titleColor}
+              onChange={(e) => onTitleColorChange(e.target.value)}
+              style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%", cursor: "pointer", padding: 0, border: "none" }}
+            />
+          </label>
 
-      {/* Italic toggle */}
+          <button
+            onClick={onTitleItalicToggle}
+            title="Italic"
+            style={{
+              width: 26, height: 26, borderRadius: 6,
+              border: titleItalic ? "2px solid #2563eb" : "1px solid #d1d5db",
+              background: titleItalic ? "#eff6ff" : "#f9fafb",
+              color: titleItalic ? "#1d4ed8" : "#374151",
+              cursor: "pointer", fontStyle: "italic",
+              fontSize: 13, fontFamily: "Georgia, serif", fontWeight: 700,
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+          >
+            I
+          </button>
+        </>
+      )}
+
+      {/* ── Price controls ── */}
+      {activeSection === 'price' && (
+        <>
+          <FontDropdown label="Font:" value={priceFont} onChange={onPriceFontChange} />
+
+          <label
+            title="Price color"
+            style={{
+              width: 26, height: 26, borderRadius: 6,
+              border: "1px solid #d1d5db", background: priceColor,
+              cursor: "pointer", display: "flex", alignItems: "center",
+              justifyContent: "center", overflow: "hidden", position: "relative",
+            }}
+          >
+            <input
+              type="color"
+              value={priceColor}
+              onChange={(e) => onPriceColorChange(e.target.value)}
+              style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%", cursor: "pointer", padding: 0, border: "none" }}
+            />
+          </label>
+
+          <button
+            onClick={onShowDollarToggle}
+            title="Show $ sign on all prices"
+            style={{
+              width: 26, height: 26, borderRadius: 6,
+              border: priceShowDollar ? "2px solid #2563eb" : "1px solid #d1d5db",
+              background: priceShowDollar ? "#eff6ff" : "#f9fafb",
+              color: priceShowDollar ? "#1d4ed8" : "#374151",
+              cursor: "pointer", fontSize: 13, fontWeight: 700,
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+          >
+            $
+          </button>
+        </>
+      )}
+
+      {/* ── Banner: no extra controls — use click on banner to edit days ── */}
+      {activeSection === 'banner' && (
+        <span style={{ fontSize: 11, color: "#6b7280" }}>Click the badge to edit days</span>
+      )}
+
+      {/* Close */}
       <button
-        onClick={onTitleItalicToggle}
-        title="Italic"
+        onClick={onClose}
+        title="Close"
         style={{
-          width: 26, height: 26, borderRadius: 6,
-          border: titleItalic ? "2px solid #2563eb" : "1px solid #d1d5db",
-          background: titleItalic ? "#eff6ff" : "#f9fafb",
-          color: titleItalic ? "#1d4ed8" : "#374151",
-          cursor: "pointer", fontStyle: "italic",
-          fontSize: 13, fontFamily: "Georgia, serif", fontWeight: 700,
-          display: "flex", alignItems: "center", justifyContent: "center",
+          marginLeft: "auto",
+          width: 24, height: 24, borderRadius: 6,
+          border: "1px solid #d1d5db", background: "#f9fafb",
+          color: "#6b7280", cursor: "pointer", fontSize: 16, lineHeight: 1,
+          display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
         }}
       >
-        I
-      </button>
-
-      {/* Divider */}
-      <div style={{ width: 1, height: 22, background: "#e5e7eb", margin: "0 4px", flexShrink: 0 }} />
-
-      {/* ── Price section ── */}
-      <span style={{ fontSize: 11, fontWeight: 700, color: "#374151", whiteSpace: "nowrap", letterSpacing: "0.04em" }}>
-        PRICE
-      </span>
-
-      <FontDropdown label="Font:" value={priceFont} onChange={onPriceFontChange} />
-
-      {/* Price color */}
-      <label
-        title="Price color"
-        style={{
-          width: 26, height: 26, borderRadius: 6,
-          border: "1px solid #d1d5db", background: priceColor,
-          cursor: "pointer", display: "flex", alignItems: "center",
-          justifyContent: "center", overflow: "hidden", position: "relative",
-        }}
-      >
-        <input
-          type="color"
-          value={priceColor}
-          onChange={(e) => onPriceColorChange(e.target.value)}
-          style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%", cursor: "pointer", padding: 0, border: "none" }}
-        />
-      </label>
-
-      {/* Dollar sign toggle */}
-      <button
-        onClick={onShowDollarToggle}
-        title="Show $ sign on all prices"
-        style={{
-          width: 26, height: 26, borderRadius: 6,
-          border: priceShowDollar ? "2px solid #2563eb" : "1px solid #d1d5db",
-          background: priceShowDollar ? "#eff6ff" : "#f9fafb",
-          color: priceShowDollar ? "#1d4ed8" : "#374151",
-          cursor: "pointer", fontSize: 13, fontWeight: 700,
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}
-      >
-        $
+        ×
       </button>
     </div>
   );

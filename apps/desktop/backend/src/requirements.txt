@@ -6,4 +6,5 @@ paddleocr
 opencv-python
 numpy
 rembg[cpu]
+psutil
 

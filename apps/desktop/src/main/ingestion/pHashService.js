@@ -3,6 +3,13 @@ import { createCanvas, loadImage } from "@napi-rs/canvas";
 const SIZE = 32;
 const SMALLER = 8;
 
+// Precompute DCT cosine factors once at module load (~10x speedup vs inline Math.cos)
+const COS_TABLE = Array.from({ length: SIZE }, (_, u) =>
+  Array.from({ length: SIZE }, (_, i) =>
+    Math.cos(((2 * i + 1) * u * Math.PI) / (2 * SIZE))
+  )
+);
+
 /**
  * Compute a 64-bit DCT perceptual hash (pHash) for an image.
  * Ported from ImageHash.java — identical DCT formula and median threshold.
@@ -64,15 +71,16 @@ function applyDCT(f) {
   for (let u = 0; u < SIZE; u++) {
     result.push(new Float64Array(SIZE));
     const cu = u === 0 ? 1 / Math.sqrt(2) : 1.0;
+    const cosRow = COS_TABLE[u];
     for (let v = 0; v < SIZE; v++) {
       const cv = v === 0 ? 1 / Math.sqrt(2) : 1.0;
+      const cosCol = COS_TABLE[v];
       let sum = 0;
       for (let i = 0; i < SIZE; i++) {
+        const fi = f[i];
+        const cu_i = cosRow[i];
         for (let j = 0; j < SIZE; j++) {
-          sum +=
-            Math.cos(((2 * i + 1) * u * Math.PI) / (2 * SIZE)) *
-            Math.cos(((2 * j + 1) * v * Math.PI) / (2 * SIZE)) *
-            f[i][j];
+          sum += cu_i * cosCol[j] * fi[j];
         }
       }
       result[u][v] = 0.25 * cu * cv * sum;

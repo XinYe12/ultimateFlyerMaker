@@ -6,6 +6,7 @@ import { FlyerJob, DepartmentId, DiscountInput } from "../types";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 import { listCustomTemplates } from "../editor/customTemplateStorage";
+import JobPipelineTimingsSummary from "./JobPipelineTimingsSummary";
 
 const DEPARTMENT_LABELS: Record<string, string> = {
   grocery: "Grocery",
@@ -409,7 +410,33 @@ export default function JobCreationPanel({
         </div>
       </div>
 
-      {/* Start Processing Button */}
+        {/* Live progress + per-item pipeline timings (main JobProcessor) */}
+        {isProcessing && (
+          <div
+            style={{
+              marginBottom: 12,
+              padding: "10px 12px",
+              background: "var(--color-bg-subtle)",
+              borderRadius: "var(--radius-sm)",
+              fontSize: "var(--text-sm)",
+              color: "var(--color-text-muted)",
+            }}
+          >
+            <div style={{ fontWeight: 600, color: "var(--color-text)", marginBottom: 4 }}>Status</div>
+            {job.progress.currentStep}
+            {job.progress.totalImages > 0 && (
+              <span style={{ marginLeft: 8 }}>
+                ({job.progress.processedImages}/{job.progress.totalImages})
+              </span>
+            )}
+          </div>
+        )}
+
+        {(isProcessing || job.status === "completed") && (
+          <JobPipelineTimingsSummary processedImages={job.result?.processedImages ?? []} />
+        )}
+
+        {/* Start Processing Button */}
       <div style={{ marginTop: 20 }}>
         <div style={{ textAlign: "right", marginBottom: 12 }}>
           <Button

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import type { DbBatchProgressEvent, DbBatchCompleteEvent, DbParsedMetadata, QuotaStatus, QuotaEntry, DbSyncReport, DbSyncResult, ScanNonProductsProgressEvent, ScanNonProductsCompleteEvent, TodaysSaveItem } from "../global";
 
 type DbUploadStatus =
@@ -13,7 +13,8 @@ type DbUploadStatus =
   | "duplicate"
   | "skipped"
   | "error"
-  | "needs_confirmation";
+  | "needs_confirmation"
+  | "paused";
 
 type DbUploadItem = {
   id: string;
@@ -32,6 +33,11 @@ type Props = {
 };
 
 const CHUNK_SIZE = 50;
+const MAX_VISIBLE = 150;
+
+const TERMINAL_STATUSES: DbUploadStatus[] = [
+  "done", "duplicate", "skipped", "error", "needs_confirmation", "paused",
+];
 
 let idCounter = 0;
 function newId() {
@@ -51,6 +57,7 @@ const STEP_LABELS: Record<DbUploadStatus, string> = {
   skipped: "Not a product",
   error: "Error",
   needs_confirmation: "Awaiting confirmation",
+  paused: "Paused",
 };
 
 const IN_PROGRESS_STATUSES: DbUploadStatus[] = [
@@ -161,6 +168,8 @@ function StatusBadge({ item }: { item: DbUploadItem }) {
     bg = "#C92A2A";
   } else if (item.status === "needs_confirmation") {
     bg = "#E67700"; // orange — awaiting user decision
+  } else if (item.status === "paused") {
+    bg = "#5C7CFA"; // indigo — paused, waiting for resume
   }
 
   return (
@@ -227,6 +236,10 @@ export default function DbUploadView({ onBack }: Props) {
   const [clearingCache, setClearingCache] = useState(false);
   const [cacheCleared, setCacheCleared] = useState<number | null>(null);
   const [queuedCount, setQueuedCount] = useState(0);
+  const [isPausing, setIsPausing] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const pausedPathsRef = useRef<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queueRef = useRef<string[]>([]);
   const processingRef = useRef(false);
@@ -311,10 +324,12 @@ export default function DbUploadView({ onBack }: Props) {
           embedding: u.embedding ?? item.embedding,
         };
       }));
-    }, 100);
+    }, 300);
 
     const unsubComplete = window.ufm.onDbBatchComplete((data: DbBatchCompleteEvent) => {
       processingRef.current = false;
+      setIsProcessing(false);
+      setIsPausing(false);
 
       // Flush any buffered progress updates immediately
       if (pendingUpdatesRef.current.size > 0) {
@@ -342,22 +357,39 @@ export default function DbUploadView({ onBack }: Props) {
         skipped: prev.skipped + (data.skipped ?? 0),
         errors: prev.errors + (data.errors ?? 0),
       }));
-      const terminal: DbUploadStatus[] = ["done", "duplicate", "skipped", "analyzed", "error", "needs_confirmation"];
-      // If batch errored or any item is still in-progress, mark stuck items as error
-      const errMsg = data.error ?? "Processing did not complete";
-      setItems((prev) =>
-        prev.map((item) =>
-          !terminal.includes(item.status)
-            ? { ...item, status: "error" as const, error: item.error ?? errMsg }
-            : item
-        )
-      );
-      if (data.error) console.error("[DbUploadView] batch failed:", data.error);
-      // Refresh DB and quota status
+
+      // "paused" is terminal so a second stop can't clobber already-paused items
+      const terminal: DbUploadStatus[] = ["done", "duplicate", "skipped", "analyzed", "error", "needs_confirmation", "paused"];
+
+      if (data.stopped) {
+        // User paused — mark remaining in-flight items as paused, stash paths for resume
+        const stuckPaths: string[] = [];
+        setItems((prev) =>
+          prev.map((item) => {
+            if (!terminal.includes(item.status)) {
+              stuckPaths.push(item.path);
+              return { ...item, status: "paused" as const, error: undefined };
+            }
+            return item;
+          })
+        );
+        pausedPathsRef.current = [...pausedPathsRef.current, ...stuckPaths];
+        setIsPaused(true);
+      } else {
+        const errMsg = data.error ?? "Processing did not complete";
+        setItems((prev) =>
+          prev.map((item) =>
+            !terminal.includes(item.status)
+              ? { ...item, status: "error" as const, error: item.error ?? errMsg }
+              : item
+          )
+        );
+        if (data.error) console.error("[DbUploadView] batch failed:", data.error);
+        drainQueue();
+      }
+
       refreshDbConnection();
       refreshQuota();
-      // Drain next batch if queued
-      drainQueue();
     });
 
     return () => {
@@ -372,6 +404,7 @@ export default function DbUploadView({ onBack }: Props) {
     if (queueRef.current.length === 0) return;
     const batchPaths = queueRef.current.splice(0, CHUNK_SIZE);
     processingRef.current = true;
+    setIsProcessing(true);
     const batchItems: DbUploadItem[] = batchPaths.map((p) => ({
       id: newId(), path: p, status: "pending" as const,
     }));
@@ -380,9 +413,39 @@ export default function DbUploadView({ onBack }: Props) {
     window.ufm.startDbBatch(batchPaths).catch((err: Error) => {
       console.error("[DbUploadView] startDbBatch error:", err);
       processingRef.current = false;
+      setIsProcessing(false);
       drainQueue();
     });
   }, []);
+
+  const handlePause = useCallback(() => {
+    setIsPausing(true);
+    window.ufm.stopDbBatch().catch(() => {});
+  }, []);
+
+  const handleResume = useCallback(() => {
+    const paths = pausedPathsRef.current;
+    pausedPathsRef.current = [];
+    setIsPaused(false);
+    // Flip paused items back to pending in place — no duplicate entries added to list
+    setItems((prev) =>
+      prev.map((item) =>
+        item.status === "paused" ? { ...item, status: "pending" as const } : item
+      )
+    );
+    if (paths.length > 0) {
+      processingRef.current = true;
+      setIsProcessing(true);
+      window.ufm.startDbBatch(paths).catch((err: Error) => {
+        console.error("[DbUploadView] resume startDbBatch error:", err);
+        processingRef.current = false;
+        setIsProcessing(false);
+        drainQueue();
+      });
+    } else {
+      drainQueue();
+    }
+  }, [drainQueue]);
 
   const handleFilesAdded = useCallback(
     (filePaths: string[]) => {
@@ -432,9 +495,20 @@ export default function DbUploadView({ onBack }: Props) {
 
   const pendingCount = items.filter((i) => i.status === "pending").length;
   const doneCount = items.filter((i) => i.status === "done").length;
+  const needsConfirmationItems = useMemo(
+    () => items.filter((i) => i.status === "needs_confirmation"),
+    [items]
+  );
+  const processedItems = useMemo(
+    () => [...items.filter((i) => i.status !== "needs_confirmation")].reverse().slice(0, MAX_VISIBLE),
+    [items]
+  );
+  const processedTotalCount = items.filter((i) => i.status !== "needs_confirmation").length;
+  const processedHiddenCount = Math.max(0, processedTotalCount - MAX_VISIBLE);
 
   const [confirmingIds, setConfirmingIds] = useState<Set<string>>(new Set());
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [processedExpanded, setProcessedExpanded] = useState(true);
 
   const handleConfirmAdd = useCallback(
     async (item: DbUploadItem) => {
@@ -516,7 +590,7 @@ export default function DbUploadView({ onBack }: Props) {
   }, [refreshDbConnection]);
 
   return (
-    <div style={{ maxWidth: 960, margin: "0 auto", padding: "0 16px 40px" }}>
+    <div style={{ padding: "0 24px 40px" }}>
       {/* Keyframe for spinner */}
       <style>{`
         @keyframes ufm-spin {
@@ -565,6 +639,8 @@ export default function DbUploadView({ onBack }: Props) {
             onRefresh={refreshDbConnection}
           />
           {quota && <QuotaMeter quota={quota} loading={quotaLoading} onClick={refreshQuota} />}
+          <TestGeminiButton />
+          <CleanMessyTitlesButton onComplete={refreshDbConnection} />
           <ReembedButton />
           <ScanNonProductsButton onComplete={refreshDbConnection} />
           <SyncButton onSyncComplete={refreshDbConnection} />
@@ -627,311 +703,332 @@ export default function DbUploadView({ onBack }: Props) {
       {activeTab === "today" ? <TodaysSavesPanel /> : null}
       {activeTab === "search" ? <ProductSearchPanel /> : null}
 
-      {/* Body — two columns (Upload tab) */}
-      <div style={{ display: activeTab === "upload" ? "flex" : "none", gap: 24, alignItems: "flex-start" }}>
-        {/* Left — drop zone */}
-        <div style={{ flex: "0 0 38%", minWidth: 0 }}>
-          <div
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
+      {/* Body — Upload tab */}
+      <div style={{ display: activeTab === "upload" ? "block" : "none" }}>
+        {/* Compact drop bar */}
+        <div
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 14,
+            padding: "12px 16px",
+            marginBottom: 16,
+            border: `2px dashed ${isDragging ? "#228BE6" : "#CED4DA"}`,
+            borderRadius: 10,
+            background: isDragging ? "#E7F5FF" : "#FAFAFA",
+            transition: "all 0.15s ease",
+            userSelect: "none",
+          }}
+        >
+          <span style={{ fontSize: 22 }}>📁</span>
+          <span style={{ fontWeight: 600, fontSize: 14, color: "#343A40", whiteSpace: "nowrap" }}>
+            Drop images or folders here
+          </span>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
             style={{
-              border: `2px dashed ${isDragging ? "#228BE6" : "#CED4DA"}`,
-              borderRadius: 12,
-              padding: "40px 20px",
-              textAlign: "center",
-              background: isDragging ? "#E7F5FF" : "#FAFAFA",
-              transition: "all 0.15s ease",
-              userSelect: "none",
+              padding: "5px 12px", fontSize: 12, fontWeight: 600,
+              border: "1px solid #CED4DA", borderRadius: 6,
+              background: "#fff", color: "#495057", cursor: "pointer", whiteSpace: "nowrap",
             }}
           >
-            <div style={{ fontSize: 40, marginBottom: 12 }}>📁</div>
-            <div style={{ fontWeight: 600, fontSize: 15, color: "#343A40", marginBottom: 6 }}>
-              Drop images or folders here
-            </div>
-            <div style={{ fontSize: 13, color: "#868E96", marginBottom: 14 }}>
-              or pick files / folders below
-            </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+            Pick Files
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); handlePickFolder(); }}
+            style={{
+              padding: "5px 12px", fontSize: 12, fontWeight: 600,
+              border: "1px solid #228BE6", borderRadius: 6,
+              background: "#E7F5FF", color: "#1971C2", cursor: "pointer", whiteSpace: "nowrap",
+            }}
+          >
+            Pick Folder
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept="image/*"
+            style={{ display: "none" }}
+            onChange={handleFileInputChange}
+          />
+          {/* Stats + pause/resume — pushed to the right */}
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12, fontSize: 13, color: "#868E96" }}>
+            {queuedCount > 0 && (
+              <span style={{ color: "#1971C2", fontWeight: 600, whiteSpace: "nowrap" }}>
+                {queuedCount.toLocaleString()} queued
+              </span>
+            )}
+            {items.length > 0 && (
+              <span style={{ whiteSpace: "nowrap" }}>
+                {pendingCount > 0
+                  ? `${pendingCount} processing • ${doneCount} done`
+                  : `${doneCount} of ${items.length} done`}
+              </span>
+            )}
+            {isPaused ? (
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+                onClick={handleResume}
                 style={{
-                  padding: "6px 14px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  border: "1px solid #CED4DA",
-                  borderRadius: 7,
-                  background: "#fff",
-                  color: "#495057",
-                  cursor: "pointer",
+                  padding: "4px 14px", fontSize: 12, fontWeight: 700,
+                  border: "1px solid #5C7CFA", borderRadius: 6,
+                  background: "#EDF2FF", color: "#3B5BDB", cursor: "pointer",
                 }}
               >
-                Pick Files
+                ▶ Resume
               </button>
+            ) : (isProcessing || queuedCount > 0) ? (
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); handlePickFolder(); }}
+                onClick={handlePause}
+                disabled={isPausing}
                 style={{
-                  padding: "6px 14px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  border: "1px solid #228BE6",
-                  borderRadius: 7,
-                  background: "#E7F5FF",
-                  color: "#1971C2",
-                  cursor: "pointer",
+                  padding: "4px 14px", fontSize: 12, fontWeight: 700,
+                  border: "1px solid #CED4DA", borderRadius: 6,
+                  background: isPausing ? "#F1F3F5" : "#F8F9FA",
+                  color: isPausing ? "#ADB5BD" : "#495057",
+                  cursor: isPausing ? "default" : "pointer",
                 }}
               >
-                Pick Folder
+                {isPausing ? "Pausing…" : "⏸ Pause"}
               </button>
-            </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="image/*"
-              style={{ display: "none" }}
-              onChange={handleFileInputChange}
-            />
+            ) : null}
           </div>
-
-          {(items.length > 0 || queuedCount > 0) && (
-            <div style={{ marginTop: 14, fontSize: 13, color: "#868E96", textAlign: "center" }}>
-              {queuedCount > 0 && (
-                <div style={{ marginBottom: 4, color: "#1971C2", fontWeight: 600 }}>
-                  {queuedCount.toLocaleString()} images queued
-                </div>
-              )}
-              {items.length > 0 && (
-                <div>
-                  {pendingCount > 0
-                    ? `${pendingCount} processing • ${doneCount} done`
-                    : `${doneCount} of ${items.length} done`}
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
-        {/* Right — status list */}
+        {/* Full-width status list */}
         <div
           style={{
-            flex: "1 1 0",
-            minWidth: 0,
-            maxHeight: 520,
+            maxHeight: 560,
             overflowY: "auto",
             border: "1px solid #E9ECEF",
             borderRadius: 10,
           }}
         >
           {items.length === 0 ? (
-            <div
-              style={{
-                padding: 40,
-                textAlign: "center",
-                color: "#ADB5BD",
-                fontSize: 14,
-              }}
-            >
+            <div style={{ padding: 40, textAlign: "center", color: "#ADB5BD", fontSize: 14 }}>
               No images added yet
             </div>
           ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ background: "#F8F9FA", borderBottom: "1px solid #E9ECEF" }}>
-                  <th style={{ padding: "8px 12px", textAlign: "left", fontSize: 12, color: "#868E96", fontWeight: 600, width: 52 }}>
-                    Thumb
-                  </th>
-                  <th style={{ padding: "8px 12px", textAlign: "left", fontSize: 12, color: "#868E96", fontWeight: 600 }}>
-                    File / Title
-                  </th>
-                  <th style={{ padding: "8px 12px", textAlign: "right", fontSize: 12, color: "#868E96", fontWeight: 600, width: 160 }}>
-                    Status
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...items].reverse().map((item) => (
-                  <tr
-                    key={item.id}
+            <>
+              {needsConfirmationItems.length > 0 && (
+                <>
+                  <div style={{
+                    padding: "9px 14px",
+                    background: "#FFF9DB",
+                    borderBottom: "2px solid #FAB005",
+                    display: "flex", alignItems: "center", gap: 8,
+                    position: "sticky", top: 0, zIndex: 1,
+                  }}>
+                    <span style={{ fontSize: 15 }}>⚠</span>
+                    <span style={{ fontWeight: 700, fontSize: 13, color: "#E67700" }}>
+                      {needsConfirmationItems.length} product{needsConfirmationItems.length !== 1 ? "s" : ""} need your review
+                    </span>
+                    <span style={{ fontSize: 12, color: "#F08C00", marginLeft: 4 }}>
+                      — could not be identified or processed automatically
+                    </span>
+                  </div>
+                  <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                    <colgroup>
+                      <col style={{ width: 56 }} />
+                      <col />
+                      <col style={{ width: 200 }} />
+                    </colgroup>
+                    <tbody>
+                      {needsConfirmationItems.map((item) => (
+                        <tr key={item.id} style={{
+                          borderBottom: "1px solid #FFE8A3",
+                          verticalAlign: "middle",
+                          background: "#FFFBEB",
+                        }}>
+                          <td style={{ padding: "10px 12px" }}>
+                            <img
+                              src={`file://${item.path}`}
+                              loading="lazy"
+                              alt=""
+                              style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 6, background: "#F1F3F5", display: "block" }}
+                              onError={(e) => { (e.target as HTMLImageElement).style.visibility = "hidden"; }}
+                            />
+                          </td>
+                          <td style={{ padding: "10px 12px" }}>
+                            <div style={{ fontWeight: 600, fontSize: 13, color: "#212529", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.path}>
+                              {item.path.split(/[/\\]/).pop()}
+                            </div>
+                            {item.parsed?.ocrText && (
+                              <div style={{ fontSize: 11, color: "#868E96", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                OCR: {item.parsed.ocrText}
+                              </div>
+                            )}
+                            {item.error && !item.parsed?.ocrText && (
+                              <div style={{ fontSize: 11, color: "#C92A2A", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {item.error}
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: "10px 12px", textAlign: "right" }}>
+                            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmAdd(item)}
+                                disabled={confirmingIds.has(item.id)}
+                                style={{
+                                  padding: "5px 14px", borderRadius: 6, border: "none",
+                                  background: confirmingIds.has(item.id) ? "#ADB5BD" : "#2F9E44",
+                                  color: "#fff", fontSize: 12, fontWeight: 600,
+                                  cursor: confirmingIds.has(item.id) ? "default" : "pointer",
+                                }}
+                              >
+                                {confirmingIds.has(item.id) ? "Saving…" : "Add to DB"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmSkip(item)}
+                                disabled={confirmingIds.has(item.id)}
+                                style={{
+                                  padding: "5px 14px", borderRadius: 6,
+                                  border: "1px solid #CED4DA", background: "#fff",
+                                  color: "#495057", fontSize: 12, fontWeight: 600,
+                                  cursor: confirmingIds.has(item.id) ? "default" : "pointer",
+                                }}
+                              >
+                                Skip
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+
+              {/* ── Section B: Processed (collapsible) ───────────────── */}
+              {processedTotalCount > 0 && (
+                <>
+                  <div
+                    onClick={() => setProcessedExpanded((v) => !v)}
                     style={{
-                      borderBottom: "1px solid #F1F3F5",
-                      verticalAlign: "middle",
+                      padding: "7px 14px",
+                      background: "#F8F9FA",
+                      borderBottom: processedExpanded ? "1px solid #E9ECEF" : "none",
+                      borderTop: needsConfirmationItems.length > 0 ? "2px solid #DEE2E6" : "none",
+                      display: "flex", alignItems: "center", gap: 8,
+                      cursor: "pointer", userSelect: "none",
+                      position: "sticky", top: needsConfirmationItems.length > 0 ? 38 : 0, zIndex: 1,
                     }}
                   >
-                    {/* Thumbnail */}
-                    <td style={{ padding: "8px 12px" }}>
-                      <img
-                        src={`file://${item.path}`}
-                        alt=""
-                        style={{
-                          width: 40,
-                          height: 40,
-                          objectFit: "cover",
-                          borderRadius: 5,
-                          background: "#F1F3F5",
-                        }}
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = "none";
-                        }}
-                      />
-                    </td>
-
-                    {/* Title / path / parsed metadata */}
-                    <td style={{ padding: "8px 12px" }}>
-                      {/* Show final title (post-save) or parsed titles from Gemini */}
-                      {item.title ? (
-                        <div style={{ fontWeight: 600, fontSize: 13, color: "#212529" }}>
-                          {item.title}
-                        </div>
-                      ) : item.status === "needs_confirmation" ? (
-                        <>
-                          <div style={{ fontWeight: 600, fontSize: 13, color: "#E67700" }}>
-                            Could not parse — confirm if product
-                          </div>
-                          <div
-                            style={{
-                              fontSize: 12,
-                              color: "#495057",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                              maxWidth: 280,
-                              marginTop: 2,
-                            }}
-                            title={item.path}
-                          >
-                            {item.path.split("/").pop()}
-                          </div>
-                        </>
-                      ) : item.parsed && (item.parsed.englishTitle || item.parsed.cleanTitle) ? (
-                        <>
-                          <div style={{ fontWeight: 600, fontSize: 13, color: "#212529" }}>
-                            {item.parsed.englishTitle || item.parsed.cleanTitle}
-                          </div>
-                          {item.parsed.chineseTitle && (
-                            <div style={{ fontSize: 12, color: "#495057" }}>
-                              {item.parsed.chineseTitle}
-                            </div>
-                          )}
-                          <div style={{ display: "flex", gap: 6, marginTop: 3, flexWrap: "wrap" }}>
-                            {item.parsed.brand && (
-                              <MetaChip label={item.parsed.brand} />
-                            )}
-                            {item.parsed.size && (
-                              <MetaChip label={item.parsed.size} />
-                            )}
-                            {item.parsed.category && (
-                              <MetaChip label={item.parsed.category} color="#5C6BC0" />
-                            )}
-                          </div>
-                        </>
-                      ) : (
-                        <div
-                          style={{
-                            fontSize: 12,
-                            color: "#495057",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                            maxWidth: 280,
-                          }}
-                          title={item.path}
-                        >
-                          {item.path.split("/").pop()}
+                    <span style={{ fontSize: 11, color: "#868E96" }}>{processedExpanded ? "▾" : "▸"}</span>
+                    <span style={{ fontWeight: 600, fontSize: 12, color: "#495057" }}>
+                      {processedTotalCount.toLocaleString()} processed
+                    </span>
+                    <span style={{ fontSize: 11, color: "#ADB5BD" }}>
+                      {doneCount > 0 && `${doneCount} added`}
+                      {doneCount > 0 && (items.filter(i => i.status === "duplicate").length > 0 || items.filter(i => i.status === "skipped").length > 0 || items.filter(i => i.status === "error").length > 0) ? " · " : ""}
+                      {items.filter(i => i.status === "duplicate").length > 0 && `${items.filter(i => i.status === "duplicate").length} dupes`}
+                      {items.filter(i => i.status === "skipped").length > 0 && ` · ${items.filter(i => i.status === "skipped").length} skipped`}
+                      {items.filter(i => i.status === "error").length > 0 && ` · ${items.filter(i => i.status === "error").length} failed`}
+                    </span>
+                  </div>
+                  {processedExpanded && (
+                    <>
+                      {processedHiddenCount > 0 && (
+                        <div style={{ padding: "5px 12px", background: "#F1F3F5", borderBottom: "1px solid #E9ECEF", fontSize: 11, color: "#868E96", textAlign: "center" }}>
+                          {processedHiddenCount.toLocaleString()} older items above — all counted in session stats
                         </div>
                       )}
-                      <div
-                        style={{
-                          fontSize: 11,
-                          color: "#ADB5BD",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          maxWidth: 280,
-                          marginTop: 2,
-                        }}
-                        title={item.path}
-                      >
-                        {item.path.split("/").pop()}
-                      </div>
-                      {item.error && (
-                        <div style={{ fontSize: 11, color: "#C92A2A", marginTop: 2 }}>
-                          {item.error}
-                        </div>
-                      )}
-                    </td>
-
-                    {/* Status */}
-                    <td style={{ padding: "8px 12px", textAlign: "right" }}>
-                      {item.status === "needs_confirmation" ? (
-                        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                          <button
-                            type="button"
-                            onClick={() => handleConfirmAdd(item)}
-                            disabled={confirmingIds.has(item.id)}
-                            style={{
-                              padding: "4px 12px",
-                              borderRadius: 6,
-                              border: "none",
-                              background: confirmingIds.has(item.id) ? "#ADB5BD" : "#2F9E44",
-                              color: "#fff",
-                              fontSize: 12,
-                              fontWeight: 600,
-                              cursor: confirmingIds.has(item.id) ? "default" : "pointer",
-                            }}
-                          >
-                            {confirmingIds.has(item.id) ? "Saving…" : "Add to DB"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleConfirmSkip(item)}
-                            disabled={confirmingIds.has(item.id)}
-                            style={{
-                              padding: "4px 12px",
-                              borderRadius: 6,
-                              border: "1px solid #CED4DA",
-                              background: "#fff",
-                              color: "#495057",
-                              fontSize: 12,
-                              fontWeight: 600,
-                              cursor: confirmingIds.has(item.id) ? "default" : "pointer",
-                            }}
-                          >
-                            Skip
-                          </button>
-                        </div>
-                      ) : item.status === "done" && item.productId ? (
-                        <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
-                          <StatusBadge item={item} />
-                          <button
-                            type="button"
-                            disabled={deletingId === item.id}
-                            onClick={() => handleDeleteProduct(item)}
-                            title="Delete from DB"
-                            style={{
-                              padding: "3px 7px",
-                              borderRadius: 5,
-                              border: "1px solid #FFB3B3",
-                              background: deletingId === item.id ? "#F1F3F5" : "#FFF5F5",
-                              color: deletingId === item.id ? "#ADB5BD" : "#C92A2A",
-                              fontSize: 13,
-                              cursor: deletingId === item.id ? "default" : "pointer",
-                              lineHeight: 1,
-                            }}
-                          >
-                            🗑
-                          </button>
-                        </div>
-                      ) : (
-                        <StatusBadge item={item} />
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                        <colgroup>
+                          <col style={{ width: 52 }} />
+                          <col />
+                          <col style={{ width: 190 }} />
+                        </colgroup>
+                        <tbody>
+                          {processedItems.map((item) => (
+                            <tr key={item.id} style={{ borderBottom: "1px solid #F1F3F5", verticalAlign: "middle" }}>
+                              <td style={{ padding: "8px 12px" }}>
+                                {TERMINAL_STATUSES.includes(item.status) ? (
+                                  <img
+                                    src={`file://${item.path}`}
+                                    loading="lazy"
+                                    alt=""
+                                    style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 5, background: "#F1F3F5" }}
+                                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                                  />
+                                ) : (
+                                  <div style={{ width: 40, height: 40, borderRadius: 5, background: "#F1F3F5" }} />
+                                )}
+                              </td>
+                              <td style={{ padding: "8px 12px", overflow: "hidden" }}>
+                                {item.title ? (
+                                  <div style={{ fontWeight: 600, fontSize: 13, color: "#212529", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {item.title}
+                                  </div>
+                                ) : item.parsed && (item.parsed.englishTitle || item.parsed.cleanTitle) ? (
+                                  <>
+                                    <div style={{ fontWeight: 600, fontSize: 13, color: "#212529", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                      {item.parsed.englishTitle || item.parsed.cleanTitle}
+                                    </div>
+                                    {item.parsed.chineseTitle && (
+                                      <div style={{ fontSize: 12, color: "#495057", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                        {item.parsed.chineseTitle}
+                                      </div>
+                                    )}
+                                    <div style={{ display: "flex", gap: 6, marginTop: 3, flexWrap: "wrap" }}>
+                                      {item.parsed.brand && <MetaChip label={item.parsed.brand} />}
+                                      {item.parsed.size && <MetaChip label={item.parsed.size} />}
+                                      {item.parsed.category && <MetaChip label={item.parsed.category} color="#5C6BC0" />}
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div style={{ fontSize: 12, color: "#495057", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.path}>
+                                    {item.path.split(/[/\\]/).pop()}
+                                  </div>
+                                )}
+                                {item.status === "error" && (
+                                  <div style={{ fontSize: 11, color: "#C92A2A", marginTop: 2 }}>
+                                    Network failure
+                                  </div>
+                                )}
+                              </td>
+                              <td style={{ padding: "8px 12px", textAlign: "right" }}>
+                                {item.status === "done" && item.productId ? (
+                                  <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
+                                    <StatusBadge item={item} />
+                                    <button
+                                      type="button"
+                                      disabled={deletingId === item.id}
+                                      onClick={() => handleDeleteProduct(item)}
+                                      title="Delete from DB"
+                                      style={{
+                                        padding: "3px 7px", borderRadius: 5,
+                                        border: "1px solid #FFB3B3",
+                                        background: deletingId === item.id ? "#F1F3F5" : "#FFF5F5",
+                                        color: deletingId === item.id ? "#ADB5BD" : "#C92A2A",
+                                        fontSize: 13, cursor: deletingId === item.id ? "default" : "pointer", lineHeight: 1,
+                                      }}
+                                    >
+                                      🗑
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <StatusBadge item={item} />
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </>
+                  )}
+                </>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -1059,6 +1156,77 @@ function QuotaMeter({
         })}
       </div>
     </button>
+  );
+}
+
+type CleanPhase = "idle" | "running" | "done";
+
+function CleanMessyTitlesButton({ onComplete }: { onComplete: () => void }) {
+  const [phase, setPhase] = useState<CleanPhase>("idle");
+  const [progress, setProgress] = useState<{ current: number; total: number; title: string } | null>(null);
+  const [result, setResult] = useState<{ deleted: number; total: number; errors: number; error?: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsubProgress = window.ufm.onCleanMessyTitlesProgress((data) => setProgress(data));
+    const unsubComplete = window.ufm.onCleanMessyTitlesComplete((data) => {
+      setPhase("done");
+      setResult(data);
+      setProgress(null);
+      if (data.deleted > 0) onComplete();
+    });
+    return () => { unsubProgress(); unsubComplete(); };
+  }, [onComplete]);
+
+  const handleClick = () => {
+    if (!confirm("Delete all products with unreadable hash titles from the database?\n\nThis permanently removes them from Firestore and Storage.")) return;
+    setPhase("running");
+    setResult(null);
+    setError(null);
+    setProgress(null);
+    window.ufm.cleanMessyTitles().catch((err: Error) => {
+      setError(err?.message ?? "Cleanup failed");
+      setPhase("idle");
+    });
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={phase === "running"}
+        title="Delete products whose title is a raw hash/filename with no readable name"
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 6,
+          padding: "6px 12px", borderRadius: 8, border: "1px solid #DEE2E6",
+          background: "#fff", cursor: phase === "running" ? "default" : "pointer",
+          fontSize: 12, fontWeight: 600, color: "#C92A2A",
+          opacity: phase === "running" ? 0.7 : 1,
+        }}
+      >
+        {phase === "running" && (
+          <span style={{
+            display: "inline-block", width: 10, height: 10,
+            border: "2px solid #CED4DA", borderTopColor: "#C92A2A",
+            borderRadius: "50%", animation: "ufm-spin 0.7s linear infinite",
+          }} />
+        )}
+        Clean Messy Titles
+      </button>
+      {phase === "running" && progress && (
+        <span style={{ fontSize: 11, color: "#868E96", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {progress.current}/{progress.total} — {progress.title}
+        </span>
+      )}
+      {phase === "done" && result && (
+        <span style={{ fontSize: 11, color: result.deleted > 0 ? "#2F9E44" : "#868E96", fontWeight: 600 }}>
+          {result.deleted === 0 ? "None found" : `${result.deleted} deleted`}
+          {result.errors > 0 && <span style={{ color: "#C92A2A" }}> · {result.errors} err</span>}
+        </span>
+      )}
+      {error && <span style={{ fontSize: 11, color: "#C92A2A" }}>{error}</span>}
+    </div>
   );
 }
 
@@ -1589,6 +1757,69 @@ function ProductSearchPanel() {
             ))}
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+function TestGeminiButton() {
+  const [phase, setPhase] = useState<"idle" | "testing" | "done">("idle");
+  const [result, setResult] = useState<{ vision: boolean | null; embed: boolean | null; label: string } | null>(null);
+
+  const handleTest = async () => {
+    setPhase("testing");
+    setResult(null);
+    try {
+      const r = await window.ufm.testGemini();
+      const visionOk = r.vision?.ok ?? false;
+      const embedOk = r.embed?.ok ?? false;
+      let label = "";
+      if (r.error) label = r.error;
+      else if (!r.apiKeyPresent) label = "No API key";
+      else if (visionOk && embedOk) label = "Vision ✓  Embed ✓";
+      else {
+        const visionErr = r.vision?.body || r.vision?.error || (r.vision?.status ? `HTTP ${r.vision.status}` : "fail");
+        const embedErr  = r.embed?.body  || r.embed?.error  || (r.embed?.status  ? `HTTP ${r.embed.status}`  : "fail");
+        label = [!visionOk && `Vision: ${visionErr}`, !embedOk && `Embed: ${embedErr}`].filter(Boolean).join(" | ");
+      }
+      setResult({ vision: visionOk, embed: embedOk, label });
+    } catch (err: any) {
+      setResult({ vision: null, embed: null, label: err?.message ?? "Test failed" });
+    } finally {
+      setPhase("done");
+    }
+  };
+
+  const allOk = result?.vision && result?.embed;
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <button
+        type="button"
+        onClick={handleTest}
+        disabled={phase === "testing"}
+        title="Test Gemini API connectivity — results shown in backend terminal"
+        style={{
+          padding: "6px 12px", borderRadius: 8, border: "1px solid #DEE2E6",
+          background: "#fff", cursor: phase === "testing" ? "default" : "pointer",
+          fontSize: 12, fontWeight: 600, color: "#495057",
+          opacity: phase === "testing" ? 0.7 : 1,
+          display: "inline-flex", alignItems: "center", gap: 6,
+        }}
+      >
+        {phase === "testing" && (
+          <span style={{
+            display: "inline-block", width: 10, height: 10,
+            border: "2px solid #CED4DA", borderTopColor: "#228BE6",
+            borderRadius: "50%", animation: "ufm-spin 0.7s linear infinite",
+          }} />
+        )}
+        Test Gemini
+      </button>
+      {phase === "done" && result && (
+        <span style={{ fontSize: 11, fontWeight: 600, color: allOk ? "#2F9E44" : "#C92A2A", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {result.label}
+        </span>
       )}
     </div>
   );

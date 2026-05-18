@@ -1,21 +1,87 @@
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import { Worker } from "worker_threads";
+import { fileURLToPath } from "url";
 import { getStorage } from "firebase-admin/storage";
 import { db } from "../ingestion/firebase.js";
 import { getImageEmbedding, embedText, classifyImageAsProduct } from "../ingestion/imageEmbeddingService.js";
-import { computePHash, hammingDistance } from "../ingestion/pHashService.js";
-import { buildSearchTokens, invalidateEmbeddingCache } from "../ingestion/searchService.js";
+import { hammingDistance } from "../ingestion/pHashService.js";
+import { buildSearchTokens, invalidateEmbeddingCache, buildMatchKeys } from "../ingestion/searchService.js";
 import { FIRESTORE_COLLECTION } from "../config/vectorConfig.js";
 import { assertCanRead, assertCanWrite, trackReads, trackWrites, trackDeletes, trackStorageUpload, getQuotaStatus } from "./quotaTracker.js";
+import { getResourceProfile } from "../resourceProfile.js";
+
+const _workerPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "../ingestion/pHashWorker.js");
+
+let _pHashWorker = null;
+
+function getPHashWorker() {
+  if (_pHashWorker) return _pHashWorker;
+  const w = new Worker(_workerPath);
+  w.once("exit", () => { if (_pHashWorker === w) _pHashWorker = null; });
+  _pHashWorker = w;
+  return w;
+}
+
+function computePHashInWorker(imagePath) {
+  return new Promise((resolve, reject) => {
+    const w = getPHashWorker();
+    const onMsg = (msg) => {
+      w.off("message", onMsg);
+      w.off("error", onErr);
+      msg.error ? reject(new Error(msg.error)) : resolve(msg.hash);
+    };
+    const onErr = (err) => {
+      w.off("message", onMsg);
+      w.off("error", onErr);
+      if (_pHashWorker === w) _pHashWorker = null;
+      reject(err);
+    };
+    w.on("message", onMsg);
+    w.on("error", onErr);
+    w.postMessage({ imagePath });
+  });
+}
 
 const PHASH_THRESHOLD = 10;
 
-/** Optional delay (ms) between images. Set UFM_BATCH_DELAY_MS=2000 for a 2s pause. */
-const BATCH_DELAY_MS = Math.max(0, parseInt(process.env.UFM_BATCH_DELAY_MS || "0", 10) || 0);
+let _stopRequested = false;
+
+/** Signal the running batch to stop after the current image finishes. */
+export function requestBatchStop() {
+  _stopRequested = true;
+}
 
 function sleep(ms) {
   return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();
+}
+
+/** High-resolution elapsed ms between calls (Node performance.now). */
+function createLapTimer() {
+  let t = performance.now();
+  return () => {
+    const n = performance.now();
+    const d = n - t;
+    t = n;
+    return d;
+  };
+}
+
+function roundMs(ms) {
+  return Math.round(Number(ms) || 0);
+}
+
+async function maybePauseForRss() {
+  const mb = getResourceProfile().batchPauseIfRssMb;
+  if (!mb) return;
+  const rssMb = process.memoryUsage().rss / (1024 * 1024);
+  if (rssMb > mb) {
+    console.warn(
+      `[batchIngestToDB] Main RSS ~${rssMb.toFixed(0)}MB exceeds UFM_BATCH_PAUSE_RSS_MB=${mb} — pausing 2.5s`
+    );
+    await sleep(2500);
+  }
 }
 
 /**
@@ -81,6 +147,8 @@ async function uploadToStorage(bucket, productId, imagePath) {
  * @param {(data: object) => void} emitComplete  Called once when batch finishes.
  */
 export async function processDbBatch(paths, emitProgress, emitComplete) {
+  _stopRequested = false;
+  const batchDelayMs = getResourceProfile().batchDelayMs;
   const bucket = getStorage().bucket();
   let added = 0;
   let duplicates = 0;
@@ -98,12 +166,20 @@ export async function processDbBatch(paths, emitProgress, emitComplete) {
     trackReads(1);
     const collectionSize = countSnap.data().count;
 
-    // Now check if we have quota for the full pHash read.
-    assertCanRead(collectionSize);
-    const phashSnap = await db
-      .collection(FIRESTORE_COLLECTION)
-      .select("pHash")
-      .get();
+    const dedupCap = getResourceProfile().pHashDedupMaxDocs;
+    const effectiveLoad = (dedupCap > 0 && collectionSize > dedupCap) ? dedupCap : collectionSize;
+    if (dedupCap > 0 && collectionSize > dedupCap) {
+      console.warn(
+        `[batchIngestToDB] Collection has ${collectionSize} docs; loading only ${dedupCap} recent pHashes ` +
+        `for dedup (UFM_PHASH_DEDUP_MAX_DOCS=${dedupCap}). Set to 0 on normal profile for full dedup.`
+      );
+    }
+    assertCanRead(effectiveLoad);
+    let pHashQuery = db.collection(FIRESTORE_COLLECTION).select("pHash");
+    if (dedupCap > 0 && collectionSize > dedupCap) {
+      pHashQuery = pHashQuery.orderBy("createdAt", "desc").limit(dedupCap);
+    }
+    const phashSnap = await pHashQuery.get();
     trackReads(phashSnap.docs.length);
 
     existingHashes = phashSnap.docs
@@ -122,57 +198,88 @@ export async function processDbBatch(paths, emitProgress, emitComplete) {
   }
 
   for (let i = 0; i < paths.length; i++) {
+    if (_stopRequested) break;
     const imagePath = paths[i];
-    if (i > 0 && BATCH_DELAY_MS > 0) {
-      await sleep(BATCH_DELAY_MS);
+    if (i > 0 && batchDelayMs > 0) {
+      await sleep(batchDelayMs);
     }
+    await maybePauseForRss();
+    let parsed = null;
+    let pHash = null;
+    const iterationStarted = performance.now();
+    let hashingMs = 0;
+    let dedupMs = 0;
+    let analyzingMs = 0;
+    let savingSetMs = 0;
+    let uploadingMs = 0;
+    let savingUpdateMs = 0;
     try {
+      const lap = createLapTimer();
+
       // --- 1. Hash ---
       emitProgress({ path: imagePath, status: "hashing" });
-      const pHash = await computePHash(imagePath);
+      pHash = await computePHashInWorker(imagePath);
+      hashingMs = roundMs(lap());
 
       // --- 2. Dedup ---
       emitProgress({ path: imagePath, status: "dedup" });
       const isDuplicate = existingHashes.some(
         (h) => hammingDistance(h, pHash) <= PHASH_THRESHOLD
       );
+      dedupMs = roundMs(lap());
       if (isDuplicate) {
-        emitProgress({ path: imagePath, status: "duplicate" });
+        emitProgress({
+          path: imagePath,
+          status: "duplicate",
+          pipelineTimingMs: {
+            hashing: hashingMs,
+            dedup: dedupMs,
+            total: hashingMs + dedupMs,
+          },
+        });
         duplicates++;
         continue;
       }
 
       // --- 3. OCR + Metadata + Embedding ---
       emitProgress({ path: imagePath, status: "analyzing" });
-      const { embedding, parsed } = await getImageEmbedding(imagePath);
+      const result = await getImageEmbedding(imagePath);
+      parsed = result.parsed;
+      const embedding = result.embedding;
+      analyzingMs = roundMs(lap());
 
       // Skip non-product images (title cards, banners, text labels, etc.)
       if (parsed.isProduct === false) {
         console.log("[batchIngestToDB] Skipping non-product image:", imagePath);
-        emitProgress({ path: imagePath, status: "skipped", error: "Not a product image" });
+        emitProgress({
+          path: imagePath,
+          status: "skipped",
+          error: "Not a product image",
+          pipelineTimingMs: {
+            hashing: hashingMs,
+            dedup: dedupMs,
+            analyzing: analyzingMs,
+            total: hashingMs + dedupMs + analyzingMs,
+          },
+        });
         skipped++;
         continue;
       }
 
-      // When Gemini (+ DeepSeek fallback) could not return usable parsed data, pause for user confirmation
       const hasMeaningfulParsed =
         (parsed.englishTitle || parsed.cleanTitle || parsed.chineseTitle || parsed.brand || "").trim().length > 0;
       if (!hasMeaningfulParsed) {
-        console.log("[batchIngestToDB] No parsed data from Gemini — awaiting user confirmation:", imagePath);
+        console.log("[batchIngestToDB] Could not identify product — flagging for user review:", imagePath);
         emitProgress({
           path: imagePath,
           status: "needs_confirmation",
-          parsed: {
-            englishTitle: parsed.englishTitle,
-            chineseTitle: parsed.chineseTitle,
-            brand: parsed.brand,
-            size: parsed.size,
-            category: parsed.category,
-            cleanTitle: parsed.cleanTitle,
-            isProduct: parsed.isProduct,
-            ocrText: parsed.ocrText,
+          parsed,
+          pipelineTimingMs: {
+            hashing: hashingMs,
+            dedup: dedupMs,
+            analyzing: analyzingMs,
+            total: hashingMs + dedupMs + analyzingMs,
           },
-          embedding,
         });
         continue;
       }
@@ -194,6 +301,7 @@ export async function processDbBatch(paths, emitProgress, emitComplete) {
 
       const productId = buildProductId(parsed, imagePath);
       const searchTokens = buildSearchTokens(parsed);
+      const matchKeys = buildMatchKeys(parsed.englishTitle, parsed.chineseTitle, parsed.size);
 
       // --- 4a. Write pending doc BEFORE Storage upload ---
       // Each image costs 2 writes: set (pending) + update (active).
@@ -206,17 +314,20 @@ export async function processDbBatch(paths, emitProgress, emitComplete) {
         embeddingModel: Array.isArray(embedding) && embedding.length > 0 ? "gemini-embedding-2" : "",
         pHash,
         searchTokens,
+        matchKeys,
         status: "pending",
         createdAt: Date.now(),
         updatedAt: Date.now(),
       });
       trackWrites(1);
+      savingSetMs = roundMs(lap());
 
       // --- 4b. Upload to Storage ---
       emitProgress({ path: imagePath, status: "uploading" });
       const fileSizeBytes = fs.statSync(imagePath).size;
       const imageInfo = await uploadToStorage(bucket, productId, imagePath);
       trackStorageUpload(fileSizeBytes);
+      uploadingMs = roundMs(lap());
 
       // --- 4c. Flip to active ---
       await db.collection(FIRESTORE_COLLECTION).doc(productId).update({
@@ -227,28 +338,61 @@ export async function processDbBatch(paths, emitProgress, emitComplete) {
         updatedAt: Date.now(),
       });
       trackWrites(1);
+      savingUpdateMs = roundMs(lap());
 
       invalidateEmbeddingCache();
 
       // Prevent intra-batch duplicates
       existingHashes.push(pHash);
 
+      const totalMs =
+        hashingMs + dedupMs + analyzingMs + savingSetMs + uploadingMs + savingUpdateMs;
       emitProgress({
         path: imagePath,
         status: "done",
         productId,
         title: parsed.englishTitle || parsed.cleanTitle || "",
         publicUrl: imageInfo.publicUrl,
+        pipelineTimingMs: {
+          hashing: hashingMs,
+          dedup: dedupMs,
+          analyzing: analyzingMs,
+          savingSet: savingSetMs,
+          uploading: uploadingMs,
+          savingUpdate: savingUpdateMs,
+          total: totalMs,
+        },
       });
       added++;
     } catch (err) {
       console.error("[batchIngestToDB] Error processing", imagePath, err);
-      emitProgress({ path: imagePath, status: "error", error: err.message });
-      errors++;
+      const wallTotal = roundMs(performance.now() - iterationStarted);
+      const partial = {
+        hashing: hashingMs,
+        dedup: dedupMs,
+        ...(analyzingMs > 0 ? { analyzing: analyzingMs } : {}),
+        ...(savingSetMs > 0 ? { savingSet: savingSetMs } : {}),
+        ...(uploadingMs > 0 ? { uploading: uploadingMs } : {}),
+        ...(savingUpdateMs > 0 ? { savingUpdate: savingUpdateMs } : {}),
+        total: wallTotal,
+      };
+      const isQuotaError = err.message?.includes("quota");
+      if (isQuotaError) {
+        emitProgress({ path: imagePath, status: "error", error: err.message, pipelineTimingMs: partial });
+        errors++;
+      } else {
+        emitProgress({
+          path: imagePath,
+          status: "needs_confirmation",
+          parsed,
+          error: err.message,
+          pipelineTimingMs: partial,
+        });
+      }
     }
   }
 
-  emitComplete({ added, duplicates, skipped, errors });
+  emitComplete({ added, duplicates, skipped, errors, stopped: _stopRequested });
 }
 
 /**
@@ -276,7 +420,7 @@ export async function confirmSingleImageToDb(imagePath, parsed) {
   let pHash = null;
   // Optional: check pHash for duplicate
   try {
-    pHash = await computePHash(imagePath);
+    pHash = await computePHashInWorker(imagePath);
     assertCanRead(1);
     const countSnap = await db.collection(FIRESTORE_COLLECTION).count().get();
     trackReads(1);
@@ -299,6 +443,7 @@ export async function confirmSingleImageToDb(imagePath, parsed) {
   try {
     const productId = buildProductId(normalized, imagePath);
     const searchTokens = buildSearchTokens(normalized);
+    const matchKeys = buildMatchKeys(normalized.englishTitle, normalized.chineseTitle, normalized.size);
 
     const embeddingText = [
       normalized.englishTitle,
@@ -319,6 +464,7 @@ export async function confirmSingleImageToDb(imagePath, parsed) {
       embeddingModel: Array.isArray(embedding) && embedding.length > 0 ? "gemini-embedding-2" : "",
       pHash: pHash ?? null,
       searchTokens,
+      matchKeys,
       status: "pending",
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -438,6 +584,55 @@ export async function scanAndRemoveNonProducts(emitProgress, emitComplete) {
   } catch (err) {
     console.error("[scanNonProducts] Fatal error:", err);
     emitComplete({ scanned, deleted, errors: errors + 1, error: err?.message });
+  }
+}
+
+function isMessyTitle(t) {
+  return !t || /^[a-f0-9_\-\.]{16,}$/i.test(t.trim());
+}
+
+/**
+ * Delete all active products whose englishTitle AND chineseTitle are both
+ * hash-like strings (no real human-readable name).
+ */
+export async function cleanMessyTitleProducts(emitProgress, emitComplete) {
+  try {
+    const snap = await db
+      .collection(FIRESTORE_COLLECTION)
+      .where("status", "==", "active")
+      .select("englishTitle", "chineseTitle")
+      .get();
+    trackReads(snap.size);
+
+    const messy = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((d) => isMessyTitle(d.englishTitle) && isMessyTitle(d.chineseTitle));
+
+    const total = messy.length;
+    let deleted = 0;
+    let errors = 0;
+
+    if (total === 0) {
+      emitComplete({ deleted: 0, total: 0, errors: 0 });
+      return;
+    }
+
+    for (let i = 0; i < messy.length; i++) {
+      const doc = messy[i];
+      emitProgress({ current: i + 1, total, title: doc.id });
+      try {
+        await deleteProductFromDb(doc.id);
+        deleted++;
+      } catch (err) {
+        console.error("[cleanMessyTitles] Failed to delete", doc.id, err?.message);
+        errors++;
+      }
+    }
+
+    emitComplete({ deleted, total, errors });
+  } catch (err) {
+    console.error("[cleanMessyTitles] Query failed:", err?.message);
+    emitComplete({ deleted: 0, total: 0, errors: 1, error: err?.message });
   }
 }
 

@@ -18,6 +18,7 @@ import EditorCanvas from "./editor/EditorCanvas";
 import DbSearchModal from "./editor/DbSearchModal";
 import GoogleSearchModal from "./editor/GoogleSearchModal";
 import DiscountDetailsDialog from "./editor/DiscountDetailsDialog";
+import DaysBannerEditDialog from "./editor/DaysBannerEditDialog";
 import SeriesFlavorPicker from "./editor/SeriesFlavorPicker";
 import CheckingPanel from "./editor/CheckingPanel";
 import { loadFlyerTemplateConfig, isCardDepartment, findPageForDepartment } from "./editor/loadFlyerTemplateConfig";
@@ -31,6 +32,7 @@ import SettingsView from "./settings/SettingsView";
 import SetupView from "./settings/SetupView";
 import WorkflowProgressBar from "./components/WorkflowProgressBar";
 import DepartmentSaveProgress from "./components/DepartmentSaveProgress";
+import type { DbBatchProgressEvent, DbPipelineTimingMs } from "./global";
 
 type AppView = "setup" | "home" | "templateSelect" | "queue" | "editor" | "db-upload" | "settings";
 export type DeptSaveEntry = { dept: string; done: number; total: number; status: "saving" | "done" | "error" };
@@ -65,7 +67,7 @@ export default function App() {
   const [discountLabels, setDiscountLabels] = useState<{
     id: string;
     title?: { en: string; zh: string; size: string; regularPrice: string };
-    price?: { display: string; quantity?: number | null; unit?: string; regular?: string };
+    price?: { display: string; quantity?: number | null; unit?: string; regular?: string; days?: string[] };
   }[]>([]);
   const discountLabelsRef = useRef(discountLabels);
   discountLabelsRef.current = discountLabels;
@@ -74,11 +76,16 @@ export default function App() {
   const [userRowCounts, setUserRowCounts] = useState<Record<string, number>>({});
   const [dbSearchItemId, setDbSearchItemId] = useState<string | null>(null);
   const [googleSearchItemId, setGoogleSearchItemId] = useState<string | null>(null);
+  const [batchUpload, setBatchUpload] = useState<{ total: number; processed: number; isActive: boolean } | null>(null);
   const [discountDetailsDialog, setDiscountDetailsDialog] = useState<{
     itemId: string;
     englishTitle: string;
     regularPrice: string;
     salePrice: string;
+  } | null>(null);
+  const [bannerDaysDialog, setBannerDaysDialog] = useState<{
+    itemId: string;
+    currentDays: string[];
   } | null>(null);
   const [seriesPickerItemId, setSeriesPickerItemId] = useState<string | null>(null);
   // Track which series items have already been auto-shown (so we don't re-open after Cancel)
@@ -104,6 +111,9 @@ export default function App() {
     rendererReadyMs: number;
     phases: { whenReady?: number; backendSpawn?: number; backendHealthy?: number; firebase?: number; viteReady?: number; windowCreated?: number; rendererReady?: number };
   } | null>(null);
+  const [libraryPipelineLog, setLibraryPipelineLog] = useState<
+    { id: string; path: string; status: string; timing: DbPipelineTimingMs }[]
+  >([]);
   const editorSyncRunCount = useRef(0);
   const lastViewingJobIdRef = useRef<string | null>(null);
   const templateConfigRef = useRef<any>(null);
@@ -152,6 +162,40 @@ export default function App() {
     });
     return () => { unsubProgress(); unsubComplete(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Batch upload progress — App-level listeners drive the global indicator only
+  useEffect(() => {
+    const TERMINAL = new Set(["done", "duplicate", "skipped", "error"]);
+    const unsubProgress = window.ufm.onDbBatchProgress((d: { status: string }) => {
+      setBatchUpload((prev) => {
+        const base = prev ?? { total: 0, processed: 0, isActive: true };
+        return {
+          isActive: true,
+          total:     d.status === "hashing"      ? base.total + 1     : base.total,
+          processed: TERMINAL.has(d.status)       ? base.processed + 1 : base.processed,
+        };
+      });
+    });
+    const unsubComplete = window.ufm.onDbBatchComplete(() => {
+      setBatchUpload((prev) => (prev ? { ...prev, isActive: false } : null));
+      setTimeout(() => setBatchUpload(null), 3000);
+    });
+    return () => { unsubProgress(); unsubComplete(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Product Library batch: record per-image pipeline timings (main process → IPC).
+  useEffect(() => {
+    const MAX = 24;
+    const unsub = window.ufm.onDbBatchProgress((d: DbBatchProgressEvent) => {
+      const timing = d.pipelineTimingMs;
+      if (!timing) return;
+      const id = `plt_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      setLibraryPipelineLog((prev) =>
+        [{ id, path: d.path, status: d.status, timing }, ...prev].slice(0, MAX)
+      );
+    });
+    return () => unsub();
+  }, []);
 
   // On mount: if we're recovering from a crash, show progress overlay then auto-hide
   useEffect(() => {
@@ -470,80 +514,6 @@ export default function App() {
     }
   }, [view, department, editorQueue, cardLayouts, isDeptCardBased]);
 
-  // Handle department switching in editor view
-  useEffect(() => {
-    if (view !== "editor") return;
-
-    const processingForDept = jobs.find(
-      j => j.department === department && (j.status === "queued" || j.status === "processing")
-    );
-    const completedForDept = jobs.find(
-      j => j.department === department && j.status === "completed"
-    );
-    const draftForDept = jobs.find(
-      j => j.department === department && j.status === "drafting"
-    );
-
-    const jobToLoad =
-      processingForDept ||
-      (draftForDept && draftForDept.images.length > 0 ? draftForDept : null) ||
-      completedForDept;
-
-    if (viewingJob && viewingJob.department !== department) {
-      if (jobToLoad) {
-        setViewingJob(jobToLoad);
-
-        if (jobToLoad.result?.processedImages) {
-          const ingestItems: IngestItem[] = jobToLoad.result.processedImages
-            .filter(img => img.status === "done" && img.result)
-            .map(img => ({
-              id: img.id,
-              path: img.path,
-              status: "done" as const,
-              result: img.result,
-              slotIndex: img.slotIndex,
-            }));
-          loadItems(ingestItems);
-
-          if (jobToLoad.result.discountLabels) {
-            setDiscountLabels(jobToLoad.result.discountLabels);
-          } else {
-            setDiscountLabels([]);
-          }
-          setOriginalDiscounts(
-            jobToLoad.result.processedImages.map((img: any) => img.result?.discount).filter(Boolean)
-          );
-          setVerificationDone(jobToLoad.result?.verificationDone ?? false);
-          setVerificationProgress(jobToLoad.result?.verificationProgress ?? null);
-          setDepartmentLocked(jobToLoad.result?.departmentLocked ?? false);
-          setSlotOverrides(jobToLoad.slotOverrides ?? {});
-          // Load card layouts from job
-          if (jobToLoad.cardLayouts) {
-            setCardLayouts(jobToLoad.cardLayouts);
-          }
-        } else {
-          xlsxItemsLoadedRef.current = false;
-          loadItems([]);
-          setDiscountLabels([]);
-          setOriginalDiscounts([]);
-          setVerificationDone(false);
-          setVerificationProgress(null);
-          setDepartmentLocked(false);
-          setSlotOverrides({});
-        }
-      } else {
-        setViewingJob(null);
-        loadItems([]);
-        setDiscountLabels([]);
-        setOriginalDiscounts([]);
-        setVerificationDone(false);
-        setVerificationProgress(null);
-        setDepartmentLocked(false);
-        setSlotOverrides({});
-      }
-    }
-  }, [department, view, jobs, viewingJob]);
-
   // Sync editor state back to the current job
   useEffect(() => {
     if (view !== "editor" || !viewingJob) return;
@@ -728,6 +698,30 @@ export default function App() {
     setView("editor");
   };
 
+  const handleEditorDepartmentChange = (dept: DepartmentId) => {
+    const processingJob = jobs.find(
+      j => j.department === dept && j.templateId === templateId && (j.status === "queued" || j.status === "processing")
+    );
+    const draftingJob = jobs.find(
+      j => j.department === dept && j.templateId === templateId && j.status === "drafting"
+    );
+    const completedJob = jobs.find(
+      j => j.department === dept && j.templateId === templateId && j.status === "completed"
+    );
+    const jobToOpen = processingJob || draftingJob || completedJob;
+    const hasWork = jobToOpen && (
+      jobToOpen.images.length > 0 || (jobToOpen.result?.processedImages?.length ?? 0) > 0
+    );
+    if (hasWork) {
+      handleOpenDraft(jobToOpen!);
+    } else {
+      loadItems([]);
+      setDiscountLabels([]);
+      setDepartment(dept);
+      setViewingJob(jobToOpen ?? null);
+    }
+  };
+
   // ---------------- REPLACE IMAGE IN-PLACE ----------------
   const handleReplaceImage = async (itemId: string) => {
     try {
@@ -889,6 +883,19 @@ export default function App() {
       };
     }));
     setDiscountDetailsDialog(null);
+  };
+
+  // ---------------- BANNER DAYS ----------------
+  const handleOpenBannerDaysDialog = (itemId: string) => {
+    const label = discountLabels.find(l => l.id === itemId);
+    setBannerDaysDialog({ itemId, currentDays: label?.price?.days ?? [] });
+  };
+
+  const handleSaveBannerDays = (itemId: string, days: string[]) => {
+    setDiscountLabels(prev => prev.map(l =>
+      l.id === itemId ? { ...l, price: { ...l.price, display: l.price?.display ?? "", days } } : l
+    ));
+    setBannerDaysDialog(null);
   };
 
   // ---------------- ADD ITEM FROM MODAL (generates label if discount data present) ----------------
@@ -1510,9 +1517,9 @@ export default function App() {
           />
         )}
 
-        {view === "db-upload" && (
+        <div style={{ display: view === "db-upload" ? "block" : "none" }}>
           <DbUploadView onBack={() => setView("home")} />
-        )}
+        </div>
 
         {view === "settings" && (
           <SettingsView onBack={() => setView(settingsReturnView)} />
@@ -1554,7 +1561,7 @@ export default function App() {
                     onToggle={() => setSidebarOpen((o) => !o)}
                     departments={availableDepartments}
                     activeDepartment={department}
-                    onDepartmentChange={setDepartment}
+                    onDepartmentChange={handleEditorDepartmentChange}
                     itemCount={editorQueue.length}
                     onClear={departmentLocked ? undefined : handleClearDepartment}
                     onClearAll={departmentLocked ? undefined : handleClearAllDepartments}
@@ -1712,6 +1719,7 @@ export default function App() {
                   templateId={templateId}
                   department={department}
                   discountLabels={discountLabels}
+                  flyerWeekStart={viewingJob?.flyerWeekStart}
                   isLocked={departmentLocked}
                   onEnqueue={departmentLocked ? undefined : enqueue}
                   onRemove={departmentLocked ? undefined : remove}
@@ -1720,6 +1728,7 @@ export default function App() {
                   onChooseDatabaseResults={departmentLocked ? undefined : handleChooseDatabaseResults}
                   onGoogleSearch={departmentLocked ? undefined : handleChooseGoogleSearch}
                   onEditTitle={departmentLocked ? undefined : handleOpenDiscountDetailsDialog}
+                  onEditBannerDays={departmentLocked ? undefined : handleOpenBannerDaysDialog}
                   onPickSeriesFlavors={departmentLocked ? undefined : setSeriesPickerItemId}
                   onAddItem={departmentLocked ? undefined : handleAddItemFromModal}
                   editMode={editMode}
@@ -1778,6 +1787,14 @@ export default function App() {
                     onClose={() => setDiscountDetailsDialog(null)}
                   />
                 )}
+                {bannerDaysDialog && (
+                  <DaysBannerEditDialog
+                    itemId={bannerDaysDialog.itemId}
+                    initialDays={bannerDaysDialog.currentDays}
+                    onSave={handleSaveBannerDays}
+                    onClose={() => setBannerDaysDialog(null)}
+                  />
+                )}
 
                 {showAddProductDialog && (
                   <AddProductDialog
@@ -1808,6 +1825,9 @@ export default function App() {
         )}
       </div>
 
+      {batchUpload !== null && view !== "db-upload" && (
+        <BatchUploadIndicator progress={batchUpload} onOpen={() => setView("db-upload")} />
+      )}
       <DepartmentSaveProgress saves={departmentSaves} />
 
       {startupTiming && (
@@ -1844,6 +1864,164 @@ export default function App() {
           </button>
         </div>
       )}
+
+      {libraryPipelineLog.length > 0 && (
+        <LibraryPipelineTimingPanel
+          entries={libraryPipelineLog}
+          onDismiss={() => setLibraryPipelineLog([])}
+        />
+      )}
     </ErrorBoundary>
+  );
+}
+
+function basenameFromPath(p: string): string {
+  const s = p.replace(/\\/g, "/");
+  const i = s.lastIndexOf("/");
+  return i >= 0 ? s.slice(i + 1) : s;
+}
+
+function formatLibraryPipelineTooltip(t: DbPipelineTimingMs): string {
+  const lines = [
+    `total:        ${t.total}ms`,
+    `hash:         ${t.hashing}ms`,
+    `dedup:        ${t.dedup}ms`,
+  ];
+  if (t.analyzing != null) lines.push(`analyze:      ${t.analyzing}ms`);
+  if (t.savingSet != null) lines.push(`firestore+set: ${t.savingSet}ms`);
+  if (t.uploading != null) lines.push(`storage up:   ${t.uploading}ms`);
+  if (t.savingUpdate != null) lines.push(`firestore Δ:  ${t.savingUpdate}ms`);
+  return lines.join("\n");
+}
+
+function LibraryPipelineTimingPanel({
+  entries,
+  onDismiss,
+}: {
+  entries: { id: string; path: string; status: string; timing: DbPipelineTimingMs }[];
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        bottom: 12,
+        left: 12,
+        zIndex: 9998,
+        maxWidth: 440,
+        maxHeight: 260,
+        display: "flex",
+        flexDirection: "column",
+        background: "rgba(30,41,59,0.92)",
+        color: "#e2e8f0",
+        borderRadius: 8,
+        padding: "8px 10px 10px",
+        fontSize: 11,
+        fontFamily: "var(--font-mono, ui-monospace, monospace)",
+        boxShadow: "0 2px 12px rgba(0,0,0,0.28)",
+        cursor: "default",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexShrink: 0 }}>
+        <span style={{ fontWeight: 600, color: "#cbd5e1", fontSize: 12 }}>
+          Library ingest pipeline (newest first)
+        </span>
+        <button
+          type="button"
+          onClick={onDismiss}
+          style={{
+            background: "none",
+            border: "none",
+            color: "#94a3b8",
+            cursor: "pointer",
+            padding: "0 4px",
+            fontSize: 16,
+            lineHeight: 1,
+          }}
+          title="Clear log"
+        >
+          ×
+        </button>
+      </div>
+      <div style={{ overflowY: "auto", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+        {entries.map((e) => (
+          <div
+            key={e.id}
+            title={formatLibraryPipelineTooltip(e.timing)}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "78px 1fr 56px",
+              gap: 6,
+              alignItems: "baseline",
+              padding: "3px 4px",
+              borderRadius: 4,
+              background: "rgba(15,23,42,0.35)",
+            }}
+          >
+            <span style={{ color: "#7dd3fc", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis" }}>{e.status}</span>
+            <span style={{ color: "#e2e8f0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.path}>
+              {basenameFromPath(e.path)}
+            </span>
+            <span style={{ color: "#86efac", textAlign: "right", fontWeight: 600 }}>{e.timing.total}ms</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BatchUploadIndicator({
+  progress,
+  onOpen,
+}: {
+  progress: { total: number; processed: number; isActive: boolean };
+  onOpen: () => void;
+}) {
+  const pct = progress.total > 0 ? progress.processed / progress.total : 0;
+  const r = 14;
+  const circ = 2 * Math.PI * r;
+  return (
+    <button
+      onClick={onOpen}
+      title="Click to open Product Library"
+      style={{
+        position: "fixed",
+        bottom: 60,
+        right: 16,
+        zIndex: 9000,
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "10px 14px",
+        borderRadius: 12,
+        background: "#1C1C1E",
+        color: "#fff",
+        border: "none",
+        cursor: "pointer",
+        boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
+      }}
+    >
+      <svg width={34} height={34} style={{ flexShrink: 0 }}>
+        <circle cx={17} cy={17} r={r} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth={3} />
+        <circle
+          cx={17} cy={17} r={r} fill="none"
+          stroke={progress.isActive ? "#4DABF7" : "#69DB7C"}
+          strokeWidth={3}
+          strokeLinecap="round"
+          strokeDasharray={circ}
+          strokeDashoffset={circ * (1 - pct)}
+          transform="rotate(-90 17 17)"
+          style={{ transition: "stroke-dashoffset 0.4s ease" }}
+        />
+      </svg>
+      <div style={{ textAlign: "left", lineHeight: 1.35 }}>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>
+          {progress.processed.toLocaleString()} / {progress.total.toLocaleString()}
+        </div>
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>
+          {progress.isActive ? "Uploading… tap to view" : "Upload complete"}
+        </div>
+      </div>
+    </button>
   );
 }
