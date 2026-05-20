@@ -1,9 +1,11 @@
 import fs from "fs/promises";
 import fsSync from "fs";
+import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import fetch from "node-fetch";
 import FormData from "form-data";
+import sharp from "sharp";
 import { getResourceProfile } from "./resourceProfile.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -56,11 +58,45 @@ export async function waitForCutoutReady({ maxWaitMs = 20000, intervalMs = 400 }
   return false;
 }
 
+/**
+ * Downscale the image in Node.js before sending to Python, matching the same
+ * cap the Python server applies. Avoids a large Pillow decode spike on the
+ * Python side for high-res user photos (editor cutouts) vs. small Serper images.
+ * Returns { sendPath, isTemp } — caller must delete isTemp files after use.
+ */
+async function preshrinkForCutout(inputPath) {
+  const rp = getResourceProfile();
+  let cap = rp.cutoutMaxEdgePx || 1536;
+  // Mirror Python's birefnet hard cap: attention matrices scale quadratically with pixels
+  if ((rp.rembgModel || "").startsWith("birefnet") && cap > 768) cap = 768;
+  if (cap <= 0) return { sendPath: inputPath, isTemp: false };
+
+  let meta;
+  try {
+    meta = await sharp(inputPath).metadata();
+  } catch {
+    return { sendPath: inputPath, isTemp: false };
+  }
+
+  const maxEdge = Math.max(meta.width || 0, meta.height || 0);
+  if (maxEdge <= cap) return { sendPath: inputPath, isTemp: false };
+
+  const ext = path.extname(inputPath).toLowerCase();
+  const tempPath = path.join(os.tmpdir(), `ufm-preshrink-${Date.now()}${ext || ".jpg"}`);
+  await sharp(inputPath)
+    .resize({ width: cap, height: cap, fit: "inside", withoutEnlargement: true })
+    .toFile(tempPath);
+  console.log(`[cutout] pre-shrunk input: ${maxEdge}px → ${cap}px before sending to Python`);
+  return { sendPath: tempPath, isTemp: true };
+}
+
 export async function runCutout(inputPath, externalSignal) {
   await ensureExportDir();
 
+  const { sendPath, isTemp } = await preshrinkForCutout(inputPath);
+
   const form = new FormData();
-  const stream = fsSync.createReadStream(inputPath);
+  const stream = fsSync.createReadStream(sendPath);
   form.append("file", stream);
 
   const fetchTimeoutMs = getResourceProfile().cutoutFetchTimeoutMs;
@@ -76,8 +112,8 @@ export async function runCutout(inputPath, externalSignal) {
       signal,
     });
   } finally {
-    // ensure fd is released
     stream.destroy();
+    if (isTemp) await fs.unlink(sendPath).catch(() => {});
   }
 
   if (!res || !res.ok) {
@@ -89,7 +125,7 @@ export async function runCutout(inputPath, externalSignal) {
     throw new Error(`Cutout failed: ${detail}`);
   }
 
-  const { output_path } = await res.json();
+  const { output_path, alpha_coverage, low_confidence } = await res.json();
 
   const finalName =
     path.basename(inputPath).replace(/\s+/g, "_") + ".cutout.png";
@@ -98,5 +134,5 @@ export async function runCutout(inputPath, externalSignal) {
 
   await moveFileTo(output_path, finalPath);
 
-  return finalPath;
+  return { path: finalPath, alphaCoverage: alpha_coverage ?? null, lowConfidence: low_confidence ?? false };
 }

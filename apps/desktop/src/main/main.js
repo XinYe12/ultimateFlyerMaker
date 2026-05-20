@@ -32,6 +32,9 @@ import { saveCombinationToDb } from "./ipc/saveCombinationToDB.js";
 import { getQuotaStatus, getLiveQuotaStatus } from "./ipc/quotaTracker.js";
 import { reembedAllProducts } from "./ingestion/migrateEmbeddings.js";
 import { promoteSerperResults } from "./ingestion/promoteSerperResults.js";
+import { initSerperScorer, shutdownSerperScorer } from "./ingestion/serperScorer.js";
+import { recordSerperRejection, recordManualGoogleAccepted } from "./ingestion/serperSignalService.js";
+import { getSerperLearningStats } from "./ipc/getSerperLearningStats.js";
 import { testGeminiConnection } from "./ingestion/imageEmbeddingService.js";
 import "./net/longFetch.js";
 import log from "./logger.js";
@@ -207,6 +210,7 @@ function createWindow() {
 app.on("before-quit", () => {
   removeSentinel();
   stopBackend();
+  shutdownSerperScorer();
 });
 
 /* ---------- IPC: native file drag (for Google Lens) ---------- */
@@ -214,6 +218,21 @@ ipcMain.on("ufm:startDrag", (event, filePath) => {
   if (!filePath || !fs.existsSync(filePath)) return;
   const icon = nativeImage.createFromPath(filePath).resize({ width: 100 });
   event.sender.startDrag({ file: filePath, icon });
+});
+
+/* ---------- IPC: cutout eraser ---------- */
+ipcMain.handle("ufm:saveErasedCutout", async (_event, cutoutPath, pngDataUrl) => {
+  try {
+    const base64 = pngDataUrl.replace(/^data:image\/png;base64,/, "");
+    const buf = Buffer.from(base64, "base64");
+    const ext = path.extname(cutoutPath);                        // ".png"
+    const outPath = cutoutPath.slice(0, -ext.length) + ".erased" + ext;
+    await fs.promises.writeFile(outPath, buf);
+    return { ok: true, path: outPath };
+  } catch (err) {
+    log.error("[saveErasedCutout] failed:", err);
+    return { ok: false, error: String(err) };
+  }
 });
 
 /* ---------- IPC: file-based job persistence ---------- */
@@ -439,31 +458,57 @@ ipcMain.handle("ufm:downloadAndIngestFromUrl", async (_, publicUrl) => {
     throw new Error("Missing publicUrl");
   }
   const url = String(publicUrl).trim();
+
+  // Handle base64 data: URLs (Google thumbnail drag gives data:image/jpeg;base64,...)
+  if (url.startsWith("data:image/")) {
+    const [header, base64Data] = url.split(",");
+    const extMatch = header.match(/data:image\/(\w+)/);
+    const rawExt = extMatch ? extMatch[1].toLowerCase() : "jpg";
+    const safeExt = /^(jpg|jpeg|png|gif|webp)$/.test(rawExt) ? `.${rawExt}` : ".jpg";
+    const tempPath = path.join(os.tmpdir(), `ufm-download-${Date.now()}${safeExt}`);
+    console.log(`[downloadAndIngest] decoding data: URL (${Math.round(base64Data.length * 3 / 4)} bytes) → ${tempPath}`);
+    await fs.promises.writeFile(tempPath, Buffer.from(base64Data, "base64"));
+    try {
+      const result = await ingestPhoto(tempPath);
+      return { path: tempPath, result };
+    } catch (err) {
+      await fs.promises.unlink(tempPath).catch(() => {});
+      throw err;
+    }
+  }
+
   const ext = path.extname(new URL(url).pathname) || ".jpg";
   const safeExt = /^\.(jpg|jpeg|png|gif|webp)$/i.test(ext) ? ext : ".jpg";
   const tempPath = path.join(os.tmpdir(), `ufm-download-${Date.now()}${safeExt}`);
 
   try {
     console.log(`[downloadAndIngest] fetching: ${url}`);
+    const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    const ACCEPT = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
     // Use Electron's session.fetch so Chromium's network stack (cookies, proxy) is used.
-    // This is required for Google image URLs which reject plain Node.js fetch with 403.
-    const res = await session.defaultSession.fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-        "Referer": "https://www.google.com/",
-      },
-    });
+    // Try multiple Referer strategies: some sites block google.com referer (hotlink protection),
+    // others require their own origin, others work with no Referer at all.
+    const referers = [
+      "https://www.google.com/",
+      new URL(url).origin + "/",
+      null,
+    ];
+    let res;
+    for (const referer of referers) {
+      const headers = { "User-Agent": UA, "Accept": ACCEPT };
+      if (referer) headers["Referer"] = referer;
+      res = await session.defaultSession.fetch(url, { headers });
+      if (res.status !== 403) break;
+      console.log(`[downloadAndIngest] 403 with Referer=${referer ?? "none"}, retrying…`);
+    }
     if (res.status === 403) throw new Error("Image blocked (403 Forbidden). Save the image to your computer and drag the local file instead.");
     if (!res.ok) throw new Error(`Download failed: ${res.status}`);
 
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
     console.log(`[downloadAndIngest] content-type: ${contentType}, ext: ${safeExt}`);
-    const isImageContentType = contentType.startsWith("image/");
-    const isImageExt = /^\.(jpg|jpeg|png|gif|webp)$/i.test(safeExt);
-    if (!isImageContentType && !isImageExt) {
+    if (!contentType.startsWith("image/")) {
       throw new Error(
-        `URL did not return an image (content-type: ${contentType || "unknown"})`
+        `URL did not return an image (content-type: ${contentType || "unknown"}). Try right-clicking the image and saving it, then drag the local file.`
       );
     }
 
@@ -707,6 +752,29 @@ ipcMain.handle("ufm:promoteSerperResults", async (_, items) => {
   return { ok: true };
 });
 
+ipcMain.handle("ufm:recordSerperRejection", async (_, signal) => {
+  recordSerperRejection(signal).catch((err) =>
+    console.warn("[recordSerperRejection] Failed:", err.message)
+  );
+  return { ok: true };
+});
+
+ipcMain.handle("ufm:recordManualGoogleAccepted", async (_, signal) => {
+  recordManualGoogleAccepted(signal).catch((err) =>
+    console.warn("[recordManualGoogleAccepted] Failed:", err.message)
+  );
+  return { ok: true };
+});
+
+ipcMain.handle("ufm:getSerperLearningStats", async () => {
+  try {
+    return await getSerperLearningStats();
+  } catch (err) {
+    console.warn("[getSerperLearningStats] Failed:", err.message);
+    return null;
+  }
+});
+
 ipcMain.handle("ufm:reembedAllProducts", async () => {
   reembedAllProducts((data) => safeSend("ufm:reembedProgress", data))
     .then((result) => safeSend("ufm:reembedComplete", result))
@@ -912,7 +980,10 @@ app.whenReady().then(async () => {
     const fbApp = initFirebase();
     phases.firebase = Date.now() - PROCESS_T0;
 
-    // 3b. Verify Firestore + kick off background embedding migration
+    // 3b. Load Serper learning weights (non-blocking; falls back to static scoring on error)
+    initSerperScorer().catch(err => console.warn("[serperScorer] Init failed:", err.message));
+
+    // 3c. Verify Firestore + kick off background embedding migration
     if (fbApp) {
       console.log("[firebase] [post-init] Running test query: product_vectors.limit(1)...");
       admin.firestore().collection("product_vectors").limit(1).get()

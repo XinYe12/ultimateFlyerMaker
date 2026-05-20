@@ -37,6 +37,7 @@ def _run_with_peak_rss(fn, *args, **kwargs):
 
 
 REMBG_MODEL = os.environ.get("UFM_REMBG_MODEL", "u2net")
+_BLOB_REMOVAL = os.environ.get("UFM_BLOB_REMOVAL", "1") != "0"
 
 # Must be set before onnxruntime is imported (rembg pulls it in).
 # ORT_NUM_THREADS is ONNX Runtime's own thread pool — Windows ignores OMP_NUM_THREADS.
@@ -107,10 +108,14 @@ def _load_model():
             _opts = ort.SessionOptions()
             _opts.intra_op_num_threads = _ort_threads
             _opts.inter_op_num_threads = 1
-            # Disable the BFC memory arena so ORT releases native allocations after
-            # each inference rather than holding a permanently-growing pool.
-            # Costs ~10-20% inference speed but keeps RSS bounded between requests.
+            # Disable BFC memory arena: ORT returns native allocs to OS after each
+            # inference rather than pooling them. Costs ~10-20% speed.
             _opts.enable_cpu_mem_arena = False
+            # Disable memory pattern optimisation: prevents ORT from pre-allocating
+            # a single large contiguous workspace for the whole execution graph.
+            # Critical for transformer models (birefnet): the pattern buffer for
+            # birefnet at 1024×1024 is ~6 GB and is NOT released by gc.collect().
+            _opts.enable_mem_pattern = False
             if _ORT_PROFILE:
                 _opts.enable_profiling = True
                 _opts.profile_file_prefix = _ort_profile_prefix
@@ -127,6 +132,35 @@ def _load_model():
         _model_ready.set()
 
 threading.Thread(target=_load_model, daemon=True).start()
+
+
+def _teardown_and_reload_session():
+    """
+    Destroy the current ORT InferenceSession and immediately reload it.
+
+    For transformer-based models (birefnet), ORT's workspace/scratch buffers are NOT
+    freed by gc.collect() — only the C++ InferenceSession destructor releases them.
+    Setting _rembg_session = None triggers that destructor (once GC runs), returning
+    several GB of native memory to the OS between inferences.
+
+    Called from inside _cutout_lock so there is never a concurrent inference.
+    The _model_ready event is cleared before reload starts and set again when done,
+    so the next request waits safely if it arrives during the short reload window.
+    """
+    global _rembg_session
+    before_mb = _rss_mb()
+    _model_ready.clear()
+    _rembg_session = None
+    gc.collect()
+    after_teardown_mb = _rss_mb()
+    print(
+        f"[mem] birefnet session teardown: {before_mb:.0f} -> {after_teardown_mb:.0f} MB "
+        f"(freed {before_mb - after_teardown_mb:.0f} MB)",
+        flush=True,
+    )
+    # Reload synchronously in this thread; _model_ready is cleared so any concurrent
+    # health checks will report not-ready until the new session is live.
+    _load_model()
 
 app = FastAPI()
 ocr_lock = asyncio.Lock()
@@ -201,6 +235,74 @@ def debug_mem():
 # ACTION: REMOVE SHAPE-BASED ROTATION, KEEP EXIF ONLY
 # DROP-IN REPLACEMENT FOR normalize_orientation()
 
+def _border_white_fraction(img: Image.Image, threshold: int = 240, border_px: int = 8) -> float:
+    """Fraction of border-strip pixels that are near-white (all channels > threshold)."""
+    import numpy as np
+    arr = np.array(img.convert("RGB"))
+    h, w = arr.shape[:2]
+    b = max(1, min(border_px, h // 4, w // 4))
+    strips = [arr[:b, :], arr[h - b:, :], arr[b:h - b, :b], arr[b:h - b, w - b:]]
+    border = np.concatenate([s.reshape(-1, 3) for s in strips])
+    return float(np.mean(np.all(border > threshold, axis=1)))
+
+
+def _alpha_coverage(img_rgba: Image.Image) -> float:
+    """Fraction of pixels with alpha > 10 (considered opaque/foreground)."""
+    import numpy as np
+    return float(np.mean(np.array(img_rgba.getchannel("A")) > 10))
+
+
+def remove_stray_blobs(
+    img_rgba: Image.Image,
+    rel_threshold: float = 0.02,
+    abs_min_px: int = 200,
+) -> Image.Image:
+    """Remove small disconnected foreground islands (floating brand badges, rembg artifacts).
+
+    Keeps any connected component whose area >= max(abs_min_px, total_fg * rel_threshold).
+    At 2%, floating brand badges (<1% of foreground) are wiped; multi-item products (≥20%) survive.
+    """
+    import numpy as np
+    try:
+        import cv2
+    except ImportError:
+        print("[cutout] cv2 not available — skipping blob removal", flush=True)
+        return img_rgba
+
+    alpha = np.array(img_rgba.getchannel("A"), dtype=np.uint8)
+    mask = (alpha > 0).astype(np.uint8) * 255
+    total_fg = int(np.count_nonzero(mask))
+    if total_fg == 0:
+        return img_rgba
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    keep_threshold = max(abs_min_px, int(total_fg * rel_threshold))
+
+    removed_count = 0
+    removed_px = 0
+    keep_mask = np.zeros_like(alpha, dtype=bool)
+    for label_id in range(1, num_labels):  # label 0 is always background in OpenCV
+        area = int(stats[label_id, cv2.CC_STAT_AREA])
+        if area >= keep_threshold:
+            keep_mask |= (labels == label_id)
+        else:
+            removed_count += 1
+            removed_px += area
+
+    if removed_count == 0:
+        return img_rgba
+
+    print(
+        f"[cutout] blob removal: kept {num_labels - 1 - removed_count}/{num_labels - 1} components, "
+        f"removed {removed_count} blobs ({removed_px} px, threshold={keep_threshold} px)",
+        flush=True,
+    )
+    new_alpha = np.where(keep_mask, alpha, 0).astype(np.uint8)
+    rgba_arr = np.array(img_rgba)
+    rgba_arr[:, :, 3] = new_alpha
+    return Image.fromarray(rgba_arr, "RGBA")
+
+
 def normalize_orientation(img: Image.Image) -> Image.Image:
     try:
         exif = img._getexif()
@@ -255,6 +357,14 @@ async def cutout(request: Request, file: UploadFile = File(...)):
                 print(f"[cutout] PIL cannot open input: {e}")
                 return JSONResponse(status_code=400, content={"error": f"Invalid image: {e}"})
 
+            # Option B: detect clean white background before rembg.
+            # White-background images (official product shots) work fine with rembg, but
+            # knowing the bg is clean lets us skip the false-positive high-coverage check.
+            white_bg_fraction = _border_white_fraction(src_img)
+            is_white_bg = white_bg_fraction > 0.85
+            if is_white_bg:
+                print(f"[cutout] white background detected ({white_bg_fraction:.0%}) — rembg should produce clean result", flush=True)
+
             # Add a white border before rembg so the model doesn't over-aggressively
             # remove product pixels that touch or are near the image edges/corners.
             BORDER = 40
@@ -297,12 +407,41 @@ async def cutout(request: Request, file: UploadFile = File(...)):
             # Crop back to the original dimensions (strip the added border)
             padded_result = Image.open(io.BytesIO(out_padded)).convert("RGBA")
             img = padded_result.crop((BORDER, BORDER, BORDER + src_w, BORDER + src_h))
+
+            # Remove floating brand badge blobs (small disconnected foreground islands)
+            if _BLOB_REMOVAL:
+                img = remove_stray_blobs(img)
+
             img = normalize_orientation(img)
+
+            # Option A: alpha quality gate.
+            # High coverage (>87%) = rembg barely removed background (e.g. meat on cutting board).
+            # Low coverage (<4%) = rembg ate the product itself.
+            # White-background images are exempt from the high-coverage check because
+            # a product filling most of the frame is expected and correct.
+            coverage = _alpha_coverage(img)
+            if is_white_bg:
+                low_confidence = coverage < 0.04
+            else:
+                low_confidence = coverage > 0.87 or coverage < 0.04
+            if low_confidence:
+                print(f"[cutout] low confidence cutout: coverage={coverage:.2%}, white_bg={is_white_bg}", flush=True)
+            else:
+                print(f"[cutout] cutout ok: coverage={coverage:.2%}, white_bg={is_white_bg}", flush=True)
 
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
                 img.save(f.name, format="PNG")
                 print(f"[cutout] saved to {f.name}")
-                return {"output_path": f.name}
+                result = {"output_path": f.name, "alpha_coverage": round(coverage, 3), "low_confidence": low_confidence}
+
+            # Transformer-based models (birefnet) hold ~6 GB of ORT workspace buffers
+            # that gc.collect() cannot free — only destroying the InferenceSession
+            # releases them. Tear down and synchronously reload here, while still
+            # holding _cutout_lock, so the session is ready for the next request.
+            if REMBG_MODEL.startswith("birefnet"):
+                await asyncio.to_thread(_teardown_and_reload_session)
+
+            return result
 
         except Exception as e:
             import traceback
