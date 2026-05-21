@@ -81,7 +81,7 @@ const DEPRIORITISED_DOMAINS = [
   "youtube.com", "reddit.com",
 ];
 
-function getDomain(url) {
+export function getDomain(url) {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
   } catch {

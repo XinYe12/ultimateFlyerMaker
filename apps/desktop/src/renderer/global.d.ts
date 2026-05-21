@@ -226,6 +226,7 @@ declare global {
       scanNonProducts: () => Promise<{ ok: boolean }>;
       onScanNonProductsProgress: (cb: (data: ScanNonProductsProgressEvent) => void) => () => void;
       onScanNonProductsComplete: (cb: (data: ScanNonProductsCompleteEvent) => void) => () => void;
+      saveErasedCutout: (cutoutPath: string, pngDataUrl: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
       showContextMenu: (itemId: string, actions: Array<{ id: string; label: string; enabled?: boolean }>) => void;
       onContextMenuAction: (cb: (data: { itemId: string; action: string }) => void) => () => void;
 
@@ -244,6 +245,14 @@ declare global {
       saveConfig: (patch: Record<string, string>) => Promise<{ ok: boolean; missingKeys: string[] }>;
       getRembgModel: () => Promise<string>;
       setRembgModel: (model: string) => Promise<{ ok: boolean }>;
+      getSerperLearningStats: () => Promise<{
+        totalSignals: number;
+        serperRunCount: number;
+        dbFirstCount: number;
+        recentRanks: number[];
+        firstPickRate: number;
+        topDomains: Array<{ domain: string; acceptRate: number; total: number }>;
+      } | null>;
     };
   }
 }

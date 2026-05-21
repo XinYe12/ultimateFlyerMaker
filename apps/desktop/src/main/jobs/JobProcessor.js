@@ -13,6 +13,9 @@ import { parseDiscountXlsx } from "../ipc/parseDiscountXlsx.js";
 import { exportDiscountImages } from "../ipc/exportDiscountImages.js";
 import { serperImageSearch, serperKeysPresent } from "../ingestion/serperImageSearchService.js";
 import { buildSerperQuery } from "../ingestion/buildSerperQuery.js";
+import { rerankSerperResults } from "../ingestion/serperScorer.js";
+import { recordSerperSignal } from "../ingestion/serperSignalService.js";
+import { getDomain } from "../ingestion/braveSearchService.js";
 import { runCutout, waitForCutoutReady } from "../cutoutClient.js";
 import { addShadowToCutout } from "../ingestion/addShadow.js";
 import sizeOf from "image-size";
@@ -117,15 +120,16 @@ function emptyPipelineSteps() {
 /** rembg + shadow with per-phase accumulation on `ps` (includes time on failure/abort). */
 async function runCutoutWithShadowMs(tempPath, signal, ps) {
   const t0 = performance.now();
-  let baseCutoutPath;
+  let cutoutResult;
   try {
-    baseCutoutPath = await runCutout(tempPath, signal);
+    cutoutResult = await runCutout(tempPath, signal);
   } finally {
     ps.serperRembgMs += roundMs(performance.now() - t0);
   }
   const t1 = performance.now();
   try {
-    return await addShadowToCutout(baseCutoutPath);
+    const shadowPath = await addShadowToCutout(cutoutResult.path);
+    return { path: shadowPath, lowConfidence: cutoutResult.lowConfidence };
   } finally {
     ps.serperShadowMs += roundMs(performance.now() - t1);
   }
@@ -151,7 +155,13 @@ async function downloadToCutoutsDir(url, suffix) {
 function getLayoutFromPath(cutoutPath) {
   let layout = { size: "SMALL" };
   try {
-    const { width, height } = sizeOf(cutoutPath);
+    let { width, height } = sizeOf(cutoutPath);
+    // Shadow PNGs have 100px padding on each side (addShadow.js PADDING=100).
+    // Subtract to recover true product dimensions before computing aspect ratio.
+    if (cutoutPath.includes(".shadow.png") && width > 200 && height > 200) {
+      width -= 200;
+      height -= 200;
+    }
     const aspectRatio = typeof width === "number" && typeof height === "number" ? width / height : null;
     layout.size = decideSizeFromAspectRatio(aspectRatio);
   } catch {}
@@ -461,18 +471,27 @@ export class JobProcessor extends EventEmitter {
               try {
                 const tSerp = performance.now();
                 let serperResults = [];
+                let serperQuery = "";
+                let serperQueryUsed = "";
                 try {
-                  const { primary: serperQuery, fallback: serperQueryFallback } = buildSerperQuery(di);
+                  const { primary, fallback: serperQueryFallback } = buildSerperQuery(di);
+                  serperQuery = primary;
+                  serperQueryUsed = primary;
                   console.log(`[JobProcessor] Serper query: "${serperQuery}"`);
                   serperResults = await serperImageSearch(serperQuery, 10);
                   if (serperResults.length === 0 && serperQueryFallback && serperQueryFallback !== serperQuery) {
                     console.log(`[JobProcessor] Serper zero results — retrying with fallback: "${serperQueryFallback}"`);
                     serperResults = await serperImageSearch(serperQueryFallback, 10);
+                    serperQueryUsed = serperQueryFallback;
                   }
                 } finally {
                   ps.serperApiMs = roundMs(performance.now() - tSerp);
                 }
                 console.log(`[JobProcessor] Serper returned ${serperResults.length} results for "${queryDisplay}"`);
+                if (serperResults.length > 0) {
+                  serperResults = rerankSerperResults(serperResults, di);
+                  console.log(`[JobProcessor] Top result confidence: ${serperResults[0]._confidence?.toFixed(3)} (${serperResults[0].url})`);
+                }
                 const cutoutReady = await waitForCutoutReady({ maxWaitMs: 20000, intervalMs: 400 });
                 if (!cutoutReady) {
                   console.warn(`[JobProcessor] Cutout backend not ready after wait — proceeding; cutouts may fail until Python is up`);
@@ -486,6 +505,7 @@ export class JobProcessor extends EventEmitter {
                   const tempPath = path.join(os.tmpdir(), `ufm-serper-${Date.now()}-${i}${safeExt}`);
                   console.log(`[JobProcessor] Serper [${srIdx + 1}/${serperResults.length}]: ${sr.url}`);
                   try {
+                    sr._cutoutAttempted = true;
                     const tFetch = performance.now();
                     await fetchImageToFile(sr.url, tempPath);
                     ps.serperFetchMs += roundMs(performance.now() - tFetch);
@@ -495,11 +515,14 @@ export class JobProcessor extends EventEmitter {
                       continue;
                     }
                     let serperOk = false;
+                    const srConfidence = sr._confidence ?? 0;
                     try {
-                      const cutoutPath = await runCutoutWithShadowMs(tempPath, signal, ps);
+                      const { path: cutoutPath, lowConfidence: cutoutLow } = await runCutoutWithShadowMs(tempPath, signal, ps);
                       if (cutoutPath) {
-                        result = buildResultFromDi(di, cutoutPath, null, 0, "serper", true);
-                        serperOk = true;
+                        result = buildResultFromDi(di, cutoutPath, null, srConfidence, "serper", srConfidence < 0.5 || cutoutLow);
+                        result._serperSignalCtx = { rank: srIdx, url: sr.url, domain: getDomain(sr.url), confidence: srConfidence };
+                        serperOk = !cutoutLow;
+                        if (cutoutLow) console.log(`[JobProcessor] Low-quality cutout for "${queryDisplay}" (rank ${srIdx}) — trying next result`);
                       }
                     } catch (ingestErr) {
                       const isConnErr = ingestErr.message?.includes("ECONNREFUSED") || ingestErr.message?.includes("ECONNRESET");
@@ -508,10 +531,11 @@ export class JobProcessor extends EventEmitter {
                         await new Promise(r => setTimeout(r, 5000));
                         await waitForCutoutReady({ maxWaitMs: 15000, intervalMs: 500 });
                         try {
-                          const cutoutPath = await runCutoutWithShadowMs(tempPath, signal, ps);
+                          const { path: cutoutPath, lowConfidence: cutoutLow } = await runCutoutWithShadowMs(tempPath, signal, ps);
                           if (cutoutPath) {
-                            result = buildResultFromDi(di, cutoutPath, null, 0, "serper", true);
-                            serperOk = true;
+                            result = buildResultFromDi(di, cutoutPath, null, srConfidence, "serper", srConfidence < 0.5 || cutoutLow);
+                            result._serperSignalCtx = { rank: srIdx, url: sr.url, domain: getDomain(sr.url), confidence: srConfidence };
+                            serperOk = !cutoutLow;
                           }
                         } catch (retryErr) {
                           console.warn(`[JobProcessor] Retry also failed — skipping remaining Serper results: ${retryErr.message}`);
@@ -548,8 +572,12 @@ export class JobProcessor extends EventEmitter {
                         await fs.promises.writeFile(lrTempPath, Buffer.from(ab));
                         const lrSize = (await fs.promises.stat(lrTempPath)).size;
                         if (lrSize >= 5000) {
-                          const lrCutout = await runCutoutWithShadowMs(lrTempPath, signal, ps);
-                          if (lrCutout) result = buildResultFromDi(di, lrCutout, null, 0, "serper", true);
+                          const { path: lrCutout, lowConfidence: lrLow } = await runCutoutWithShadowMs(lrTempPath, signal, ps);
+                          if (lrCutout) {
+                            const lrConf = firstSr._confidence ?? 0;
+                            result = buildResultFromDi(di, lrCutout, null, lrConf, "serper", lrConf < 0.5 || lrLow);
+                            result._serperSignalCtx = { rank: 0, url: firstSr.url, domain: getDomain(firstSr.url), confidence: lrConf };
+                          }
                         }
                       }
                     } catch (lastErr) {
@@ -559,6 +587,33 @@ export class JobProcessor extends EventEmitter {
                       fs.promises.unlink(lrTempPath).catch(() => {});
                     }
                   }
+                }
+                // Phase 2: fire-and-forget outcome signal for the learning loop
+                if (serperResults.length > 0) {
+                  const signalResults = serperResults.map((sr, idx) => ({
+                    rank: idx,
+                    url: sr.url,
+                    domain: getDomain(sr.url),
+                    title: sr.title,
+                    confidence: sr._confidence ?? 0,
+                    outcome: result?._serperSignalCtx?.url === sr.url
+                      ? "accepted"
+                      : sr._cutoutAttempted
+                        ? "rejected_cutout_fail"
+                        : "skipped",
+                  }));
+                  recordSerperSignal({
+                    query: serperQueryUsed,
+                    queryType: serperQueryUsed === serperQuery ? "primary" : "fallback",
+                    productEn: di.en || "",
+                    productZh: di.zh || "",
+                    department: di.department || job.department || "",
+                    timestamp: Date.now(),
+                    results: signalResults,
+                    acceptedRank: result?._serperSignalCtx?.rank ?? null,
+                    acceptedDomain: result?._serperSignalCtx?.domain ?? null,
+                    finalSource: result?.matchSource ?? "none",
+                  }).catch(() => {});
                 }
               } catch (err) {
                 console.warn(`[JobProcessor] Serper fallback failed for "${queryDisplay}":`, err.message);
@@ -766,19 +821,22 @@ export class JobProcessor extends EventEmitter {
       }
     }
 
-    // 4. Complete
+    // 4. Complete — always emit at natural end so the full result (including labels generated
+    // after the loop) reaches the renderer, even if the watchdog already fired a partial emit.
     clearTimeout(watchdogTimer);
-    if (!jobCompleted) {
+    if (jobCompleted) {
+      console.log(`[JobProcessor] Watchdog-complete correction: ${processedImages.length} items, ${allDiscountLabels.length} labels`);
+    } else {
       jobCompleted = true;
       console.log("[JobProcessor] Job complete:", job.id, {
         processedImages: processedImages.length,
         discountLabels: allDiscountLabels.length,
       });
-      this.emit("complete", job.id, {
-        processedImages,
-        discountLabels: allDiscountLabels,
-      });
     }
+    this.emit("complete", job.id, {
+      processedImages,
+      discountLabels: allDiscountLabels,
+    });
   }
 
   emitProgress(jobId, step, processed, total) {

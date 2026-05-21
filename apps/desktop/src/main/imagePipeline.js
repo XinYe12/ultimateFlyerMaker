@@ -12,7 +12,7 @@ export async function processFlyerImage(flyerItem) {
 
   const outputDir = path.dirname(src);
 
-  const cutoutPath = await runCutout(src, outputDir);
+  const { path: cutoutPath } = await runCutout(src, outputDir);
   flyerItem.image.src = cutoutPath;
 
   return flyerItem;

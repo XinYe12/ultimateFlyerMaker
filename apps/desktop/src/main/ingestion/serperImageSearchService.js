@@ -2,7 +2,6 @@
 // Serper.dev Google Image Search — same output shape as braveImageSearchByQuery
 
 import fetch from "node-fetch";
-import { scoreResult } from "./braveSearchService.js";
 
 export function serperKeysPresent() {
   return !!process.env.SERPER_API_KEY;
@@ -34,6 +33,8 @@ function sleep(ms) {
 
 function normalizeSerperResults(data, limit) {
   const raw = data?.images || [];
+  // Return results in Serper's native Google rank order.
+  // Re-ranking by confidence score happens in JobProcessor via rerankSerperResults().
   return raw
     .map((r) => ({
       title: r.title || "",
@@ -41,9 +42,6 @@ function normalizeSerperResults(data, limit) {
       thumbnail: r.thumbnailUrl || r.imageUrl || "",
     }))
     .filter((r) => r.url)
-    .map((r) => ({ ...r, _score: scoreResult(r.url) }))
-    .sort((a, b) => b._score - a._score)
-    .map(({ _score, ...r }) => r)
     .slice(0, limit);
 }
 

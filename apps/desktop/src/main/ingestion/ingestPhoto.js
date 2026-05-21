@@ -29,7 +29,7 @@ export async function ingestPhotoPhase1(inputPath) {
 
 /* ---------- PHASE 2: cutout + shadow + sizing (slow, ~10-15s) ---------- */
 export async function ingestPhotoPhase2(inputPath) {
-  const baseCutoutPath = await runCutout(inputPath);
+  const { path: baseCutoutPath } = await runCutout(inputPath);
   console.log("✂️ [phase2] Cutout complete:", baseCutoutPath);
 
   const cutoutPath = await addShadowToCutout(baseCutoutPath);
@@ -37,7 +37,11 @@ export async function ingestPhotoPhase2(inputPath) {
 
   let layout = { size: "SMALL" };
   try {
-    const { width, height } = sizeOf(cutoutPath);
+    let { width, height } = sizeOf(cutoutPath);
+    if (cutoutPath.includes(".shadow.png") && width > 200 && height > 200) {
+      width -= 200;
+      height -= 200;
+    }
     const ar = typeof width === "number" && typeof height === "number" ? width / height : null;
     layout.size = decideSizeFromAspectRatio(ar);
   } catch {}
@@ -73,7 +77,7 @@ const title = formatTitle(llmResult);
 
 
   // ---------- CUTOUT ----------
-  const baseCutoutPath = await runCutout(inputPath);
+  const { path: baseCutoutPath } = await runCutout(inputPath);
   console.log("✂️ [ingestPhoto] Cutout complete:", baseCutoutPath);
 
   // ---------- ADD SHADOW ----------
@@ -83,7 +87,11 @@ const title = formatTitle(llmResult);
   // ---------- LAYOUT ----------
   let layout = { size: "SMALL" };
   try {
-    const { width, height } = sizeOf(cutoutPath);
+    let { width, height } = sizeOf(cutoutPath);
+    if (cutoutPath.includes(".shadow.png") && width > 200 && height > 200) {
+      width -= 200;
+      height -= 200;
+    }
     const aspectRatio =
       typeof width === "number" && typeof height === "number"
         ? width / height

@@ -15,20 +15,28 @@
  */
 export function extractImageUrl(dt: DataTransfer): string {
   // 1. Try text/html — look for <img src="…">
+  // Save data: URLs as a fallback; prefer an actual https URL from later fields.
+  let dataUrlFallback = "";
   const html = dt.getData("text/html");
   if (html) {
     const imgMatch = html.match(/<img[^>]+src=["']([^"']+)["']/i);
     if (imgMatch?.[1]) {
       const src = imgMatch[1];
       if (/^https?:\/\//.test(src)) return unwrapGoogleUrl(src);
+      if (src.startsWith("data:image/")) dataUrlFallback = src;
     }
   }
 
-  // 2. Try text/uri-list
+  // 2. Try text/uri-list — skip Google page URLs (they point to the results page, not the image)
   const uriList = dt.getData("text/uri-list");
   if (uriList) {
     const first = uriList.split("\n")[0].trim();
-    if (first) return unwrapGoogleUrl(first);
+    if (first && /^https?:\/\//.test(first)) {
+      const unwrapped = unwrapGoogleUrl(first);
+      // Only use if it looks like an image URL, not a Google search/page URL
+      const isGooglePage = /google\.com\/(search|imgres|url)\b/.test(unwrapped);
+      if (!isGooglePage) return unwrapped;
+    }
   }
 
   // 3. Fallback to text/plain
@@ -38,7 +46,8 @@ export function extractImageUrl(dt: DataTransfer): string {
     if (match) return unwrapGoogleUrl(match[0]);
   }
 
-  return "";
+  // 4. Last resort: use the base64 thumbnail from text/html
+  return dataUrlFallback;
 }
 
 /**

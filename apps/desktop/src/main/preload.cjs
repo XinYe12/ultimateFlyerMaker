@@ -273,8 +273,11 @@ contextBridge.exposeInMainWorld("ufm", {
     return () => ipcRenderer.removeListener("ufm:scanNonProductsComplete", handler);
   },
 
-  // ---------- SERPER PROMOTION ----------
+  // ---------- SERPER PROMOTION + SIGNALS ----------
   promoteSerperResults: (items) => ipcRenderer.invoke("ufm:promoteSerperResults", items),
+  recordSerperRejection: (signal) => ipcRenderer.invoke("ufm:recordSerperRejection", signal),
+  recordManualGoogleAccepted: (signal) => ipcRenderer.invoke("ufm:recordManualGoogleAccepted", signal),
+  getSerperLearningStats: () => ipcRenderer.invoke("ufm:getSerperLearningStats"),
 
   // ---------- APP PATHS ----------
   getAppPaths: () => ipcRenderer.invoke("ufm:getAppPaths"),
@@ -285,6 +288,10 @@ contextBridge.exposeInMainWorld("ufm", {
   saveConfig: (patch) => ipcRenderer.invoke("ufm:saveConfig", patch),
   getRembgModel: () => ipcRenderer.invoke("ufm:getRembgModel"),
   setRembgModel: (model) => ipcRenderer.invoke("ufm:setRembgModel", model),
+
+  // ---------- CUTOUT ERASER ----------
+  saveErasedCutout: (cutoutPath, pngDataUrl) =>
+    ipcRenderer.invoke("ufm:saveErasedCutout", cutoutPath, pngDataUrl),
 
   // ---------- NATIVE CONTEXT MENU ----------
   showContextMenu: (itemId, actions) =>

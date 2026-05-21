@@ -42,6 +42,8 @@ a = Analysis(
         "onnxruntime",
         # paddleocr (heavy; include if OCR endpoint needed in the binary)
         "paddleocr",
+        # cv2 is imported inside remove_stray_blobs(); PyInstaller misses function-body imports
+        "cv2",
     ],
     hookspath=[],
     hooksconfig={},

@@ -3,6 +3,14 @@
 
 export type IngestStatus = "pending" | "running" | "processing_cutout" | "done" | "error" | "cutout_error";
 
+export type ReplacementJob = {
+  id: string;
+  itemId: string;
+  url: string;
+  status: "processing" | "done" | "error";
+  errorMessage?: string;
+};
+
 // Shape produced by parseDiscountText and parseDiscountXlsx
 export type ParsedDiscount = {
   en: string;

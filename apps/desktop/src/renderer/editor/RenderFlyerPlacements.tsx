@@ -294,6 +294,7 @@ function PlacementCard({
   onBannerPanStart, onEditBanner,
   onElementSelect,
   onContextMenu,
+  activeReplacementJobs,
 }: {
   p: any;
   item: any;
@@ -317,10 +318,12 @@ function PlacementCard({
   onEditBanner?: () => void;
   onElementSelect?: (element: 'title' | 'price' | 'banner' | null) => void;
   onContextMenu?: () => void;
+  activeReplacementJobs?: Array<{ id: string; status: "processing" | "done" | "error" }>;
 }) {
   const [imgInfo, setImgInfo] = useState<{
     natW: number; natH: number;
     bboxX: number; bboxY: number; bboxW: number; bboxH: number;
+    arW: number; arH: number;
   } | null>(null);
   const [selectedEl, setSelectedEl] = useState<'image' | 'title' | 'price' | null>(null);
   const [rotatingActive, setRotatingActive] = useState(false);
@@ -338,16 +341,17 @@ function PlacementCard({
   const [selectedSubIdx, setSelectedSubIdx] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!selectedEl) return;
+    if (!selectedEl && selectedSubIdx === null) return;
     const handleOutside = (e: MouseEvent) => {
       if (cardRef.current && !cardRef.current.contains(e.target as Node)) {
         setSelectedEl(null);
+        setSelectedSubIdx(null);
         onElementSelectRef.current?.(null);
       }
     };
     document.addEventListener('mousedown', handleOutside);
     return () => document.removeEventListener('mousedown', handleOutside);
-  }, [selectedEl]);
+  }, [selectedEl, selectedSubIdx]);
 
   // For n=3 multi-image: randomly choose diagonal vs 2+1 grid (decided once per mount)
   const diagonalRef = useRef<boolean>(Math.random() < 0.5);
@@ -367,14 +371,15 @@ function PlacementCard({
     } catch {
       // canvas taint (cross-origin) — fall back to full dims
       setImgInfo({ natW: el.naturalWidth, natH: el.naturalHeight,
-                   bboxX: 0, bboxY: 0, bboxW: el.naturalWidth, bboxH: el.naturalHeight });
+                   bboxX: 0, bboxY: 0, bboxW: el.naturalWidth, bboxH: el.naturalHeight,
+                   arW: el.naturalWidth, arH: el.naturalHeight });
       return;
     }
 
     let top = -1, bottom = -1, left = SCAN, right = -1;
     for (let y = 0; y < SCAN; y++) {
       for (let x = 0; x < SCAN; x++) {
-        if (data[(y * SCAN + x) * 4 + 3] > 0) {
+        if (data[(y * SCAN + x) * 4 + 3] > 1) {
           if (top === -1) top = y;
           bottom = y;
           if (x < left) left = x;
@@ -414,7 +419,12 @@ function PlacementCard({
     const botNat = top === -1 ? nh : Math.round(bottom / SCAN * nh);
     const bboxW = top === -1 ? nw : Math.round((right - left + 1) / SCAN * nw);
     const bboxH = top === -1 ? nh : botNat - bboxY + 1;
-    setImgInfo({ natW: nw, natH: nh, bboxX, bboxY, bboxW, bboxH });
+    // Shadow PNGs have 100px padding on each side. Use the de-padded natural size
+    // for aspect-ratio-based cell width so landscape products are not squeezed.
+    const isShadow = el.src.includes(".shadow.png");
+    const arW = isShadow && nw > 200 ? nw - 200 : bboxW;
+    const arH = isShadow && nh > 200 ? nh - 200 : bboxH;
+    setImgInfo({ natW: nw, natH: nh, bboxX, bboxY, bboxW, bboxH, arW, arH });
   }, [imgInfo]);
 
   // Set flag on corner-handle mousedown; clear it after mouseup (after click fires).
@@ -636,8 +646,8 @@ function PlacementCard({
     : rows > 1 ? (availH - (rows - 1) * GAP) / rows : availH;
   const cellW = useDiagonal
     ? availW * 0.65
-    : imgInfo && imgInfo.bboxH > 0
-      ? Math.min(cellH * imgInfo.bboxW / imgInfo.bboxH, maxCellW)
+    : imgInfo && imgInfo.arH > 0
+      ? Math.min(cellH * imgInfo.arW / imgInfo.arH, maxCellW)
       : maxCellW;
 
   // Derived render info — null until image loads and bbox is scanned.
@@ -708,8 +718,14 @@ function PlacementCard({
       ? (e: React.MouseEvent) => {
           e.stopPropagation();
           if (selectedSubIdx === idx) {
+            // Same image already selected → start drag
+            onSubImagePanStart?.(idx, subOverride.x ?? 0, subOverride.y ?? 0, e);
+          } else if (selectedSubIdx !== null) {
+            // A sibling is selected → auto-select this one and start drag immediately
+            setSelectedSubIdx(idx);
             onSubImagePanStart?.(idx, subOverride.x ?? 0, subOverride.y ?? 0, e);
           } else {
+            // Nothing selected → select only
             setSelectedSubIdx(idx);
           }
         }
@@ -1599,6 +1615,31 @@ function PlacementCard({
 
       </div>{/* end content clip wrapper */}
 
+      {/* Replacement-in-progress overlay — shown while downloadAndIngestFromUrl is running */}
+      {activeReplacementJobs && activeReplacementJobs.length > 0 && (
+        <div
+          style={{ position: "absolute", inset: 0, zIndex: 201, pointerEvents: "all", cursor: "not-allowed",
+                   display: "flex", alignItems: "center", justifyContent: "center",
+                   background: "rgba(255,255,255,0.6)", backdropFilter: "blur(2px)" }}
+          onMouseDown={e => e.stopPropagation()}
+          onClick={e => e.stopPropagation()}
+        >
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, width: "70%" }}>
+            <div style={{ width: 22, height: 22, border: "3px solid rgba(0,0,0,0.12)",
+                          borderTopColor: "#4C6EF5", borderRadius: "50%",
+                          animation: "ufm-spin 0.75s linear infinite" }} />
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
+                           color: "rgba(0,0,0,0.5)", textTransform: "uppercase", textAlign: "center" }}>
+              Replacing…
+            </span>
+            <div style={{ width: "100%", height: 3, borderRadius: 2, background: "rgba(0,0,0,0.1)", overflow: "hidden" }}>
+              <div style={{ height: "100%", width: "30%", background: "#4C6EF5", borderRadius: 2,
+                            animation: "ufm-progress-pulse 1.4s ease-in-out infinite" }} />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Phase-2 pending overlay — blocks all interaction while cutout is processing */}
       {item?.status === "processing_cutout" && (
         <div
@@ -1660,6 +1701,7 @@ export default function RenderFlyerPlacements({
   onEditBannerDays,
   onElementSelect,
   onCardContextMenu,
+  replacementJobs,
 }: {
   items: any[];
   placements: any[];
@@ -1689,6 +1731,7 @@ export default function RenderFlyerPlacements({
   onEditBannerDays?: (itemId: string) => void;
   onElementSelect?: (itemId: string, element: 'title' | 'price' | 'banner' | null) => void;
   onCardContextMenu?: (itemId: string) => void;
+  replacementJobs?: Array<{ id: string; itemId: string; url: string; status: "processing" | "done" | "error"; errorMessage?: string }>;
 }) {
   if (!Array.isArray(items) || !Array.isArray(placements)) return null;
 
@@ -1803,6 +1846,7 @@ export default function RenderFlyerPlacements({
               ? (element) => onElementSelect(p.itemId, element)
               : undefined}
             onContextMenu={onCardContextMenu ? () => onCardContextMenu(p.itemId) : undefined}
+            activeReplacementJobs={(replacementJobs ?? []).filter(j => j.itemId === p.itemId && j.status === "processing")}
           />
         );
       })}

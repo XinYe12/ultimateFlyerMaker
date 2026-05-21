@@ -125,6 +125,11 @@ apps/desktop/output/
 apps/desktop/apps/desktop/project_assets/cutouts/
 apps/desktop/backend/uploads/
 apps/desktop/backend/src/**/cutouts/
+apps/desktop/exports-not-in-db.txt
+
+# Office temp lock files
+~$*
+/image.png
 
 # Claude Code local settings (machine-specific paths)
 .claude/

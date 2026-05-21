@@ -11,6 +11,8 @@ import { db } from "./firebase.js";
 import { embedText } from "./imageEmbeddingService.js";
 import { buildSearchTokens, buildMatchKeys, invalidateEmbeddingCache } from "./searchService.js";
 import { FIRESTORE_COLLECTION } from "../config/vectorConfig.js";
+import { getDomain } from "./braveSearchService.js";
+import { updateDomainWeights } from "./serperSignalService.js";
 
 async function uploadCutoutToStorage(bucket, cutoutPath, productId) {
   const ext = path.extname(cutoutPath).replace(".", "") || "png";
@@ -35,7 +37,7 @@ async function uploadCutoutToStorage(bucket, cutoutPath, productId) {
  * Save user-accepted Serper images to Firestore product_vectors.
  * Called after flyer export so future pipelines can DB-match the same products.
  *
- * @param {Array<{ en?: string; zh?: string; size?: string; cutoutPath: string }>} items
+ * @param {Array<{ en?: string; zh?: string; size?: string; department?: string; cutoutPath: string }>} items
  */
 export async function promoteSerperResults(items) {
   if (!Array.isArray(items) || items.length === 0) return;
@@ -50,7 +52,7 @@ export async function promoteSerperResults(items) {
 
   let promoted = 0;
   for (const item of items) {
-    const { en = "", zh = "", size = "", cutoutPath } = item;
+    const { en = "", zh = "", size = "", department = "", sourceDomain = "", cutoutPath } = item;
     if (!cutoutPath) continue;
 
     // Skip if the cutout file no longer exists on disk
@@ -120,6 +122,7 @@ export async function promoteSerperResults(items) {
 
       promoted++;
       console.log(`[promoteSerperResults] Saved "${en}" to product DB (id=${productId})`);
+      updateDomainWeights(sourceDomain || getDomain(publicUrl), department || "_all", "accepted").catch(() => {});
     } catch (err) {
       console.warn(`[promoteSerperResults] Failed to promote "${en}":`, err.message);
     }

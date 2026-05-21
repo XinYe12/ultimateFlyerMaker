@@ -151,6 +151,11 @@
   to { transform: rotate(360deg); }
 }
 
+@keyframes ufm-progress-pulse {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
 @keyframes ufm-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }

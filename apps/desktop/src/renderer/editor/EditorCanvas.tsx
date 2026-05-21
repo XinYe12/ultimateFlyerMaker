@@ -13,9 +13,10 @@ import { layoutFlyer, layoutFlyerSlots } from "../../../../shared/flyer/layout/l
 import { isSlottedDepartment, isCardDepartment } from "./loadFlyerTemplateConfig";
 import { layoutCardRows, computeCardRects, deriveRowCount, CARD_GAP, CARD_BG } from "../../../../shared/flyer/layout/layoutCardRows";
 import { saveDepartmentDraft } from "./draftStorage";
-import { IngestItem, CardDef, CardLayout } from "../types";
+import { IngestItem, CardDef, CardLayout, ReplacementJob } from "../types";
 import MergeSelectionDialog, { MergeCandidate } from "./MergeSelectionDialog";
 import GlobalFontToolbar from "./GlobalFontToolbar";
+import CutoutEraserModal from "./CutoutEraserModal";
 
 const PREVIEW_SCALE = 0.5;
 const MIN_CARD_WIDTH = 150;
@@ -64,7 +65,9 @@ export default function EditorCanvas({
   editMode,
   onSubImageUpdate,
   onDeleteSubImage,
+  onCutoutErased,
   flyerWeekStart,
+  replacementJobs,
 }: {
   editorQueue: any[];
   templateId: string;
@@ -96,12 +99,15 @@ export default function EditorCanvas({
   editMode?: boolean;
   onSubImageUpdate?: (itemId: string, subIdx: number, patch: { scale?: number; rotation?: number; x?: number; y?: number; cropLeft?: number; cropRight?: number; cropTop?: number; cropBottom?: number }) => void;
   onDeleteSubImage?: (itemId: string, subIdx: number) => void;
+  onCutoutErased?: (itemId: string, newPath: string) => void;
+  replacementJobs?: ReplacementJob[];
 }) {
   const [config, setConfig] = useState<any | null>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   const [addImageModalSlot, setAddImageModalSlot] = useState<number | null>(null);
   const [addImageModalCardId, setAddImageModalCardId] = useState<string | null>(null);
   const [removingBgIds, setRemovingBgIds] = useState<Set<string>>(new Set());
+  const [eraserItemId, setEraserItemId] = useState<string | null>(null);
   // load template config (only when template changes, not on every dept switch)
   useEffect(() => {
     loadFlyerTemplateConfig(templateId).then(cfg => {
@@ -144,6 +150,7 @@ export default function EditorCanvas({
       else if (action === 'dbResults') onChooseDatabaseResults?.(itemId);
       else if (action === 'uploadLocal') onReplaceImageRef.current?.(itemId);
       else if (action === 'flavors') onPickSeriesFlavors?.(itemId);
+      else if (action === 'editCutout') setEraserItemId(itemId);
     });
     return unsub;
   }, [onEditTitle, onGoogleSearch, onChooseDatabaseResults, onPickSeriesFlavors]);
@@ -1604,6 +1611,23 @@ export default function EditorCanvas({
       />
     )}
 
+    {/* Cutout eraser modal */}
+    {eraserItemId && (() => {
+      const it = items.find((i: any) => i.id === eraserItemId);
+      const cutoutPath = it?.result?.cutoutPath ?? it?.cutoutPath;
+      if (!cutoutPath) return null;
+      return (
+        <CutoutEraserModal
+          cutoutPath={cutoutPath}
+          onSave={(newPath) => {
+            onCutoutErased?.(eraserItemId, newPath);
+            setEraserItemId(null);
+          }}
+          onClose={() => setEraserItemId(null)}
+        />
+      );
+    })()}
+
     {/* AddImageModal for slot-based */}
     {addImageModalSlot !== null && (
       <AddImageModal
@@ -1723,6 +1747,7 @@ export default function EditorCanvas({
             if (onGoogleSearch) menuActions.push({ id: 'googleSearch', label: 'Google Search' });
             menuActions.push({ id: 'dbResults', label: 'Database Results', enabled: !!onChooseDatabaseResults });
             menuActions.push({ id: 'uploadLocal', label: 'Upload from Local' });
+            menuActions.push({ id: 'editCutout', label: 'Edit Cutout' });
             (window as any).ufm.showContextMenu(itemId, menuActions);
           } : undefined}
         >
@@ -1785,6 +1810,7 @@ export default function EditorCanvas({
                   onBannerPanStart={onCardLayoutChange && editMode ? handleBannerPanStart : undefined}
                   onEditBannerDays={onEditBannerDays && editMode ? onEditBannerDays : undefined}
                   onElementSelect={editMode ? handleElementSelect : undefined}
+                  replacementJobs={replacementJobs}
                 />
               )}
 
@@ -2106,6 +2132,7 @@ export default function EditorCanvas({
               placements={placements}
               discountLabels={discountLabels as any}
               flyerWeekStart={flyerWeekStart}
+              replacementJobs={replacementJobs}
             />
           )}
 

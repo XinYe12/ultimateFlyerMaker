@@ -13,7 +13,7 @@ import AddProductDialog, { AddProductData } from "./editor/AddProductDialog";
 
 import { useIngestQueue } from "./useIngestQueue";
 import { useJobQueue } from "./hooks/useJobQueue";
-import { IngestItem, FlyerJob, CardLayout } from "./types";
+import { IngestItem, FlyerJob, DepartmentId, CardLayout, ReplacementJob } from "./types";
 import EditorCanvas from "./editor/EditorCanvas";
 import DbSearchModal from "./editor/DbSearchModal";
 import GoogleSearchModal from "./editor/GoogleSearchModal";
@@ -76,6 +76,9 @@ export default function App() {
   const [userRowCounts, setUserRowCounts] = useState<Record<string, number>>({});
   const [dbSearchItemId, setDbSearchItemId] = useState<string | null>(null);
   const [googleSearchItemId, setGoogleSearchItemId] = useState<string | null>(null);
+  const [replacementJobs, setReplacementJobs] = useState<ReplacementJob[]>([]);
+  const multiFlavorSessionRef = useRef<Map<string, string[]>>(new Map());
+  const prevCardItemIdsRef = useRef<Set<string>>(new Set());
   const [batchUpload, setBatchUpload] = useState<{ total: number; processed: number; isActive: boolean } | null>(null);
   const [discountDetailsDialog, setDiscountDetailsDialog] = useState<{
     itemId: string;
@@ -482,7 +485,18 @@ export default function App() {
 
     const doneItems = editorQueue.filter((it: any) => it.status === "done" || it.status === "processing_cutout" || it.status === "cutout_error");
     const assignedItemIds = new Set(layout.filter(c => c.itemId).map(c => c.itemId));
-    const unassigned = doneItems.filter((it: any) => !assignedItemIds.has(it.id));
+
+    // Items that previously had a card but now appear unassigned are merge race-condition
+    // artifacts (layout updated before queue update in the same event). Only treat truly
+    // new items (never had a card) as unassigned to avoid triggering a spurious regeneration.
+    const unassigned = doneItems.filter((it: any) =>
+      !assignedItemIds.has(it.id) && !prevCardItemIdsRef.current.has(it.id)
+    );
+
+    // Keep ref current before any early return so it reflects the layout every render
+    prevCardItemIdsRef.current = new Set(
+      layout.filter(c => c.itemId).map(c => c.itemId as string)
+    );
 
     if (unassigned.length === 0) return;
 
@@ -736,6 +750,18 @@ export default function App() {
         return;
       }
 
+      // Phase 2: record rejection signal if replacing a Serper-sourced image
+      if (existingItem.result?.matchSource === "serper") {
+        const ctx = (existingItem.result as any)._serperSignalCtx;
+        (window as any).ufm.recordSerperRejection({
+          url: ctx?.url ?? null,
+          domain: ctx?.domain ?? null,
+          productEn: existingItem.result?.discount?.en ?? "",
+          department: existingItem.result?.discount?.department ?? "",
+          reason: "rejected_user_swap",
+        }).catch(() => {});
+      }
+
       updateItem(itemId, { status: "running", path: filePath });
 
       const result = await window.ufm.ingestPhoto(filePath);
@@ -761,6 +787,29 @@ export default function App() {
   // ---------------- REPLACE VIA SEARCH MODALS ----------------
   const handleSearchReplace = (itemId: string, data: { path: string; result: any }) => {
     const existingItem = editorQueue.find(item => item.id === itemId);
+
+    // Phase 2: record rejection signal if replacing a Serper-sourced image
+    if (existingItem?.result?.matchSource === "serper") {
+      const ctx = (existingItem.result as any)._serperSignalCtx;
+      (window as any).ufm.recordSerperRejection({
+        url: ctx?.url ?? null,
+        domain: ctx?.domain ?? null,
+        productEn: existingItem.result?.discount?.en ?? "",
+        department: existingItem.result?.discount?.department ?? "",
+        reason: "rejected_user_swap",
+      }).catch(() => {});
+    }
+
+    // Phase 2: record acceptance signal for manual Chrome search picks (3× weight)
+    if ((data as any)._sourceUrl) {
+      (window as any).ufm.recordManualGoogleAccepted({
+        sourceUrl: (data as any)._sourceUrl,
+        searchQuery: (data as any)._searchQuery ?? "",
+        productEn: existingItem?.result?.discount?.en ?? "",
+        department: existingItem?.result?.discount?.department ?? "",
+      }).catch(() => {});
+    }
+
     updateItem(itemId, {
       status: "done",
       path: data.path,
@@ -777,11 +826,59 @@ export default function App() {
     });
   };
 
+  const enqueueReplacementJob = async (
+    itemId: string,
+    url: string,
+    searchQuery: string,
+    isMultiFlavor: boolean,
+  ) => {
+    const jobId = uuidv4();
+    setReplacementJobs(prev => [...prev, { id: jobId, itemId, url, status: "processing" }]);
+    try {
+      const data = await (window as any).ufm.downloadAndIngestFromUrl(url.trim());
+
+      if (isMultiFlavor) {
+        const session = multiFlavorSessionRef.current;
+        const existing = session.get(itemId) ?? [];
+        const newPath: string = data.result?.cutoutPath ?? data.path;
+        const accumulated = [...existing, newPath];
+        session.set(itemId, accumulated);
+        const existingItem = editorQueueRef.current.find((i: any) => i.id === itemId);
+        updateItem(itemId, {
+          status: "done",
+          path: data.path,
+          result: {
+            ...data.result,
+            discount: existingItem?.result?.discount,
+            cutoutPath: accumulated[0],
+            cutoutPaths: accumulated.length > 1 ? accumulated : undefined,
+            allFlavorPaths: undefined,
+            pendingFlavorSelection: undefined,
+            subImageOverrides: undefined,
+          },
+        });
+      } else {
+        handleSearchReplace(itemId, { ...data, _sourceUrl: url, _searchQuery: searchQuery });
+      }
+
+      setReplacementJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: "done" } : j));
+      setTimeout(() => setReplacementJobs(prev => prev.filter(j => j.id !== jobId)), 2000);
+    } catch (err: any) {
+      setReplacementJobs(prev => prev.map(j =>
+        j.id === jobId ? { ...j, status: "error", errorMessage: err?.message ?? String(err) } : j
+      ));
+      setTimeout(() => setReplacementJobs(prev => prev.filter(j => j.id !== jobId)), 10000);
+    }
+  };
+
   const handleChooseDatabaseResults = (itemId: string) => {
     setDbSearchItemId(itemId);
   };
 
   const handleChooseGoogleSearch = (itemId: string) => {
+    const item = editorQueue.find((i: any) => i.id === itemId);
+    const isMulti = Array.isArray(item?.result?.cutoutPaths) && (item!.result!.cutoutPaths as string[]).length > 1;
+    if (isMulti) multiFlavorSessionRef.current.delete(itemId);
     setGoogleSearchItemId(itemId);
   };
 
@@ -795,6 +892,8 @@ export default function App() {
         en: item.result?.discount?.en ?? item.result?.title?.en ?? "",
         zh: item.result?.discount?.zh ?? item.result?.title?.zh ?? "",
         size: item.result?.discount?.size ?? item.result?.title?.size ?? "",
+        department: item.result?.discount?.department ?? "",
+        sourceDomain: (item.result as any)._serperSignalCtx?.domain ?? "",
         cutoutPath: item.result.cutoutPath as string,
       }));
   }, [view, editorQueue]);
@@ -1114,80 +1213,61 @@ export default function App() {
   };
 
   // ---------------- ADD PRODUCT FROM DISCOUNT (XLSX / TEXT) ----------------
+  // Delegates to JobProcessor (same pipeline as job queue view):
+  // DB search → Serper fallback → rembg → shadow.
+  // Items stream into the editor via onJobItemComplete as they finish.
   const handleAddProductFromDiscount = async (items: any[]) => {
-    // Persist original parsed items for verification; new additions invalidate prior result
     setOriginalDiscounts(prev => [...prev, ...items]);
     setVerificationDone(false);
     setVerificationProgress(null);
 
-    for (const item of items) {
-      // 1. DB search for matching image
-      let imageUrl: string | undefined;
-      try {
-        const results = await window.ufm.searchDatabaseByText(item.en || item.zh || "");
-        const best = results?.[0];
-        if (best && best.score > 0.5 && best.publicUrl) {
-          imageUrl = best.publicUrl;
-        }
-      } catch (err) {
-        console.error(`[xlsx-match] search failed for "${item.en || item.zh}":`, err);
-      }
-
-      // 2. Build synthetic IngestItem
-      const syntheticItem: IngestItem = {
-        id: crypto.randomUUID(),
-        path: imageUrl || "",
+    const jobId = crypto.randomUUID();
+    const job: FlyerJob = {
+      id: jobId,
+      name: "Editor import",
+      department: department as DepartmentId,
+      templateId,
+      images: [],
+      discount: {
+        type: "xlsx",
+        source: "editor_import",
+        parsedItems: items,
         status: "done",
-        result: {
-          inputPath: imageUrl || "",
-          cutoutPath: imageUrl || "",
-          layout: { size: "medium" },
-          title: {
-            en: item.en || "",
-            zh: item.zh || "",
-            size: item.size || "",
-            confidence: "high",
-            source: "xlsx",
-          },
-          ocr: [],
-          llmResult: {
-            best_title: { english_name: item.en || "", chinese_name: item.zh || "", confidence: 1 },
-            items: [{
-              english_name: item.en || "",
-              chinese_name: item.zh || "",
-              size: item.size || "",
-              sale_price: item.salePrice,
-              regular_price: item.regularPrice,
-              unit: item.unit || "",
-              quantity: item.quantity ?? null,
-            }],
-          },
-          discount: {
-            en: item.en,
-            zh: item.zh,
-            size: item.size,
-            salePrice: item.salePrice,
-            regularPrice: item.regularPrice,
-            unit: item.unit,
-            quantity: item.quantity,
-            price: item.price,
-          },
-        },
-      };
+      },
+      status: "queued",
+      createdAt: Date.now(),
+      startedAt: Date.now(),
+      progress: { totalImages: items.length, processedImages: 0, currentStep: "Queued" },
+    };
 
-      // 3. Add to queue
-      addItem(syntheticItem);
+    const unsubFns: (() => void)[] = [];
+    const cleanup = () => unsubFns.forEach(fn => fn());
 
-      // 4. Generate discount label and add to discountLabels
-      try {
-        const labels = await window.ufm.exportDiscountImages([syntheticItem]);
-        if (labels?.[0]) {
-          setDiscountLabels((prev: any[]) => [...prev, labels[0]]);
+    unsubFns.push(
+      window.ufm.onJobItemComplete(({ jobId: jid, processedImage }: any) => {
+        if (jid !== jobId) return;
+        if (processedImage?.id) addItem(processedImage as IngestItem);
+      })
+    );
+
+    unsubFns.push(
+      window.ufm.onJobComplete(({ jobId: jid, result }: any) => {
+        if (jid !== jobId) return;
+        if (result?.discountLabels?.length) {
+          setDiscountLabels((prev: any[]) => [...prev, ...result.discountLabels]);
         }
-      } catch {
-        // label render failed — item still added without label
-      }
-    }
+        cleanup();
+      })
+    );
+
+    unsubFns.push(
+      window.ufm.onJobError(({ jobId: jid }: any) => {
+        if (jid !== jobId) return;
+        cleanup();
+      })
+    );
+
+    await window.ufm.startJob(job);
   };
 
   // ---------------- CLEAR DEPARTMENT (wipe all products) ----------------
@@ -1260,6 +1340,12 @@ export default function App() {
     return d?.en ?? d?.english_name
       ?? item?.result?.title?.en
       ?? (item?.result?.aiTitle as any)?.en ?? "";
+  })();
+
+  const googleSearchIsMultiFlavor = (() => {
+    if (!googleSearchItemId) return false;
+    const item = editorQueue.find((i) => i.id === googleSearchItemId);
+    return Array.isArray(item?.result?.cutoutPaths) && (item!.result!.cutoutPaths as string[]).length > 1;
   })();
 
   // Effective row count for the toolbar rows control
@@ -1782,6 +1868,8 @@ export default function App() {
                   onRowCountChange={departmentLocked ? undefined : handleRowCountChange}
                   onSubImageUpdate={departmentLocked ? undefined : handleSubImageUpdate}
                   onDeleteSubImage={departmentLocked ? undefined : handleDeleteSubImage}
+                  onCutoutErased={departmentLocked ? undefined : (id, newPath) => applyCutoutPatch(id, { cutoutPath: newPath })}
+                  replacementJobs={replacementJobs}
                 />
 
                 {dbSearchItemId && (
@@ -1802,8 +1890,21 @@ export default function App() {
                       const src = item?.result?.cutoutPath ?? item?.result?.inputPath;
                       return src ? `file://${src}` : undefined;
                     })()}
+                    isMultiFlavor={googleSearchIsMultiFlavor}
+                    jobs={replacementJobs.filter(j => j.itemId === googleSearchItemId)}
+                    onDropImage={(url) =>
+                      enqueueReplacementJob(
+                        googleSearchItemId,
+                        url,
+                        googleSearchInitialQuery,
+                        googleSearchIsMultiFlavor,
+                      )
+                    }
                     onReplace={handleSearchReplace}
-                    onClose={() => setGoogleSearchItemId(null)}
+                    onClose={() => {
+                      if (googleSearchIsMultiFlavor) multiFlavorSessionRef.current.delete(googleSearchItemId);
+                      setGoogleSearchItemId(null);
+                    }}
                   />
                 )}
 

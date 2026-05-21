@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
+import SerperLearningPanel from "./SerperLearningPanel";
 
 type KeyEntry = { key: string; label: string; description: string; url: string; isSet: boolean };
 
@@ -262,6 +263,9 @@ export default function SettingsView({ onBack }: Props) {
           </>
         )}
       </Card>
+
+      {/* Search Learning section */}
+      <SerperLearningPanel />
 
       {/* Storage section */}
       <Card style={{ padding: 24, marginBottom: 16 }}>
