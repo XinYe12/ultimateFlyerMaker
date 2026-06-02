@@ -9,6 +9,8 @@ import "./loadEnv.js";
 
 import { processFlyerImage } from "./imagePipeline.js";
 import { ingestPhoto, ingestPhotoPhase1, ingestPhotoPhase2 } from "./ingestion/ingestPhoto.js";
+import { runCutout } from "./cutoutClient.js";
+import { addShadowToCutout } from "./ingestion/addShadow.js";
 import { parseDiscountText } from "./ipc/parseDiscountText.js";
 import { exportDiscountImages } from "./ipc/exportDiscountImages.js";
 import { parseDiscountXlsx, parseAllDepartmentsXlsx } from "./ipc/parseDiscountXlsx.js";
@@ -20,11 +22,12 @@ import { braveImageSearchByQuery } from "./ingestion/braveSearchService.js";
 import { googleImageSearch, googleKeysPresent } from "./ingestion/googleImageSearchService.js";
 import os from "os";
 
-import { startBackend, stopBackend, startHealthWatch } from "./startBackend.js";
+import { startBackend, stopBackend, startHealthWatch, getBackendInfo } from "./startBackend.js";
 import { getResourceProfile } from "./resourceProfile.js";
 import { waitForBackend } from "./waitForBackend.js";
 import { loadUserConfig, readUserConfig, writeUserConfig } from "./ipc/configStore.js";
 import { initFirebase, admin } from "./firebase.js";
+import { db as firestoreDb } from "./ingestion/firebase.js";
 import { registerBackendIpc } from "./ipc/backend.js";
 import { registerBackendProxyIpc } from "./ipc/backendProxy.js";
 import { processDbBatch, requestBatchStop, getDbStats, getTodaysSaves, checkDbStorageConsistency, fixDbStorageConsistency, confirmSingleImageToDb, scanAndRemoveNonProducts, deleteProductFromDb, cleanMessyTitleProducts } from "./ipc/batchIngestToDB.js";
@@ -36,6 +39,7 @@ import { initSerperScorer, shutdownSerperScorer } from "./ingestion/serperScorer
 import { recordSerperRejection, recordManualGoogleAccepted } from "./ingestion/serperSignalService.js";
 import { getSerperLearningStats } from "./ipc/getSerperLearningStats.js";
 import { testGeminiConnection } from "./ingestion/imageEmbeddingService.js";
+import { parseTemplateFromImages } from "./ipc/parseTemplateFromImages.js";
 import "./net/longFetch.js";
 import log from "./logger.js";
 
@@ -220,18 +224,211 @@ ipcMain.on("ufm:startDrag", (event, filePath) => {
   event.sender.startDrag({ file: filePath, icon });
 });
 
-/* ---------- IPC: cutout eraser ---------- */
-ipcMain.handle("ufm:saveErasedCutout", async (_event, cutoutPath, pngDataUrl) => {
+function normalizeLocalImagePath(value) {
+  if (!value) return value;
+  const raw = String(value);
+  if (raw.startsWith("file://")) {
+    try {
+      return fileURLToPath(raw);
+    } catch {
+      return decodeURIComponent(raw.replace(/^file:\/+/, ""));
+    }
+  }
+  return path.normalize(raw);
+}
+
+function toBackendPath(value) {
+  const local = normalizeLocalImagePath(value);
+  return local ? String(local).replace(/\\/g, "/") : local;
+}
+
+function stripCutoutSuffixes(nameWithoutExt) {
+  return nameWithoutExt.replace(/(?:\.(?:erased|extracted|smart)-\d+)+$/, "");
+}
+
+const CUTOUT_EXPORT_ROOT = path.resolve(__dirname, "../../../exports/cutouts");
+
+function isDerivedCutoutPath(value) {
+  if (!value) return false;
+  const normalized = path.normalize(String(value)).toLowerCase();
+  const basename = path.basename(normalized);
+  return (
+    basename.includes(".cutout") ||
+    basename.includes(".shadow") ||
+    basename.includes(".smart-") ||
+    basename.includes(".erased") ||
+    normalized.startsWith(path.normalize(CUTOUT_EXPORT_ROOT).toLowerCase())
+  );
+}
+
+async function fetchImageToOriginalCache(sourceUrl) {
+  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36";
+  const ACCEPT = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
+  const referers = [
+    "https://www.google.com/",
+    new URL(sourceUrl).origin + "/",
+    null,
+  ];
+  let res;
+  for (const referer of referers) {
+    const headers = { "User-Agent": UA, "Accept": ACCEPT };
+    if (referer) headers["Referer"] = referer;
+    res = await fetch(sourceUrl, {
+      headers,
+      signal: AbortSignal.timeout(20000),
+    });
+    if (res.status !== 403) break;
+  }
+  if (!res?.ok) throw new Error(`Original download failed: HTTP ${res?.status || "unknown"}`);
+  const contentType = (res.headers.get("content-type") || "").toLowerCase();
+  if (contentType && !contentType.startsWith("image/")) {
+    throw new Error(`Original URL did not return an image: ${contentType}`);
+  }
+  const ab = await res.arrayBuffer();
+  let ext = ".png";
   try {
-    const base64 = pngDataUrl.replace(/^data:image\/png;base64,/, "");
+    const urlExt = path.extname(new URL(sourceUrl).pathname).toLowerCase();
+    if (/^\.(jpg|jpeg|png|webp|gif)$/i.test(urlExt)) ext = urlExt;
+  } catch {}
+  const outPath = path.join(CUTOUT_EXPORT_ROOT, `ufm-original-${Date.now()}${ext}`);
+  await fs.promises.writeFile(outPath, Buffer.from(ab));
+  return outPath;
+}
+
+/* ---------- IPC: cutout eraser ---------- */
+ipcMain.handle("ufm:saveErasedCutout", async (_event, cutoutPath, pngDataUrl, options = {}) => {
+  try {
+    await fs.promises.mkdir(CUTOUT_EXPORT_ROOT, { recursive: true });
+    const localCutoutPath = normalizeLocalImagePath(cutoutPath);
+    const base64 = String(pngDataUrl || "").replace(/^data:image\/png;base64,/, "");
+    if (!base64) throw new Error("Missing edited PNG data");
     const buf = Buffer.from(base64, "base64");
-    const ext = path.extname(cutoutPath);                        // ".png"
-    const outPath = cutoutPath.slice(0, -ext.length) + ".erased" + ext;
+    const parsed = localCutoutPath ? path.parse(localCutoutPath) : null;
+    const safeName = stripCutoutSuffixes(parsed?.name || "cutout").replace(/[^\w.-]+/g, "-");
+    const outDir = options?.sourceMode ? CUTOUT_EXPORT_ROOT : (parsed?.dir || CUTOUT_EXPORT_ROOT);
+    const outPath = path.join(outDir, `${safeName}.erased-${Date.now()}.png`);
     await fs.promises.writeFile(outPath, buf);
     return { ok: true, path: outPath };
   } catch (err) {
     log.error("[saveErasedCutout] failed:", err);
     return { ok: false, error: String(err) };
+  }
+});
+
+ipcMain.handle("ufm:cutoutEditedImage", async (_event, basePath, pngDataUrl) => {
+  try {
+    const backend = getBackendInfo();
+    if (!backend?.url) throw new Error("Backend not started");
+    await fs.promises.mkdir(CUTOUT_EXPORT_ROOT, { recursive: true });
+    const localBasePath = normalizeLocalImagePath(basePath);
+    const base64 = String(pngDataUrl || "").replace(/^data:image\/png;base64,/, "");
+    if (!base64) throw new Error("Missing edited PNG data");
+    const buf = Buffer.from(base64, "base64");
+    const form = new FormData();
+    form.append("file", buf, {
+      filename: "edited-cutout-source.png",
+      contentType: "image/png",
+    });
+    const res = await fetch(`${backend.url}/cutout`, {
+      method: "POST",
+      body: form,
+      signal: AbortSignal.timeout(180000),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+    if (!body.output_path || !fs.existsSync(body.output_path)) {
+      throw new Error("Extracted cutout output missing");
+    }
+    const parsed = localBasePath ? path.parse(localBasePath) : null;
+    const safeName = stripCutoutSuffixes(parsed?.name || "edited").replace(/[^\w.-]+/g, "-");
+    const outPath = path.join(CUTOUT_EXPORT_ROOT, `${safeName}.extracted-${Date.now()}.png`);
+    try {
+      await fs.promises.rename(body.output_path, outPath);
+    } catch (err) {
+      if (err?.code === "EXDEV") {
+        await fs.promises.copyFile(body.output_path, outPath);
+        await fs.promises.unlink(body.output_path).catch(() => {});
+      } else {
+        throw err;
+      }
+    }
+    return { ok: true, path: outPath, diagnostics: body };
+  } catch (err) {
+    log.error("[cutoutEditedImage] failed:", err);
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+
+ipcMain.handle("ufm:refineCutoutWithClicks", async (_event, args) => {
+  try {
+    const backend = getBackendInfo();
+    if (!backend?.url) throw new Error("Backend not started");
+    const cutoutPath = normalizeLocalImagePath(args?.cutout_path);
+    const imagePath = normalizeLocalImagePath(args?.image_path);
+    if (!cutoutPath || !fs.existsSync(cutoutPath)) {
+      throw new Error(`cutout_path does not exist: ${cutoutPath || "(empty)"}`);
+    }
+    const payload = {
+      ...args,
+      cutout_path: toBackendPath(cutoutPath),
+      image_path: imagePath && fs.existsSync(imagePath) ? toBackendPath(imagePath) : null,
+    };
+    const res = await fetch(`${backend.url}/interactive-cutout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(120000),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+    if (!body.output_path || !fs.existsSync(body.output_path)) {
+      throw new Error("Refined cutout output missing");
+    }
+    const cleanBase = cutoutPath.replace(/(?:\.(?:erased|extracted|smart)-\d+)+(?=\.png$)/i, "");
+    const outPath = cleanBase.replace(/\.png$/i, "") + `.smart-${Date.now()}.png`;
+    try {
+      await fs.promises.rename(body.output_path, outPath);
+    } catch (err) {
+      if (err?.code === "EXDEV") {
+        await fs.promises.copyFile(body.output_path, outPath);
+        await fs.promises.unlink(body.output_path).catch(() => {});
+      } else {
+        throw err;
+      }
+    }
+    return { ok: true, path: outPath, diagnostics: body };
+  } catch (err) {
+    log.error("[refineCutoutWithClicks] failed:", err);
+    return { ok: false, error: String(err?.message || err) };
+  }
+});
+
+ipcMain.handle("ufm:restoreOriginalCutout", async (_event, args) => {
+  try {
+    await fs.promises.mkdir(CUTOUT_EXPORT_ROOT, { recursive: true });
+    const cutoutPath = normalizeLocalImagePath(args?.cutoutPath);
+    const sourcePath = normalizeLocalImagePath(args?.sourcePath);
+    const sourceUrl = String(args?.sourceUrl || "").trim();
+    const sourcePathIsUsable = sourcePath &&
+      fs.existsSync(sourcePath) &&
+      sourcePath !== cutoutPath &&
+      !isDerivedCutoutPath(sourcePath);
+
+    if (sourcePathIsUsable) {
+      return { ok: true, path: sourcePath };
+    }
+
+    if (sourceUrl && /^https?:\/\//i.test(sourceUrl)) {
+      return { ok: true, path: await fetchImageToOriginalCache(sourceUrl) };
+    }
+
+    const reason = sourcePath && isDerivedCutoutPath(sourcePath)
+      ? "Only a cutout-derived image is available; no original source URL was saved."
+      : "No original image source is available";
+    throw new Error(reason);
+  } catch (err) {
+    log.error("[restoreOriginalCutout] failed:", err);
+    return { ok: false, error: String(err?.message || err) };
   }
 });
 
@@ -279,6 +476,13 @@ ipcMain.handle("ufm:openLogFile", async () => {
   const filePath = log.transports.file.getFile().path;
   await shell.openPath(filePath);
   return filePath;
+});
+
+/* ---------- IPC: open external URL in default browser ---------- */
+ipcMain.handle("ufm:openExternal", async (_event, url) => {
+  if (typeof url === "string" && /^https?:\/\//.test(url)) {
+    await shell.openExternal(url);
+  }
 });
 
 /* ---------- IPC: batch cutout ---------- */
@@ -335,6 +539,33 @@ ipcMain.handle("ufm:startCutout", async (_, id, inputPath) => {
   return { queued: true };
 });
 
+ipcMain.handle("ufm:rerunCutout", async (_, id, originalPath, model) => {
+  (async () => {
+    try {
+      // Always run on the original photo — never a cutout derivative.
+      // If the file no longer exists (e.g. temp file cleaned up), bail with a clear error.
+      const localOriginal = normalizeLocalImagePath(originalPath);
+      if (!localOriginal || !fs.existsSync(localOriginal)) {
+        throw new Error(
+          `Original photo not found at "${originalPath}". ` +
+          `Please re-add the product image and try again.`
+        );
+      }
+      const cutoutResult = await runCutout(localOriginal, null, { model });
+      const cutoutPath = await addShadowToCutout(cutoutResult.path, {
+        lowConfidence: cutoutResult.lowConfidence,
+        qualityReason: cutoutResult.qualityReason,
+        borderAlpha: cutoutResult.borderAlpha,
+        bboxAreaRatio: cutoutResult.bboxAreaRatio,
+      });
+      safeSend("ufm:cutoutComplete", { id, cutoutPath, layout: { size: "SMALL" } });
+    } catch (err) {
+      safeSend("ufm:cutoutError", { id, error: err?.message ?? String(err) });
+    }
+  })();
+  return { queued: true };
+});
+
 /* ---------- IPC: parsing ---------- */
 ipcMain.handle("ufm:parseDiscountXlsx", async (event, ...args) => {
   try {
@@ -365,6 +596,16 @@ ipcMain.handle("ufm:parseDiscountText", async (event, ...args) => {
     return await parseDiscountText(event, ...args);
   } catch (err) {
     log.error("[ufm:parseDiscountText]", err);
+    throw err;
+  }
+});
+
+/* ---------- IPC: template import from images ---------- */
+ipcMain.handle("ufm:parseTemplateFromImages", async (event, imagePaths) => {
+  try {
+    return await parseTemplateFromImages(event, imagePaths);
+  } catch (err) {
+    log.error("[ufm:parseTemplateFromImages]", err);
     throw err;
   }
 });
@@ -497,7 +738,7 @@ ipcMain.handle("ufm:downloadAndIngestFromUrl", async (_, publicUrl) => {
     for (const referer of referers) {
       const headers = { "User-Agent": UA, "Accept": ACCEPT };
       if (referer) headers["Referer"] = referer;
-      res = await session.defaultSession.fetch(url, { headers });
+      res = await fetch(url, { headers });
       if (res.status !== 403) break;
       console.log(`[downloadAndIngest] 403 with Referer=${referer ?? "none"}, retrying…`);
     }
@@ -528,8 +769,7 @@ ipcMain.handle("ufm:downloadAndIngestFromUrl", async (_, publicUrl) => {
 /* ---------- IPC: Firestore connection test ---------- */
 ipcMain.handle("ufm:testFirestore", async () => {
   try {
-    const db = admin.firestore();
-    const snap = await db.collection("product_vectors").limit(3).get();
+    const snap = await firestoreDb.collection("product_vectors").limit(3).get();
     const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     return { ok: true, count: snap.size, totalDocs: snap.size, sample: docs };
   } catch (err) {
@@ -689,26 +929,63 @@ ipcMain.handle("ufm:getTodaysSaves", async () => {
   return getTodaysSaves();
 });
 
-const DB_STATS_TIMEOUT_MS = 10000;
+let _getDbStatsInflight = null;
 
 ipcMain.handle("ufm:getDbStats", async () => {
-  const LOG = (step, msg) => console.log(`[ufm:getDbStats IPC] [${step}]`, msg);
-  LOG("1", "IPC received. Starting " + DB_STATS_TIMEOUT_MS + "ms timeout race...");
-  const timeout = new Promise((_, reject) =>
-    setTimeout(() => {
-      console.warn("[ufm:getDbStats IPC] [TIMEOUT] " + DB_STATS_TIMEOUT_MS + "ms elapsed, aborting.");
-      reject(new Error("Connection timed out (10s). Check VPN/network."));
-    }, DB_STATS_TIMEOUT_MS)
-  );
-  try {
-    const result = await Promise.race([getDbStats(), timeout]);
-    LOG("2", "Success. Returning count=" + result.count);
-    return result;
-  } catch (err) {
-    const msg = err?.message || String(err);
-    console.warn("[ufm:getDbStats IPC] [FAIL]", msg);
-    return { count: 0, error: msg };
+  if (_getDbStatsInflight) {
+    // #region agent log
+    fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
+      body: JSON.stringify({
+        sessionId: "2e2f6c",
+        location: "main.js:ufm:getDbStats",
+        message: "IPC deduped to in-flight request",
+        data: {},
+        hypothesisId: "B",
+        timestamp: Date.now(),
+        runId: "post-fix",
+      }),
+    }).catch(() => {});
+    // #endregion
+    return _getDbStatsInflight;
   }
+
+  const LOG = (step, msg) => console.log(`[ufm:getDbStats IPC] [${step}]`, msg);
+  const ipcId = `ipc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  // #region agent log
+  const { debugFirestoreInFlight } = await import("./ingestion/firebase.js");
+  fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
+    body: JSON.stringify({
+      sessionId: "2e2f6c",
+      location: "main.js:ufm:getDbStats",
+      message: "IPC handler start",
+      data: { ipcId, firestoreInFlight: debugFirestoreInFlight },
+      hypothesisId: "B",
+      timestamp: Date.now(),
+      runId: "post-fix",
+    }),
+  }).catch(() => {});
+  // #endregion
+  LOG("1", "IPC received.");
+
+  _getDbStatsInflight = (async () => {
+    try {
+      const result = await getDbStats();
+      LOG("2", "Success. Returning count=" + result.count);
+      return result;
+    } catch (err) {
+      const msg = err?.message || String(err);
+      console.warn("[ufm:getDbStats IPC] [FAIL]", msg);
+      return { count: 0, error: msg };
+    } finally {
+      _getDbStatsInflight = null;
+    }
+  })();
+
+  return _getDbStatsInflight;
 });
 
 ipcMain.handle("ufm:checkDbStorage", async () => {
@@ -986,9 +1263,42 @@ app.whenReady().then(async () => {
     // 3c. Verify Firestore + kick off background embedding migration
     if (fbApp) {
       console.log("[firebase] [post-init] Running test query: product_vectors.limit(1)...");
-      admin.firestore().collection("product_vectors").limit(1).get()
-        .then(snap => console.log("[firebase] [post-init] ✅ Test query OK. Sample size:", snap.size))
-        .catch(err => console.warn("[firebase] [post-init] ❌ Test query failed:", err?.message?.slice(0, 100)));
+      const adminT0 = Date.now();
+      firestoreDb.collection("product_vectors").limit(1).get()
+        .then((snap) => {
+          console.log("[firebase] [post-init] ✅ Test query OK. Sample size:", snap.size);
+          // #region agent log
+          fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
+            body: JSON.stringify({
+              sessionId: "2e2f6c",
+              location: "main.js:post-init",
+              message: "admin.firestore test ok",
+              data: { ms: Date.now() - adminT0, client: "admin.firestore" },
+              hypothesisId: "A",
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
+        })
+        .catch((err) => {
+          console.warn("[firebase] [post-init] ❌ Test query failed:", err?.message?.slice(0, 100));
+          // #region agent log
+          fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
+            body: JSON.stringify({
+              sessionId: "2e2f6c",
+              location: "main.js:post-init",
+              message: "admin.firestore test fail",
+              data: { ms: Date.now() - adminT0, err: String(err?.message || err).slice(0, 120) },
+              hypothesisId: "A",
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+          // #endregion
+        });
 
       // Re-embedding is triggered manually via the "Re-embed Products" button in DbUploadView.
     } else {

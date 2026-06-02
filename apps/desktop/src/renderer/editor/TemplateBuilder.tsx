@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { CustomBoxDef, CustomFlyerTemplateConfig, CustomTemplatePage, DepartmentAreaDef } from "./loadFlyerTemplateConfig";
 import { saveCustomTemplate } from "./customTemplateStorage";
+import ImportTemplateFromImagesDialog from "./ImportTemplateFromImagesDialog";
 
 const BUILDER_SCALE = 0.4;
 
@@ -119,6 +120,7 @@ export default function TemplateBuilder({ onSave, onClose, initialConfig }: Prop
   const [selectedDeptAreaId, setSelectedDeptAreaId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [showImportDialog, setShowImportDialog] = useState(false);
 
   const dragRef = useRef<DragState | null>(null);
   const deptAreaDragRef = useRef<DeptAreaDragState | null>(null);
@@ -573,6 +575,7 @@ export default function TemplateBuilder({ onSave, onClose, initialConfig }: Prop
   const fieldStyle: React.CSSProperties = { marginBottom: 12 };
 
   return (
+    <>
     <div style={containerStyle} onMouseDown={() => { setSelectedBoxId(null); setSelectedDeptAreaId(null); }}>
       {/* Header */}
       <div style={headerStyle}>
@@ -586,6 +589,12 @@ export default function TemplateBuilder({ onSave, onClose, initialConfig }: Prop
         <div style={{ flex: 1 }} />
         {error && <span style={{ color: "#fca5a5", fontSize: 13 }}>{error}</span>}
         {saveSuccess && <span style={{ color: "#86efac", fontSize: 13, fontWeight: 600 }}>Saved!</span>}
+        <button
+          onClick={() => setShowImportDialog(true)}
+          style={{ padding: "6px 16px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 6, fontWeight: 600, cursor: "pointer", fontSize: 14 }}
+        >
+          Import from Images
+        </button>
         <button
           onClick={handleSave}
           style={{ padding: "6px 20px", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 6, fontWeight: 600, cursor: "pointer", fontSize: 14 }}
@@ -921,10 +930,95 @@ export default function TemplateBuilder({ onSave, onClose, initialConfig }: Prop
                 <label style={labelStyle}>Label</label>
                 <input style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} value={selectedDeptArea.label} onChange={e => updateDepartmentArea(selectedDeptAreaId!, { label: e.target.value })} />
               </div>
-              <div style={fieldStyle}>
-                <label style={labelStyle}>Product Rows</label>
-                <input type="number" min={1} max={10} style={{ ...inputStyle, width: 80 }} value={selectedDeptArea.rows} onChange={e => updateDepartmentArea(selectedDeptAreaId!, { rows: Math.max(1, parseInt(e.target.value) || 1) })} />
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>Product Rows</label>
+                  <input type="number" min={1} max={20} style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} value={selectedDeptArea.rows} onChange={e => updateDepartmentArea(selectedDeptAreaId!, { rows: Math.max(1, parseInt(e.target.value) || 1) })} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>Columns</label>
+                  <input type="number" min={1} max={12} style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} value={(selectedDeptArea as any).cols ?? ""} placeholder="auto" onChange={e => updateDepartmentArea(selectedDeptAreaId!, { cols: e.target.value ? Math.max(1, parseInt(e.target.value) || 1) : undefined } as any)} />
+                </div>
               </div>
+
+              {/* Card Style */}
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8, marginTop: 4 }}>Card Style</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>Card BG</label>
+                  <input type="color" value={(selectedDeptArea as any).cardStyle?.backgroundColor ?? "#ffffff"}
+                    onChange={e => updateDepartmentArea(selectedDeptAreaId!, { cardStyle: { ...(selectedDeptArea as any).cardStyle, backgroundColor: e.target.value } } as any)}
+                    style={{ width: "100%", height: 28, cursor: "pointer", border: "1px solid #cbd5e1", borderRadius: 4 }} onMouseDown={e => e.stopPropagation()} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>Orientation</label>
+                  <select value={(selectedDeptArea as any).cardStyle?.orientation ?? "vertical"}
+                    onChange={e => updateDepartmentArea(selectedDeptAreaId!, { cardStyle: { ...(selectedDeptArea as any).cardStyle, orientation: e.target.value } } as any)}
+                    style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}>
+                    <option value="vertical">Vertical</option>
+                    <option value="horizontal">Horizontal</option>
+                    <option value="top">Top</option>
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>Corner Radius</label>
+                  <input type="number" min={0} max={100} style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} value={(selectedDeptArea as any).cardStyle?.borderRadius ?? 0}
+                    onChange={e => updateDepartmentArea(selectedDeptAreaId!, { cardStyle: { ...(selectedDeptArea as any).cardStyle, borderRadius: parseInt(e.target.value) || 0 } } as any)} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>Border W</label>
+                  <input type="number" min={0} max={20} style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} value={(selectedDeptArea as any).cardStyle?.borderWidth ?? 0}
+                    onChange={e => updateDepartmentArea(selectedDeptAreaId!, { cardStyle: { ...(selectedDeptArea as any).cardStyle, borderWidth: parseInt(e.target.value) || 0 } } as any)} />
+                </div>
+              </div>
+              {((selectedDeptArea as any).cardStyle?.borderWidth ?? 0) > 0 && (
+                <div style={fieldStyle}>
+                  <label style={labelStyle}>Border Color</label>
+                  <input type="color" value={(selectedDeptArea as any).cardStyle?.borderColor ?? "#e2e8f0"}
+                    onChange={e => updateDepartmentArea(selectedDeptAreaId!, { cardStyle: { ...(selectedDeptArea as any).cardStyle, borderColor: e.target.value } } as any)}
+                    style={{ width: 36, height: 28, cursor: "pointer", border: "1px solid #cbd5e1", borderRadius: 4 }} onMouseDown={e => e.stopPropagation()} />
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>Title Color</label>
+                  <input type="color" value={(selectedDeptArea as any).cardStyle?.titleColor ?? "#1e293b"}
+                    onChange={e => updateDepartmentArea(selectedDeptAreaId!, { cardStyle: { ...(selectedDeptArea as any).cardStyle, titleColor: e.target.value } } as any)}
+                    style={{ width: "100%", height: 28, cursor: "pointer", border: "1px solid #cbd5e1", borderRadius: 4 }} onMouseDown={e => e.stopPropagation()} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>Price Color</label>
+                  <input type="color" value={(selectedDeptArea as any).cardStyle?.priceColor ?? "#1e293b"}
+                    onChange={e => updateDepartmentArea(selectedDeptAreaId!, { cardStyle: { ...(selectedDeptArea as any).cardStyle, priceColor: e.target.value } } as any)}
+                    style={{ width: "100%", height: 28, cursor: "pointer", border: "1px solid #cbd5e1", borderRadius: 4 }} onMouseDown={e => e.stopPropagation()} />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>Title px</label>
+                  <input type="number" min={6} max={300} placeholder="auto" style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} value={(selectedDeptArea as any).cardStyle?.titleFontSize ?? ""}
+                    onChange={e => updateDepartmentArea(selectedDeptAreaId!, { cardStyle: { ...(selectedDeptArea as any).cardStyle, titleFontSize: e.target.value ? parseInt(e.target.value) : undefined } } as any)} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>Meta px</label>
+                  <input type="number" min={6} max={200} placeholder="auto" style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} value={(selectedDeptArea as any).cardStyle?.metaFontSize ?? ""}
+                    onChange={e => updateDepartmentArea(selectedDeptAreaId!, { cardStyle: { ...(selectedDeptArea as any).cardStyle, metaFontSize: e.target.value ? parseInt(e.target.value) : undefined } } as any)} />
+                </div>
+              </div>
+              <div style={fieldStyle}>
+                <label style={labelStyle}>Price Position</label>
+                <select value={(selectedDeptArea as any).cardStyle?.pricePosition ?? "bottom-right"}
+                  onChange={e => updateDepartmentArea(selectedDeptAreaId!, { cardStyle: { ...(selectedDeptArea as any).cardStyle, pricePosition: e.target.value } } as any)}
+                  style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}>
+                  <option value="bottom-right">Bottom Right</option>
+                  <option value="bottom-left">Bottom Left</option>
+                  <option value="bottom-center">Bottom Center</option>
+                  <option value="right">Right</option>
+                </select>
+              </div>
+
               <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
                 <div style={{ flex: 1 }}>
                   <label style={labelStyle}>X</label>
@@ -1143,5 +1237,20 @@ export default function TemplateBuilder({ onSave, onClose, initialConfig }: Prop
         <span style={{ fontSize: 11, color: "#94a3b8" }}>design pixels</span>
       </div>
     </div>
+
+    {showImportDialog && (
+      <ImportTemplateFromImagesDialog
+        onParsed={config => {
+          setTemplateName(config.name);
+          setPages(normalizePages(config.pages));
+          setActivePageIdx(0);
+          setSelectedBoxId(null);
+          setSelectedDeptAreaId(null);
+          setShowImportDialog(false);
+        }}
+        onClose={() => setShowImportDialog(false)}
+      />
+    )}
+    </>
   );
 }

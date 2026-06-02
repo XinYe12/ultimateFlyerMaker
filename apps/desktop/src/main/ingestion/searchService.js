@@ -1,4 +1,4 @@
-import { db } from "./firebase.js";
+import { db, debugFirestoreInFlight, runFirestoreTimed, debugFirestoreTrack } from "./firebase.js";
 import { FIRESTORE_COLLECTION } from "../config/vectorConfig.js";
 import { getImageEmbedding, embedText } from "./imageEmbeddingService.js";
 import { cosineUnitToRaw, normalizeL2 } from "./vectorUtils.js";
@@ -37,6 +37,20 @@ function _onFirestoreOk() {
 
 function _onFirestoreTimeout() {
   _circuitFails++;
+  // #region agent log
+  fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
+    body: JSON.stringify({
+      sessionId: "2e2f6c",
+      location: "searchService.js:_onFirestoreTimeout",
+      message: "Firestore query timeout",
+      data: { circuitFails: _circuitFails, firestoreInFlight: debugFirestoreInFlight },
+      hypothesisId: "C",
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
   if (_circuitFails === CIRCUIT_OPEN_AFTER) {
     _circuitOpenAt = Date.now();
     console.warn(`[searchService] Firestore circuit OPEN (${CIRCUIT_OPEN_AFTER} consecutive timeouts) — skipping DB for ${CIRCUIT_COOLDOWN_MS / 60_000} min`);
@@ -74,6 +88,57 @@ function isTransientFirestoreError(err) {
  * @returns {Promise<T>}
  */
 export async function withFirestoreRetry(operation, opts = {}) {
+  return withFirestoreRetryInner(operation, opts);
+}
+
+/** Firestore read: serialized queue + timeout starts when the op actually runs. */
+async function firestoreRead(opName, operation, timeoutMs, onTimeout) {
+  const callId = `${opName}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const t0 = Date.now();
+  // #region agent log
+  debugFirestoreTrack(opName, "start", { callId });
+  // #endregion
+  try {
+    const res = await runFirestoreTimed(() => withFirestoreRetryInner(operation), timeoutMs, () => {
+      onTimeout?.();
+      // #region agent log
+      fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
+        body: JSON.stringify({
+          sessionId: "2e2f6c",
+          location: "searchService.js:firestoreRead",
+          message: "firestoreRead timeout",
+          data: { opName, callId, ms: Date.now() - t0, firestoreInFlight: debugFirestoreInFlight },
+          hypothesisId: "C",
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
+    });
+    // #region agent log
+    fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
+      body: JSON.stringify({
+        sessionId: "2e2f6c",
+        location: "searchService.js:firestoreRead",
+        message: "firestoreRead ok",
+        data: { opName, callId, ms: Date.now() - t0 },
+        hypothesisId: "C",
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+    return res;
+  } finally {
+    // #region agent log
+    debugFirestoreTrack(opName, "end", { callId, ms: Date.now() - t0 });
+    // #endregion
+  }
+}
+
+async function withFirestoreRetryInner(operation, opts = {}) {
   const maxAttempts = opts.maxAttempts ?? FIRESTORE_RETRY_ATTEMPTS;
   const baseDelayMs = opts.baseDelayMs ?? FIRESTORE_RETRY_BASE_MS;
   let lastErr;
@@ -217,34 +282,119 @@ export function invalidateEmbeddingCache() {
   _embeddingCacheLoad = null;
 }
 
-const EMBEDDING_CACHE_TIMEOUT_MS = 8_000;
+const EMBEDDING_CACHE_TIMEOUT_MS = 45_000;
+const EMBED_SELECT_FIELDS = [
+  "id",
+  "englishTitle",
+  "chineseTitle",
+  "brand",
+  "size",
+  "category",
+  "publicUrl",
+  "embedding",
+];
+
+async function fetchEmbeddingsForIds(ids) {
+  const unique = [...new Set([...ids].filter(Boolean))];
+  if (!unique.length) return [];
+  const coll = db.collection(FIRESTORE_COLLECTION);
+  const rows = [];
+  for (let i = 0; i < unique.length; i += 100) {
+    const chunk = unique.slice(i, i + 100);
+    const snaps = await firestoreRead(
+      "fetchEmbeddingsForIds",
+      () => db.getAll(...chunk.map((id) => coll.doc(id))),
+      12_000,
+      _onFirestoreTimeout
+    );
+    for (const snap of snaps) {
+      if (!snap.exists) continue;
+      const d = snap.data();
+      if (d.status !== "active" || d.embeddingModel !== GEMINI_EMBED_MODEL || !Array.isArray(d.embedding)) {
+        continue;
+      }
+      rows.push({
+        id: snap.id,
+        englishTitle: d.englishTitle,
+        chineseTitle: d.chineseTitle,
+        brand: d.brand,
+        size: d.size,
+        category: d.category,
+        publicUrl: d.publicUrl,
+        embedding: d.embedding,
+      });
+    }
+  }
+  return rows;
+}
 
 async function getEmbeddingCache() {
   if (_embeddingCache) return _embeddingCache;
   if (!_embeddingCacheLoad) {
-    _embeddingCacheLoad = Promise.race([
-      withFirestoreRetry(() =>
+    // #region agent log
+    const cacheT0 = Date.now();
+    fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
+      body: JSON.stringify({
+        sessionId: "2e2f6c",
+        location: "searchService.js:getEmbeddingCache",
+        message: "embedding cache load start",
+        data: { firestoreInFlight: debugFirestoreInFlight },
+        hypothesisId: "C",
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+    _embeddingCacheLoad = firestoreRead(
+      "getEmbeddingCache",
+      () =>
         db
           .collection(FIRESTORE_COLLECTION)
           .where("status", "==", "active")
           .where("embeddingModel", "==", GEMINI_EMBED_MODEL)
-          .select("id", "englishTitle", "chineseTitle", "brand", "size", "category", "publicUrl", "embedding")
-          .get()
-      ),
-      new Promise((_, reject) =>
-        setTimeout(() => {
-          _embeddingCacheLoad = null;
-          reject(new Error("getEmbeddingCache timed out — gRPC channel may be stale"));
-        }, EMBEDDING_CACHE_TIMEOUT_MS)
-      ),
-    ])
+          .select(...EMBED_SELECT_FIELDS)
+          .get(),
+      EMBEDDING_CACHE_TIMEOUT_MS,
+      () => {
+        _embeddingCacheLoad = null;
+      }
+    )
       .then((snapshot) => {
         _embeddingCache = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
         _embeddingCacheLoad = null;
+        // #region agent log
+        fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
+          body: JSON.stringify({
+            sessionId: "2e2f6c",
+            location: "searchService.js:getEmbeddingCache",
+            message: "embedding cache load ok",
+            data: { docCount: snapshot.size, ms: Date.now() - cacheT0 },
+            hypothesisId: "C",
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
         return _embeddingCache;
       })
       .catch((err) => {
         _embeddingCacheLoad = null;
+        // #region agent log
+        fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
+          body: JSON.stringify({
+            sessionId: "2e2f6c",
+            location: "searchService.js:getEmbeddingCache",
+            message: "embedding cache load fail",
+            data: { ms: Date.now() - cacheT0, err: String(err?.message || err).slice(0, 120) },
+            hypothesisId: "C",
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
         throw err;
       });
   }
@@ -265,23 +415,22 @@ export async function searchByText(query, limit = 6, minScore = 0.15) {
   const queryTokens = tokenize(String(query).trim());
   if (!queryTokens.length) return [];
 
-  const QUERY_TIMEOUT_MS = 6_000;
+  const QUERY_TIMEOUT_MS = 12_000;
   const scanCap = getResourceProfile().discountFirestoreScanCap;
-  const snapshot = await Promise.race([
-    withFirestoreRetry(() =>
+  const snapshot = await firestoreRead(
+    "searchByText",
+    () =>
       db
         .collection(FIRESTORE_COLLECTION)
         .where("searchTokens", "array-contains-any", queryTokens.slice(0, 10))
         .limit(scanCap)
-        .get()
-    ).then(r => { _onFirestoreOk(); return r; }),
-    new Promise((_, reject) =>
-      setTimeout(() => {
-        _onFirestoreTimeout();
-        reject(new Error("searchByText Firestore query timed out"));
-      }, QUERY_TIMEOUT_MS)
-    ),
-  ]);
+        .get(),
+    QUERY_TIMEOUT_MS,
+    _onFirestoreTimeout
+  ).then((r) => {
+    _onFirestoreOk();
+    return r;
+  });
 
   return snapshot.docs
     .map((d) => ({ id: d.id, ...d.data() }))
@@ -308,13 +457,16 @@ export async function searchByTextEmbedding(query, limit = 6, minScore = 0.3, ca
   const queryEmbedding = await embedText(String(query).trim());
   if (!Array.isArray(queryEmbedding) || queryEmbedding.length === 0) return [];
 
-  const all = await getEmbeddingCache();
-  if (!all.length) return [];
+  const forceFull =
+    process.env.UFM_EMBED_FORCE_FULL_SCAN === "1" || process.env.UFM_EMBED_FORCE_FULL_SCAN === "true";
+  const rows =
+    candidateIds && candidateIds.size > 0 && !forceFull
+      ? await fetchEmbeddingsForIds(candidateIds)
+      : await getEmbeddingCache();
+  if (!rows.length) return [];
 
   const queryUnit = normalizeL2(queryEmbedding);
   if (!queryUnit) return [];
-
-  const rows = candidateIds && candidateIds.size > 0 ? all.filter((p) => candidateIds.has(p.id)) : all;
 
   return rows
     .map((p) => ({
@@ -384,20 +536,20 @@ export async function searchForDiscountItem(item, limit = 6, options = {}) {
   try {
     const exactKey = normalize(enQuery) || normalize(zhQuery);
     if (exactKey) {
-      const snap = await Promise.race([
-        withFirestoreRetry(() =>
-          db.collection(FIRESTORE_COLLECTION)
+      const snap = await firestoreRead(
+        "fastPathMatchKeys",
+        () =>
+          db
+            .collection(FIRESTORE_COLLECTION)
             .where("matchKeys", "array-contains", exactKey)
             .limit(3)
-            .get()
-        ).then(r => { _onFirestoreOk(); return r; }),
-        new Promise((_, reject) =>
-          setTimeout(() => {
-            _onFirestoreTimeout();
-            reject(new Error("fast-path matchKeys timed out"));
-          }, FAST_PATH_TIMEOUT_MS)
-        ),
-      ]);
+            .get(),
+        FAST_PATH_TIMEOUT_MS,
+        _onFirestoreTimeout
+      ).then((r) => {
+        _onFirestoreOk();
+        return r;
+      });
       const hits = snap.docs
         .map(d => ({ ...d.data(), id: d.id }))
         .filter(d => d.status === "active");
@@ -412,16 +564,9 @@ export async function searchForDiscountItem(item, limit = 6, options = {}) {
 
   const queries = [...new Set([fullQuery, enQuery, zhQuery].filter(Boolean))];
   const profile = getResourceProfile();
-  let textResultSets;
-  if (profile.serializeDiscountTextSearch) {
-    textResultSets = [];
-    for (const q of queries) {
-      textResultSets.push(await searchByText(q, limit * 2, 0.15).catch(() => []));
-    }
-  } else {
-    textResultSets = await Promise.all(
-      queries.map((q) => searchByText(q, limit * 2, 0.15).catch(() => []))
-    );
+  const textResultSets = [];
+  for (const q of queries) {
+    textResultSets.push(await searchByText(q, limit * 2, 0.15).catch(() => []));
   }
   const textFlat = textResultSets.flat();
   const textMerged = mergeByBestScore(textFlat, limit * 2);

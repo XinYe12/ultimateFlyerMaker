@@ -1,13 +1,96 @@
 // ✅ ELECTRON MAIN — SAFE, DEV + PROD, WINDOWS-SAFE
 // Lazy graceful init: app starts even without credentials; DB calls fail with a clear message.
 
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, appendFileSync } from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { app } from "electron";
+import admin from "firebase-admin";
 
 const LOG = (step, msg) => console.log(`[firebase] [${step}]`, msg);
+
+/** Serialize Firestore I/O — parallel .get() calls on one client cause hangs on Windows. */
+let _serial = Promise.resolve();
+export function runFirestoreSerial(fn) {
+  const run = _serial.then(() => fn());
+  _serial = run.catch(() => {});
+  return run;
+}
+
+/**
+ * Queue a Firestore op, then start its timeout only once it reaches the front of the queue.
+ * (Timeouts must NOT start at enqueue time — that caused false timeouts under load.)
+ */
+export function runFirestoreTimed(fn, timeoutMs, onTimeout) {
+  return runFirestoreSerial(() => {
+    if (!timeoutMs) return fn();
+    let timeoutId;
+    const timerP = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        onTimeout?.();
+        reject(new Error(`Firestore timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+    return Promise.race([fn(), timerP]).finally(() => {
+      if (timeoutId) clearTimeout(timeoutId);
+    });
+  });
+}
+
+// #region agent log
+const _DEBUG_LOG_CANDIDATES = [
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "../../../../../../debug-2e2f6c.log"),
+  path.join(app.getAppPath(), "debug-2e2f6c.log"),
+  path.join(app.getPath("userData"), "debug-2e2f6c.log"),
+  path.join(process.cwd(), "debug-2e2f6c.log"),
+];
+let _debugLogPath = null;
+function _resolveDebugLogPath() {
+  if (_debugLogPath) return _debugLogPath;
+  for (const p of _DEBUG_LOG_CANDIDATES) {
+    try {
+      appendFileSync(p, "", { flag: "a" });
+      _debugLogPath = p;
+      console.log("[firebase] debug log →", p);
+      return p;
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
+const _dbgLog = (location, message, data, hypothesisId) => {
+  const payload = {
+    sessionId: "2e2f6c",
+    location,
+    message,
+    data,
+    hypothesisId,
+    timestamp: Date.now(),
+  };
+  const logPath = _resolveDebugLogPath();
+  if (logPath) {
+    try {
+      appendFileSync(logPath, `${JSON.stringify(payload)}\n`, "utf8");
+    } catch {
+      /* ignore */
+    }
+  }
+  fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+};
+export let debugFirestoreInFlight = 0;
+export function debugFirestoreTrack(op, phase, extra = {}) {
+  if (phase === "start") debugFirestoreInFlight += 1;
+  else if (phase === "end") debugFirestoreInFlight = Math.max(0, debugFirestoreInFlight - 1);
+  _dbgLog("firebase.js:track", `firestore ${phase}`, { op, inFlight: debugFirestoreInFlight, ...extra }, "B");
+}
+// #endregion
 
 /**
  * Credential resolution priority:
@@ -77,6 +160,19 @@ try {
     db.settings({ preferRest: true });
 
     LOG("init", "Firestore client ready (REST transport). Collection: product_vectors");
+    // #region agent log
+    _dbgLog(
+      "firebase.js:init",
+      "ingestion Firestore ready",
+      {
+        preferRest: true,
+        modularApps: getApps().length,
+        adminApps: admin.apps.length,
+        sameApp: getApps()[0]?.name === admin.apps[0]?.name,
+      },
+      "A"
+    );
+    // #endregion
   }
 } catch (err) {
   LOG("init", "❌ Firebase init failed: " + err.message);

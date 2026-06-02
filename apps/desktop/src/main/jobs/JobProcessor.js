@@ -19,6 +19,7 @@ import { getDomain } from "../ingestion/braveSearchService.js";
 import { runCutout, waitForCutoutReady } from "../cutoutClient.js";
 import { addShadowToCutout } from "../ingestion/addShadow.js";
 import sizeOf from "image-size";
+import sharp from "sharp";
 import { decideSizeFromAspectRatio } from "../../../../shared/flyer/layout/sizeFromImage.js";
 import { getResourceProfile, getDiscountSearchTimeoutMs } from "../resourceProfile.js";
 
@@ -100,6 +101,113 @@ function roundMs(ms) {
   return Math.round(Number(ms) || 0);
 }
 
+function formatMetric(n) {
+  return Number.isFinite(n) ? n.toFixed(3) : "n/a";
+}
+
+async function inspectSerperSourceImage(imagePath, sr) {
+  let meta;
+  try {
+    meta = await sharp(imagePath).metadata();
+  } catch {
+    return { ok: true, reason: null, metrics: {} };
+  }
+
+  const width = meta.width || 0;
+  const height = meta.height || 0;
+  if (width < 120 || height < 120) {
+    return { ok: false, reason: "source-too-small", metrics: { width, height } };
+  }
+
+  const aspect = width && height ? width / height : 1;
+  if (aspect > 4.5 || aspect < 0.22) {
+    return { ok: false, reason: "source-extreme-aspect", metrics: { width, height, aspect } };
+  }
+
+  let sample;
+  let info;
+  try {
+    const out = await sharp(imagePath)
+      .resize({ width: 96, height: 96, fit: "inside", withoutEnlargement: true })
+      .flatten({ background: "#ffffff" })
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    sample = out.data;
+    info = out.info;
+  } catch {
+    return { ok: true, reason: null, metrics: { width, height, aspect } };
+  }
+
+  const sw = info.width;
+  const sh = info.height;
+  const channels = info.channels || 3;
+  const borderPx = Math.max(2, Math.round(Math.min(sw, sh) * 0.08));
+  let borderCount = 0;
+  let borderWhite = 0;
+  let edgeCount = 0;
+  let edgeTotal = 0;
+
+  function lumAt(x, y) {
+    const i = (y * sw + x) * channels;
+    return sample[i] * 0.299 + sample[i + 1] * 0.587 + sample[i + 2] * 0.114;
+  }
+
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      const i = (y * sw + x) * channels;
+      const isBorder = y < borderPx || y >= sh - borderPx || x < borderPx || x >= sw - borderPx;
+      if (isBorder) {
+        borderCount++;
+        if (sample[i] > 235 && sample[i + 1] > 235 && sample[i + 2] > 235) borderWhite++;
+      }
+      if (x > 0 && y > 0) {
+        const l = lumAt(x, y);
+        const grad = Math.abs(l - lumAt(x - 1, y)) + Math.abs(l - lumAt(x, y - 1));
+        edgeTotal++;
+        if (grad > 55) edgeCount++;
+      }
+    }
+  }
+
+  const borderWhiteFraction = borderCount ? borderWhite / borderCount : 0;
+  const edgeDensity = edgeTotal ? edgeCount / edgeTotal : 0;
+  const text = `${sr?.title || ""} ${sr?.source || ""} ${sr?.url || ""}`.toLowerCase();
+  const shelfKeyword = /\b(shelf|shelves|aisle|display|rack|warehouse|inventory|storefront|store photo|retail)\b/.test(text);
+  const metrics = { width, height, aspect, borderWhiteFraction, edgeDensity };
+
+  if (shelfKeyword && edgeDensity > 0.20 && borderWhiteFraction < 0.55) {
+    return { ok: false, reason: "source-shelf-photo", metrics };
+  }
+  if (edgeDensity > 0.34 && borderWhiteFraction < 0.20 && aspect > 1.5) {
+    return { ok: false, reason: "source-busy-scene", metrics };
+  }
+  if (edgeDensity > 0.42 && borderWhiteFraction < 0.08) {
+    return { ok: false, reason: "source-busy-background", metrics };
+  }
+
+  return { ok: true, reason: null, metrics };
+}
+
+function getCutoutFallbackModel(primaryModel) {
+  const explicit = String(process.env.UFM_CUTOUT_FALLBACK_MODEL || "").trim();
+  const disabled = explicit === "0" || /^none$/i.test(explicit);
+  if (disabled) return null;
+  if (explicit && explicit !== primaryModel) return explicit;
+
+  const current = primaryModel || getResourceProfile().rembgModel || "u2net";
+  if (current === "u2net" || current === "briaai-rmbg" || current === "bria" || current === "briaai-rmbg-1.4") {
+    return "isnet-general-use";
+  }
+  if (current === "isnet-general-use") {
+    return "birefnet-general-lite";
+  }
+  if (current === "birefnet-general-lite") {
+    return "birefnet-general";
+  }
+  return null;
+}
+
 /** Mutable per-item pipeline timing (ms) for flyer automation jobs. */
 function emptyPipelineSteps() {
   return {
@@ -123,13 +231,38 @@ async function runCutoutWithShadowMs(tempPath, signal, ps) {
   let cutoutResult;
   try {
     cutoutResult = await runCutout(tempPath, signal);
+    const fallbackModel = cutoutResult.lowConfidence ? getCutoutFallbackModel(cutoutResult.model) : null;
+    if (fallbackModel) {
+      console.log(
+        `[JobProcessor] Cutout low-confidence (${cutoutResult.qualityReason || "unknown"}) — ` +
+        `retrying with ${fallbackModel}`
+      );
+      try {
+        const fallbackResult = await runCutout(tempPath, signal, { model: fallbackModel });
+        if (!fallbackResult.lowConfidence) {
+          cutoutResult = fallbackResult;
+        } else {
+          console.log(
+            `[JobProcessor] Fallback cutout still low-confidence ` +
+            `(${fallbackResult.qualityReason || "unknown"}); keeping first result as review fallback`
+          );
+        }
+      } catch (fallbackErr) {
+        console.warn(`[JobProcessor] Fallback cutout failed (${fallbackModel}):`, fallbackErr.message);
+      }
+    }
   } finally {
     ps.serperRembgMs += roundMs(performance.now() - t0);
   }
   const t1 = performance.now();
   try {
-    const shadowPath = await addShadowToCutout(cutoutResult.path);
-    return { path: shadowPath, lowConfidence: cutoutResult.lowConfidence };
+    const shadowPath = await addShadowToCutout(cutoutResult.path, {
+      lowConfidence: cutoutResult.lowConfidence,
+      qualityReason: cutoutResult.qualityReason,
+      borderAlpha: cutoutResult.borderAlpha,
+      bboxAreaRatio: cutoutResult.bboxAreaRatio,
+    });
+    return { ...cutoutResult, path: shadowPath };
   } finally {
     ps.serperShadowMs += roundMs(performance.now() - t1);
   }
@@ -169,11 +302,13 @@ function getLayoutFromPath(cutoutPath) {
 }
 
 /** Build a result object from discount item data (no OCR/LLM). */
-function buildResultFromDi(di, cutoutPath, cutoutPaths, matchScore, matchSource, lowConfidence) {
+function buildResultFromDi(di, cutoutPath, cutoutPaths, matchScore, matchSource, lowConfidence, sourceUrl = null, quality = {}, originalPath = null) {
   const layout = cutoutPath ? getLayoutFromPath(cutoutPath) : { size: "SMALL" };
   const seriesImages = cutoutPaths?.length > 1 && di.isSeries === true;
   return {
-    inputPath: cutoutPath || null,
+    // originalPath is the unprocessed source image used for future cutout reruns.
+    // Falls back to cutoutPath for DB images (which are already the un-cutout originals).
+    inputPath: originalPath || cutoutPath || null,
     cutoutPath: cutoutPath || null,
     cutoutPaths: seriesImages ? cutoutPaths : undefined,
     allFlavorPaths: seriesImages ? cutoutPaths : undefined,
@@ -186,6 +321,9 @@ function buildResultFromDi(di, cutoutPath, cutoutPaths, matchScore, matchSource,
     matchScore,
     matchSource,
     lowConfidence,
+    sourceUrl: sourceUrl || null,
+    qualityReason: quality.qualityReason || null,
+    cutoutDiagnostics: quality.cutoutDiagnostics || undefined,
   };
 }
 
@@ -349,6 +487,7 @@ export class JobProcessor extends EventEmitter {
 
         const runItem = async (signal, armDeadline, serperPhaseMs) => {
           let result = null;
+          let lowConfidenceSerperFallback = null;
           const ps = emptyPipelineSteps();
           const itemBegin = performance.now();
 
@@ -390,7 +529,7 @@ export class JobProcessor extends EventEmitter {
             }
             if (cutoutPaths.length === 0) return null;
             const lowConfidence = matchScore < 0.50;
-            return buildResultFromDi(di, cutoutPaths[0], cutoutPaths, matchScore, "db", lowConfidence);
+            return buildResultFromDi(di, cutoutPaths[0], cutoutPaths, matchScore, "db", lowConfidence, matches[0]?.publicUrl ?? null);
           };
 
           let searchTimedOut = false;
@@ -502,8 +641,10 @@ export class JobProcessor extends EventEmitter {
                   let ext;
                   try { ext = path.extname(new URL(sr.url).pathname) || ".jpg"; } catch { ext = ".jpg"; }
                   const safeExt = /^\.(jpg|jpeg|png|gif|webp)$/i.test(ext) ? ext : ".jpg";
-                  const tempPath = path.join(os.tmpdir(), `ufm-serper-${Date.now()}-${i}${safeExt}`);
+                  // Store in EXPORT_ROOT (not tmpdir) so the original persists for cutout reruns.
+                  const tempPath = path.join(EXPORT_ROOT, `ufm-serper-src-${Date.now()}-${i}${safeExt}`);
                   console.log(`[JobProcessor] Serper [${srIdx + 1}/${serperResults.length}]: ${sr.url}`);
+                  let serperOriginalKept = false;
                   try {
                     sr._cutoutAttempted = true;
                     const tFetch = performance.now();
@@ -514,15 +655,56 @@ export class JobProcessor extends EventEmitter {
                       if (rp.serperStepDelayMs > 0) await sleep(rp.serperStepDelayMs);
                       continue;
                     }
+                    const sourceCheck = await inspectSerperSourceImage(tempPath, sr);
+                    sr._sourceCheck = sourceCheck;
+                    if (!sourceCheck.ok) {
+                      sr._sourceRejected = true;
+                      console.log(
+                        `[JobProcessor] Serper source rejected (${sourceCheck.reason}) for "${queryDisplay}" ` +
+                        `(edge=${formatMetric(sourceCheck.metrics.edgeDensity)}, ` +
+                        `borderWhite=${formatMetric(sourceCheck.metrics.borderWhiteFraction)}, ` +
+                        `aspect=${formatMetric(sourceCheck.metrics.aspect)})`
+                      );
+                      if (rp.serperStepDelayMs > 0) await sleep(rp.serperStepDelayMs);
+                      continue;
+                    }
                     let serperOk = false;
                     const srConfidence = sr._confidence ?? 0;
                     try {
-                      const { path: cutoutPath, lowConfidence: cutoutLow } = await runCutoutWithShadowMs(tempPath, signal, ps);
-                      if (cutoutPath) {
-                        result = buildResultFromDi(di, cutoutPath, null, srConfidence, "serper", srConfidence < 0.5 || cutoutLow);
-                        result._serperSignalCtx = { rank: srIdx, url: sr.url, domain: getDomain(sr.url), confidence: srConfidence };
-                        serperOk = !cutoutLow;
-                        if (cutoutLow) console.log(`[JobProcessor] Low-quality cutout for "${queryDisplay}" (rank ${srIdx}) — trying next result`);
+                      const cutout = await runCutoutWithShadowMs(tempPath, signal, ps);
+                      if (cutout.path) {
+                        const cutoutLow = cutout.lowConfidence;
+                        const candidate = buildResultFromDi(
+                          di,
+                          cutout.path,
+                          null,
+                          srConfidence,
+                          "serper",
+                          srConfidence < 0.5 || cutoutLow,
+                          sr.url,
+                          {
+                            qualityReason: cutout.qualityReason,
+                            cutoutDiagnostics: {
+                              alphaCoverage: cutout.alphaCoverage,
+                              borderAlpha: cutout.borderAlpha,
+                              componentCount: cutout.componentCount,
+                              bboxAreaRatio: cutout.bboxAreaRatio,
+                              bboxFillRatio: cutout.bboxFillRatio,
+                              lightHalo: cutout.lightHalo,
+                              model: cutout.model,
+                            },
+                          },
+                          tempPath, // originalPath — preserved so reruns use the real source image
+                        );
+                        serperOriginalKept = true;
+                        candidate._serperSignalCtx = { rank: srIdx, url: sr.url, domain: getDomain(sr.url), confidence: srConfidence };
+                        if (cutoutLow) {
+                          if (!lowConfidenceSerperFallback) lowConfidenceSerperFallback = candidate;
+                          console.log(`[JobProcessor] Low-quality cutout for "${queryDisplay}" (rank ${srIdx}, reason=${cutout.qualityReason || "unknown"}) — trying next result`);
+                        } else {
+                          result = candidate;
+                          serperOk = true;
+                        }
                       }
                     } catch (ingestErr) {
                       const isConnErr = ingestErr.message?.includes("ECONNREFUSED") || ingestErr.message?.includes("ECONNRESET");
@@ -531,11 +713,39 @@ export class JobProcessor extends EventEmitter {
                         await new Promise(r => setTimeout(r, 5000));
                         await waitForCutoutReady({ maxWaitMs: 15000, intervalMs: 500 });
                         try {
-                          const { path: cutoutPath, lowConfidence: cutoutLow } = await runCutoutWithShadowMs(tempPath, signal, ps);
-                          if (cutoutPath) {
-                            result = buildResultFromDi(di, cutoutPath, null, srConfidence, "serper", srConfidence < 0.5 || cutoutLow);
-                            result._serperSignalCtx = { rank: srIdx, url: sr.url, domain: getDomain(sr.url), confidence: srConfidence };
-                            serperOk = !cutoutLow;
+                          const cutout = await runCutoutWithShadowMs(tempPath, signal, ps);
+                          if (cutout.path) {
+                            const cutoutLow = cutout.lowConfidence;
+                            const candidate = buildResultFromDi(
+                              di,
+                              cutout.path,
+                              null,
+                              srConfidence,
+                              "serper",
+                              srConfidence < 0.5 || cutoutLow,
+                              sr.url,
+                              {
+                                qualityReason: cutout.qualityReason,
+                                cutoutDiagnostics: {
+                                  alphaCoverage: cutout.alphaCoverage,
+                                  borderAlpha: cutout.borderAlpha,
+                                  componentCount: cutout.componentCount,
+                                  bboxAreaRatio: cutout.bboxAreaRatio,
+                                  bboxFillRatio: cutout.bboxFillRatio,
+                                  lightHalo: cutout.lightHalo,
+                                  model: cutout.model,
+                                },
+                              },
+                              tempPath, // originalPath
+                            );
+                            serperOriginalKept = true;
+                            candidate._serperSignalCtx = { rank: srIdx, url: sr.url, domain: getDomain(sr.url), confidence: srConfidence };
+                            if (cutoutLow) {
+                              if (!lowConfidenceSerperFallback) lowConfidenceSerperFallback = candidate;
+                            } else {
+                              result = candidate;
+                              serperOk = true;
+                            }
                           }
                         } catch (retryErr) {
                           console.warn(`[JobProcessor] Retry also failed — skipping remaining Serper results: ${retryErr.message}`);
@@ -545,7 +755,9 @@ export class JobProcessor extends EventEmitter {
                         console.warn(`[JobProcessor] Background removal failed for Serper image: ${ingestErr.message}`);
                       }
                     } finally {
-                      fs.promises.unlink(tempPath).catch(() => {});
+                      // Only delete the original if no cutout was produced — if it was used,
+                      // keep it in EXPORT_ROOT so reruns can access the unprocessed source image.
+                      if (!serperOriginalKept) fs.promises.unlink(tempPath).catch(() => {});
                     }
                     if (serperOk) break;
                   } catch (dlErr) {
@@ -562,9 +774,10 @@ export class JobProcessor extends EventEmitter {
                   if (firstSr?.url) {
                     let lrExt; try { lrExt = path.extname(new URL(firstSr.url).pathname) || ".jpg"; } catch { lrExt = ".jpg"; }
                     const lrSafeExt = /^\.(jpg|jpeg|png|gif|webp)$/i.test(lrExt) ? lrExt : ".jpg";
-                    const lrTempPath = path.join(os.tmpdir(), `ufm-serper-last-${Date.now()}${lrSafeExt}`);
+                    const lrTempPath = path.join(EXPORT_ROOT, `ufm-serper-src-last-${Date.now()}${lrSafeExt}`);
                     console.log(`[JobProcessor] Last-resort Serper attempt: ${firstSr.url}`);
                     const tLast = performance.now();
+                    let lrOriginalKept = false;
                     try {
                       const lrRes = await fetch(firstSr.url, { signal: AbortSignal.timeout(15000), headers: BROWSER_HEADERS });
                       if (lrRes.ok) {
@@ -572,11 +785,39 @@ export class JobProcessor extends EventEmitter {
                         await fs.promises.writeFile(lrTempPath, Buffer.from(ab));
                         const lrSize = (await fs.promises.stat(lrTempPath)).size;
                         if (lrSize >= 5000) {
-                          const { path: lrCutout, lowConfidence: lrLow } = await runCutoutWithShadowMs(lrTempPath, signal, ps);
-                          if (lrCutout) {
+                          const cutout = await runCutoutWithShadowMs(lrTempPath, signal, ps);
+                          if (cutout.path) {
+                            const lrLow = cutout.lowConfidence;
                             const lrConf = firstSr._confidence ?? 0;
-                            result = buildResultFromDi(di, lrCutout, null, lrConf, "serper", lrConf < 0.5 || lrLow);
-                            result._serperSignalCtx = { rank: 0, url: firstSr.url, domain: getDomain(firstSr.url), confidence: lrConf };
+                            const candidate = buildResultFromDi(
+                              di,
+                              cutout.path,
+                              null,
+                              lrConf,
+                              "serper",
+                              lrConf < 0.5 || lrLow,
+                              firstSr.url,
+                              {
+                                qualityReason: cutout.qualityReason,
+                                cutoutDiagnostics: {
+                                  alphaCoverage: cutout.alphaCoverage,
+                                  borderAlpha: cutout.borderAlpha,
+                                  componentCount: cutout.componentCount,
+                                  bboxAreaRatio: cutout.bboxAreaRatio,
+                                  bboxFillRatio: cutout.bboxFillRatio,
+                                  lightHalo: cutout.lightHalo,
+                                  model: cutout.model,
+                                },
+                              },
+                              lrTempPath, // originalPath
+                            );
+                            lrOriginalKept = true;
+                            candidate._serperSignalCtx = { rank: 0, url: firstSr.url, domain: getDomain(firstSr.url), confidence: lrConf };
+                            if (lrLow) {
+                              if (!lowConfidenceSerperFallback) lowConfidenceSerperFallback = candidate;
+                            } else {
+                              result = candidate;
+                            }
                           }
                         }
                       }
@@ -584,7 +825,7 @@ export class JobProcessor extends EventEmitter {
                       console.warn(`[JobProcessor] Last-resort Serper attempt failed: ${lastErr.message}`);
                     } finally {
                       ps.serperLastResortMs += roundMs(performance.now() - tLast);
-                      fs.promises.unlink(lrTempPath).catch(() => {});
+                      if (!lrOriginalKept) fs.promises.unlink(lrTempPath).catch(() => {});
                     }
                   }
                 }
@@ -598,6 +839,8 @@ export class JobProcessor extends EventEmitter {
                     confidence: sr._confidence ?? 0,
                     outcome: result?._serperSignalCtx?.url === sr.url
                       ? "accepted"
+                      : sr._sourceRejected
+                        ? "rejected_source_quality"
                       : sr._cutoutAttempted
                         ? "rejected_cutout_fail"
                         : "skipped",
@@ -621,6 +864,9 @@ export class JobProcessor extends EventEmitter {
             }
           }
 
+          if (!result && lowConfidenceSerperFallback) {
+            result = lowConfidenceSerperFallback;
+          }
           if (!result) {
             result = buildResultFromDi(di, null, null, 0, "none", true);
           }
@@ -701,7 +947,7 @@ export class JobProcessor extends EventEmitter {
       // Done here (not inline) because @napi-rs/canvas drawing is synchronous and
       // blocks the event loop — if done inside runItem it prevents the 20s timeout from firing.
       if (processedImages.length > 0) {
-        this.emitProgress(job.id, "Generating labels...", processedImages.length, processedImages.length);
+        this.emitProgress(job.id, "Generating labels...", processedImages.length, discountItems.length);
         try {
           const itemsForExport = processedImages
             .filter(img => img.status === "done" && img.result)

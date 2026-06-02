@@ -96,10 +96,14 @@ export default function AddProductDialog({ onAdd, onAddFromDiscount, onClose, de
         items = await window.ufm.parseDiscountXlsx(xlsxPath, department);
       } else {
         if (!discountText.trim()) return;
-        items = await window.ufm.parseDiscountText(discountText);
+        items = await window.ufm.parseDiscountText(discountText, department);
       }
       if (!items?.length) {
-        setParseError("No products found. Check the file or text and try again.");
+        setParseError(
+          department
+            ? `No "${department}" products found. Check that the file or text contains items for this department.`
+            : "No products found. Check the file or text and try again."
+        );
         setIsParsing(false);
         return;
       }
@@ -346,6 +350,7 @@ export default function AddProductDialog({ onAdd, onAddFromDiscount, onClose, de
           <div>
             <p style={{ margin: "0 0 12px", fontSize: "var(--text-sm)", color: "var(--color-text-muted)", fontFamily: "var(--font-sans)" }}>
               Paste product lines with prices. Products will be auto-matched to DB images.
+              {department && <span style={{ color: "var(--color-primary)", fontWeight: "var(--font-semibold)" }}> Filtering by: {department}</span>}
             </p>
             <textarea
               value={discountText}

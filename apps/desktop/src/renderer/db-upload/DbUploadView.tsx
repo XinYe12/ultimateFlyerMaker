@@ -209,7 +209,7 @@ function StatusBadge({ item }: { item: DbUploadItem }) {
   );
 }
 
-const DB_CHECK_TIMEOUT_MS = 8000;
+const DB_CHECK_TIMEOUT_MS = 25_000;
 const MIN_CHECK_DISPLAY_MS = 2000; // Keep "Checking…" visible so user sees progress
 
 function checkDbConnection(): Promise<{ ok: boolean; count?: number; error?: string }> {

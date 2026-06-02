@@ -25,4 +25,11 @@ export type FlyerPlacement = {
   priceFontFamily?: string
   priceColor?: string
   priceShowDollar?: boolean
+  imageRadius?: number      // 0–50 (% of min dimension), default 0
+  imageBrightness?: number  // 0–200 (CSS filter %), default 100
+  imageContrast?: number    // 0–200 (CSS filter %), default 100
+  imageSaturation?: number  // 0–200 (CSS filter %), default 100
+  imageOpacity?: number     // 0–100 (%), default 100
+  imageFlipH?: boolean      // mirror horizontally, default false
+  imageFlipV?: boolean      // mirror vertically, default false
 }

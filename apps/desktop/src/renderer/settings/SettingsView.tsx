@@ -169,33 +169,39 @@ export default function SettingsView({ onBack }: Props) {
           Background Removal Model
         </h3>
         <p style={{ margin: "0 0 16px", fontSize: "var(--text-sm)", color: "var(--color-text-muted)", lineHeight: 1.5 }}>
-          Controls the AI model used to remove backgrounds from product images. Takes effect after restarting the app.
+          Controls the first-pass AI model used to remove product backgrounds. Hard cases can automatically retry with a stronger model. Changes take effect after restarting the app.
         </p>
 
         {([
           {
+            id: "briaai-rmbg",
+            label: "briaai-rmbg",
+            badge: "Experimental",
+            desc: "BRIA RMBG-1.4 — light commercial-image model. Fast, but currently less stable on grocery packaging and pale/transparent products.",
+          },
+          {
             id: "birefnet-general",
             label: "birefnet-general",
-            badge: null,
-            desc: "Best quality — handles complex and transparent backgrounds. Downloads ~973 MB on first use. Uses ~7 GB RAM during inference.",
+            badge: "Maximum Quality",
+            desc: "Highest quality — handles complex and transparent backgrounds. Downloads ~973 MB on first use. Uses ~7 GB RAM during inference.",
           },
           {
             id: "birefnet-general-lite",
             label: "birefnet-general-lite",
-            badge: null,
-            desc: "BiRefNet lite — same architecture as birefnet-general so it handles transparent/clear packaging well. Lighter download (~300–400 MB). Higher RAM use than isnet.",
+            badge: "Best Quality",
+            desc: "BiRefNet lite — strong quality for hard cutouts and transparent packaging. Lighter download (~300–400 MB). Higher RAM use than isnet.",
           },
           {
             id: "isnet-general-use",
             label: "isnet-general-use",
-            badge: "Recommended",
-            desc: "Better quality than u2net on most products (~176 MB). Good balance of quality and memory. Struggles with fully transparent packaging.",
+            badge: "Balanced",
+            desc: "Better quality than u2net on most products (~176 MB). Good balance of quality and memory. Can struggle with fully transparent packaging.",
           },
           {
             id: "u2net",
             label: "u2net",
-            badge: null,
-            desc: "Fastest and lowest memory (~170 MB). Good for office PCs with limited RAM. Struggles with transparent products.",
+            badge: "Fast",
+            desc: "Fastest and lowest memory (~170 MB). Good for office PCs with limited RAM. Hard cases should retry with a stronger fallback.",
           },
         ] as const).map((m) => (
           <label

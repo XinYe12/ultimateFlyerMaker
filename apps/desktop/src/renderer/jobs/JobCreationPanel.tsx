@@ -61,6 +61,7 @@ export default function JobCreationPanel({
   const [discountText, setDiscountText] = useState("");
   const [xlsxPath, setXlsxPath] = useState<string | null>(null);
   const [discountSource, setDiscountSource] = useState<"text" | "xlsx" | null>(null);
+  const [xlsxParsedCount, setXlsxParsedCount] = useState<number | null>(null);
   const [allTemplateOptions, setAllTemplateOptions] = useState([...TEMPLATE_OPTIONS]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -163,10 +164,14 @@ export default function JobCreationPanel({
         setDiscountSource("xlsx");
         setDiscountText("");
         onSetDiscount({ type: "xlsx", source: path, status: "pending" });
-        // Parse in background so parsedItems are ready before user opens editor
-        window.ufm.parseDiscountXlsx(path, department).then((items: any[]) => {
+        setXlsxParsedCount(null);
+        // Pre-parse using the job's actual department, not the local creation-form state
+        const deptForParse = job?.department ?? department;
+        window.ufm.parseDiscountXlsx(path, deptForParse).then((items: any[]) => {
+          setXlsxParsedCount(items.length);
           onSetDiscount({ type: "xlsx", source: path, parsedItems: items, status: "done" });
         }).catch(() => {
+          setXlsxParsedCount(0);
           onSetDiscount({ type: "xlsx", source: path, status: "error" });
         });
       }
@@ -403,8 +408,20 @@ export default function JobCreationPanel({
           />
 
           {xlsxPath && (
-            <div style={{ fontSize: "var(--text-sm)", color: "var(--color-success)", marginTop: 4 }}>
-              XLSX loaded: {xlsxPath.split("/").pop()}
+            <div style={{ fontSize: "var(--text-sm)", marginTop: 4 }}>
+              {xlsxParsedCount === null && (
+                <span style={{ color: "var(--color-text-muted)" }}>Parsing {xlsxPath.split(/[\\/]/).pop()}…</span>
+              )}
+              {xlsxParsedCount !== null && xlsxParsedCount > 0 && (
+                <span style={{ color: "var(--color-success)" }}>
+                  {xlsxPath.split(/[\\/]/).pop()} — {xlsxParsedCount} {DEPARTMENT_LABELS[job?.department ?? ""] || job?.department} items loaded
+                </span>
+              )}
+              {xlsxParsedCount === 0 && (
+                <span style={{ color: "var(--color-warning, #b45309)" }}>
+                  No {DEPARTMENT_LABELS[job?.department ?? ""] || job?.department} items found in this xlsx. Add a "{DEPARTMENT_LABELS[job?.department ?? ""] || job?.department}" section or use a different file.
+                </span>
+              )}
             </div>
           )}
         </div>

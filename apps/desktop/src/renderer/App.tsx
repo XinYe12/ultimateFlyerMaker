@@ -76,6 +76,8 @@ export default function App() {
   const [userRowCounts, setUserRowCounts] = useState<Record<string, number>>({});
   const [dbSearchItemId, setDbSearchItemId] = useState<string | null>(null);
   const [googleSearchItemId, setGoogleSearchItemId] = useState<string | null>(null);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [copiedItem, setCopiedItem] = useState<IngestItem | null>(null);
   const [replacementJobs, setReplacementJobs] = useState<ReplacementJob[]>([]);
   const multiFlavorSessionRef = useRef<Map<string, string[]>>(new Map());
   const prevCardItemIdsRef = useRef<Set<string>>(new Set());
@@ -235,6 +237,27 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Ctrl+C / Ctrl+V — copy-paste product cards in the editor
+  useEffect(() => {
+    if (view !== "editor") return;
+    const handler = (e: KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || (e.target as HTMLElement)?.isContentEditable) return;
+      if (e.key === "c") {
+        const item = editorQueue.find((it: any) => it.id === selectedItemId);
+        if (item) { e.preventDefault(); setCopiedItem(item as IngestItem); }
+      } else if (e.key === "v") {
+        if (!copiedItem) return;
+        e.preventDefault();
+        const newItem: IngestItem = { ...copiedItem, id: crypto.randomUUID(), slotIndex: undefined };
+        addItem(newItem);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [view, selectedItemId, copiedItem, editorQueue, addItem]);
 
   // Auto-exit edit mode when switching away from card department
   useEffect(() => {
@@ -947,7 +970,7 @@ export default function App() {
           ? String(llm.regular_price)
           : "";
     const salePriceRaw =
-      (item?.result?.discount as any)?.price ?? (item?.result?.discount as any)?.display ?? llm?.sale_price;
+      (item?.result?.discount as any)?.salePrice ?? (item?.result?.discount as any)?.price?.display ?? llm?.sale_price;
     const salePrice = salePriceRaw != null ? String(salePriceRaw) : "";
     setDiscountDetailsDialog({ itemId, englishTitle, regularPrice, salePrice });
   };
@@ -1870,6 +1893,8 @@ export default function App() {
                   onDeleteSubImage={departmentLocked ? undefined : handleDeleteSubImage}
                   onCutoutErased={departmentLocked ? undefined : (id, newPath) => applyCutoutPatch(id, { cutoutPath: newPath })}
                   replacementJobs={replacementJobs}
+                  selectedItemId={selectedItemId}
+                  onSelectItem={departmentLocked ? undefined : setSelectedItemId}
                 />
 
                 {dbSearchItemId && (

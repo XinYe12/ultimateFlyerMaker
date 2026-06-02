@@ -77,13 +77,45 @@ export type CustomBoxDef = {
   textOffsetY?: number;
 };
 
+/** Visual appearance of each product card within a department grid. */
+export type CardStyleDef = {
+  /** Product cell background color */
+  backgroundColor?: string;
+  /** Corner rounding in px (0 = sharp) */
+  borderRadius?: number;
+  /** Border stroke width in px (0 = no border) */
+  borderWidth?: number;
+  /** Border stroke color */
+  borderColor?: string;
+  /** Whether cells have a drop shadow */
+  hasShadow?: boolean;
+  /** Layout of content within the card */
+  orientation?: 'vertical' | 'horizontal' | 'top';
+  /** Product title font size in px */
+  titleFontSize?: number;
+  /** Unit + regular price font size in px (smaller secondary line) */
+  metaFontSize?: number;
+  /** Product title text color */
+  titleColor?: string;
+  /** Price number text color */
+  priceColor?: string;
+  /** Where the price label sits inside the card */
+  pricePosition?: 'bottom-right' | 'bottom-left' | 'bottom-center' | 'right';
+  /** Approximate % of cell height (vertical) or width (horizontal) devoted to the image */
+  imagePercent?: number;
+};
+
 /** Defines where product cards are laid out. Separate from visual department boxes. */
 export type DepartmentAreaDef = {
   id?: string; // optional for backward compat; added when missing
   departmentKey: string;
   label: string;
   rows: number;
+  /** Number of product columns per row */
+  cols?: number;
   productRegion: { x: number; y: number; width: number; height: number };
+  /** Detected or configured style for each product card in this area */
+  cardStyle?: CardStyleDef;
 };
 
 export type CustomTemplatePage = {

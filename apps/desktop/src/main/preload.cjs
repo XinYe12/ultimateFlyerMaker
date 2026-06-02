@@ -91,6 +91,7 @@ contextBridge.exposeInMainWorld("ufm", {
   ingestPhotoPhase1: (filePath) => ipcRenderer.invoke("ufm:ingestPhotoPhase1", filePath),
 
   startCutout: (id, filePath) => ipcRenderer.invoke("ufm:startCutout", id, filePath),
+  rerunCutout: (id, filePath, model) => ipcRenderer.invoke("ufm:rerunCutout", id, filePath, model),
 
   onCutoutComplete: (callback) => {
     const handler = (_, data) => callback(data);
@@ -194,6 +195,7 @@ contextBridge.exposeInMainWorld("ufm", {
   },
 
   openLogFile: () => ipcRenderer.invoke("ufm:openLogFile"),
+  openExternal: (url) => ipcRenderer.invoke("ufm:openExternal", url),
 
   // ---------- DB BATCH UPLOAD ----------
   startDbBatch: (paths) => ipcRenderer.invoke("ufm:startDbBatch", paths),
@@ -290,8 +292,14 @@ contextBridge.exposeInMainWorld("ufm", {
   setRembgModel: (model) => ipcRenderer.invoke("ufm:setRembgModel", model),
 
   // ---------- CUTOUT ERASER ----------
-  saveErasedCutout: (cutoutPath, pngDataUrl) =>
-    ipcRenderer.invoke("ufm:saveErasedCutout", cutoutPath, pngDataUrl),
+  saveErasedCutout: (cutoutPath, pngDataUrl, options) =>
+    ipcRenderer.invoke("ufm:saveErasedCutout", cutoutPath, pngDataUrl, options),
+  cutoutEditedImage: (basePath, pngDataUrl) =>
+    ipcRenderer.invoke("ufm:cutoutEditedImage", basePath, pngDataUrl),
+  refineCutoutWithClicks: (args) =>
+    ipcRenderer.invoke("ufm:refineCutoutWithClicks", args),
+  restoreOriginalCutout: (args) =>
+    ipcRenderer.invoke("ufm:restoreOriginalCutout", args),
 
   // ---------- NATIVE CONTEXT MENU ----------
   showContextMenu: (itemId, actions) =>
@@ -304,4 +312,8 @@ contextBridge.exposeInMainWorld("ufm", {
 
   // ---------- STARTUP TIMING ----------
   getStartupTiming: () => ipcRenderer.invoke("ufm:getStartupTiming"),
+
+  // ---------- TEMPLATE IMPORT ----------
+  parseTemplateFromImages: (imagePaths) =>
+    ipcRenderer.invoke("ufm:parseTemplateFromImages", imagePaths),
 });

@@ -2,6 +2,7 @@
 // FINAL — AUTHORITATIVE (FIXED)
 
 import { runDeepSeek } from "../ingestion/deepseekService.js";
+import { DEPARTMENT_ALIASES } from "./parseDiscountXlsx.js";
 
 let LAST_PARSED_DISCOUNTS = [];
 
@@ -115,16 +116,67 @@ function buildPriceDisplay(item) {
   return "";
 }
 
-export async function parseDiscountText(_event, rawText) {
-  console.log("[parseDiscountText] rawText =", rawText);
+/**
+ * Extract only the lines belonging to a given department from pasted text.
+ * Splits text by department-header lines (short lines that match a known alias,
+ * with no price data). Returns the matching subsection, or the full text if no
+ * department sections are found (single-department paste with no header).
+ */
+function extractDepartmentSection(text, departmentId) {
+  const aliases = DEPARTMENT_ALIASES[departmentId] ?? [departmentId.toLowerCase()];
+  const lines = text.split(/\r?\n/);
+
+  // Detect header: short line (≤40 chars) matching a known alias, no digits
+  const isHeader = (line) => {
+    const t = line.trim().toLowerCase();
+    if (!t || t.length > 40) return false;
+    return Object.values(DEPARTMENT_ALIASES).flat().some(alias => t.includes(alias));
+  };
+
+  // Split into sections
+  const sections = [];
+  let current = { header: null, lines: [] };
+  for (const line of lines) {
+    if (isHeader(line)) {
+      if (current.lines.length > 0 || current.header) sections.push(current);
+      current = { header: line.trim().toLowerCase(), lines: [] };
+    } else {
+      current.lines.push(line);
+    }
+  }
+  if (current.lines.length > 0 || current.header) sections.push(current);
+
+  // No sections detected → single-dept paste with no header, use all text
+  const hasSections = sections.some(s => s.header);
+  if (!hasSections) return text;
+
+  const match = sections.find(s => s.header && aliases.some(alias => s.header.includes(alias)));
+  if (!match) {
+    console.warn(`[parseDiscountText] Department "${departmentId}" not found in text sections — returning empty`);
+    return null;
+  }
+  console.log(`[parseDiscountText] Extracted section for "${departmentId}" (${match.lines.length} lines)`);
+  return match.lines.join("\n");
+}
+
+export async function parseDiscountText(_event, rawText, department) {
+  console.log("[parseDiscountText] rawText =", rawText, "department =", department);
 
   const input = typeof rawText === "string" ? rawText.trim() : "";
   if (!input) {
     throw new Error("parseDiscountText received empty input");
   }
 
+  let textToProcess = input;
+  if (department) {
+    const section = extractDepartmentSection(input, department);
+    if (section === null) return [];
+    textToProcess = section.trim();
+    if (!textToProcess) return [];
+  }
+
   const result = await runDeepSeek({
-    raw_ocr_text: input,
+    raw_ocr_text: textToProcess,
     image_path: null
   });
 

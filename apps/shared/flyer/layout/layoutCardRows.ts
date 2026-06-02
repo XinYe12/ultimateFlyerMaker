@@ -28,6 +28,13 @@ export type CardDef = {
   priceFontFamily?: string;
   priceColor?: string;
   priceShowDollar?: boolean;
+  imageRadius?: number;
+  imageBrightness?: number;
+  imageContrast?: number;
+  imageSaturation?: number;
+  imageOpacity?: number;
+  imageFlipH?: boolean;
+  imageFlipV?: boolean;
 };
 
 /**
@@ -155,6 +162,13 @@ export function layoutCardRows({
       priceFontFamily: card.priceFontFamily,
       priceColor: card.priceColor,
       priceShowDollar: card.priceShowDollar,
+      imageRadius: card.imageRadius,
+      imageBrightness: card.imageBrightness,
+      imageContrast: card.imageContrast,
+      imageSaturation: card.imageSaturation,
+      imageOpacity: card.imageOpacity,
+      imageFlipH: card.imageFlipH,
+      imageFlipV: card.imageFlipV,
     });
   }
 

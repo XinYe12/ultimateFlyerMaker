@@ -442,29 +442,33 @@ export function useJobQueue() {
           slotIndex: item.slotIndex,
         }));
       setJobs((prev) =>
-        prev.map((j) =>
-          j.id === jobId
-            ? {
-                ...j,
-                images,
-                progress: {
+        prev.map((j) => {
+          if (j.id !== jobId) return j;
+          // Don't let editor item count overwrite the IPC-driven progress counter while a job
+          // is actively running — that causes the denominator to grow as items stream in.
+          const isActiveJob = j.status === "processing" || j.status === "queued";
+          return {
+            ...j,
+            images,
+            progress: isActiveJob
+              ? j.progress
+              : {
                   ...j.progress,
                   totalImages: images.length,
                   processedImages: images.filter((img) => img.status === "done").length,
                   currentStep: j.progress.currentStep,
                 },
-                result: {
-                  processedImages: images,
-                  discountLabels: discountLabels ?? j.result?.discountLabels ?? [],
-                  verificationDone: verificationDone ?? j.result?.verificationDone ?? false,
-                  verificationProgress: verificationProgress !== undefined ? verificationProgress : j.result?.verificationProgress,
-                  departmentLocked: departmentLocked ?? j.result?.departmentLocked ?? false,
-                },
-                slotOverrides: slotOverrides ?? j.slotOverrides,
-                cardLayouts: cardLayouts ?? j.cardLayouts,
-              }
-            : j
-        )
+            result: {
+              processedImages: images,
+              discountLabels: discountLabels ?? j.result?.discountLabels ?? [],
+              verificationDone: verificationDone ?? j.result?.verificationDone ?? false,
+              verificationProgress: verificationProgress !== undefined ? verificationProgress : j.result?.verificationProgress,
+              departmentLocked: departmentLocked ?? j.result?.departmentLocked ?? false,
+            },
+            slotOverrides: slotOverrides ?? j.slotOverrides,
+            cardLayouts: cardLayouts ?? j.cardLayouts,
+          };
+        })
       );
     },
     []

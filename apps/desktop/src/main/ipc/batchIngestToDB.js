@@ -4,7 +4,9 @@ import crypto from "crypto";
 import { Worker } from "worker_threads";
 import { fileURLToPath } from "url";
 import { getStorage } from "firebase-admin/storage";
-import { db } from "../ingestion/firebase.js";
+import { db, debugFirestoreTrack, runFirestoreTimed } from "../ingestion/firebase.js";
+
+const GET_DB_STATS_TIMEOUT_MS = 20_000;
 import { getImageEmbedding, embedText, classifyImageAsProduct } from "../ingestion/imageEmbeddingService.js";
 import { hammingDistance } from "../ingestion/pHashService.js";
 import { buildSearchTokens, invalidateEmbeddingCache, buildMatchKeys } from "../ingestion/searchService.js";
@@ -766,17 +768,58 @@ export async function fixDbStorageConsistency(report) {
  */
 export async function getDbStats() {
   const LOG = (step, msg) => console.log(`[getDbStats] [${step}]`, msg);
+  const callId = `getDbStats-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const t0 = Date.now();
   LOG("A", "Called. Using db from ingestion/firebase.js");
+  // #region agent log
+  debugFirestoreTrack("getDbStats", "start", { callId });
+  fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
+    body: JSON.stringify({
+      sessionId: "2e2f6c",
+      location: "batchIngestToDB.js:getDbStats",
+      message: "getDbStats entry",
+      data: { callId },
+      hypothesisId: "B",
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
   LOG("B", "Building query: db.collection('" + FIRESTORE_COLLECTION + "').count().get()");
   // count() aggregation costs 1 read regardless of collection size.
   assertCanRead(1);
-  const snap = await db
-    .collection(FIRESTORE_COLLECTION)
-    .count()
-    .get();
-  trackReads(1);
-  LOG("C", "Query succeeded. count=" + snap.data().count);
-  return { count: snap.data().count, quota: getQuotaStatus() };
+  try {
+    const snap = await runFirestoreTimed(
+      () =>
+        db
+          .collection(FIRESTORE_COLLECTION)
+          .count()
+          .get(),
+      GET_DB_STATS_TIMEOUT_MS
+    );
+    trackReads(1);
+    LOG("C", "Query succeeded. count=" + snap.data().count);
+    // #region agent log
+    fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
+      body: JSON.stringify({
+        sessionId: "2e2f6c",
+        location: "batchIngestToDB.js:getDbStats",
+        message: "getDbStats ok",
+        data: { callId, ms: Date.now() - t0, count: snap.data().count },
+        hypothesisId: "B",
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+    return { count: snap.data().count, quota: getQuotaStatus() };
+  } finally {
+    // #region agent log
+    debugFirestoreTrack("getDbStats", "end", { callId, ms: Date.now() - t0 });
+    // #endregion
+  }
 }
 
 export async function getTodaysSaves() {

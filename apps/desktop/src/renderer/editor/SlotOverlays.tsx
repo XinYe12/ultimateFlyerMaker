@@ -39,8 +39,6 @@ type SlotOverlaysProps = {
   onGoogleSearch?: (itemId: string) => void;
   onEditTitle?: (itemId: string) => void;
   onPickSeriesFlavors?: (itemId: string) => void;
-  onRemoveBackground?: (itemId: string) => void;
-  removingBgIds?: Set<string>;
   // Card mode props
   cardMode?: boolean;
   cardRects?: CardRect[];
@@ -60,8 +58,6 @@ export default function SlotOverlays({
   onGoogleSearch,
   onEditTitle,
   onPickSeriesFlavors,
-  onRemoveBackground,
-  removingBgIds,
   cardMode,
   cardRects,
   cardLayout,
@@ -249,43 +245,6 @@ export default function SlotOverlays({
               </button>
             )}
 
-            {/* Remove background button — top-right corner, left of delete button */}
-            {!editMode && hoveredFullSlot === index && confirmDeleteSlot !== index && onRemoveBackground && itemForSlot && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRemoveBackground(placement.itemId);
-                }}
-                disabled={removingBgIds?.has(placement.itemId)}
-                style={{
-                  position: "absolute",
-                  top: 8,
-                  right: onRemoveItem ? 44 : 8,
-                  width: 28,
-                  height: 28,
-                  borderRadius: "50%",
-                  backgroundColor: removingBgIds?.has(placement.itemId) ? "#6b7280" : "#6366f1",
-                  color: "#fff",
-                  border: "none",
-                  cursor: removingBgIds?.has(placement.itemId) ? "default" : "pointer",
-                  fontSize: 14,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  zIndex: 9001,
-                  boxShadow: "0 2px 6px rgba(0,0,0,0.3)",
-                  transition: "transform 0.15s",
-                }}
-                onMouseEnter={(e) => {
-                  if (!removingBgIds?.has(placement.itemId))
-                    e.currentTarget.style.transform = "scale(1.15)";
-                }}
-                onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
-                title="Remove background"
-              >
-                {removingBgIds?.has(placement.itemId) ? "⏳" : "✂"}
-              </button>
-            )}
 
             {/* Delete X button — top-right corner, visible on full-slot hover */}
             {!editMode && hoveredFullSlot === index && confirmDeleteSlot !== index && onRemoveItem && (

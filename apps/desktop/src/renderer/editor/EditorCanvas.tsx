@@ -17,6 +17,7 @@ import { IngestItem, CardDef, CardLayout, ReplacementJob } from "../types";
 import MergeSelectionDialog, { MergeCandidate } from "./MergeSelectionDialog";
 import GlobalFontToolbar from "./GlobalFontToolbar";
 import CutoutEraserModal from "./CutoutEraserModal";
+import ImageToolbar, { ImageToolbarPatch } from "./ImageToolbar";
 
 const PREVIEW_SCALE = 0.5;
 const MIN_CARD_WIDTH = 150;
@@ -68,6 +69,8 @@ export default function EditorCanvas({
   onCutoutErased,
   flyerWeekStart,
   replacementJobs,
+  selectedItemId,
+  onSelectItem,
 }: {
   editorQueue: any[];
   templateId: string;
@@ -101,12 +104,13 @@ export default function EditorCanvas({
   onDeleteSubImage?: (itemId: string, subIdx: number) => void;
   onCutoutErased?: (itemId: string, newPath: string) => void;
   replacementJobs?: ReplacementJob[];
+  selectedItemId?: string | null;
+  onSelectItem?: (id: string | null) => void;
 }) {
   const [config, setConfig] = useState<any | null>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   const [addImageModalSlot, setAddImageModalSlot] = useState<number | null>(null);
   const [addImageModalCardId, setAddImageModalCardId] = useState<string | null>(null);
-  const [removingBgIds, setRemovingBgIds] = useState<Set<string>>(new Set());
   const [eraserItemId, setEraserItemId] = useState<string | null>(null);
   // load template config (only when template changes, not on every dept switch)
   useEffect(() => {
@@ -151,28 +155,31 @@ export default function EditorCanvas({
       else if (action === 'uploadLocal') onReplaceImageRef.current?.(itemId);
       else if (action === 'flavors') onPickSeriesFlavors?.(itemId);
       else if (action === 'editCutout') setEraserItemId(itemId);
+      else if (action === 'openSource') {
+        const it = items.find((it: any) => it.id === itemId);
+        const url = it?.result?.sourceUrl;
+        if (url) (window as any).ufm.openExternal(url);
+      }
     });
     return unsub;
   }, [onEditTitle, onGoogleSearch, onChooseDatabaseResults, onPickSeriesFlavors]);
 
-  useEffect(() => {
-    const unsub = (window as any).ufm.onCutoutComplete((id: string) => {
-      setRemovingBgIds(prev => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-    });
-    return unsub;
-  }, []);
+  // Maps itemId → normalized display src of the specific image being rerun.
+  // This lets us freeze only that one image in a multi-flavor grid.
+  const [rerunningCutoutMap, setRerunningCutoutMap] = useState<Map<string, string>>(new Map());
 
-  const handleRemoveBackground = (itemId: string) => {
-    const item = items.find((it: any) => it.id === itemId);
-    const inputPath = item?.result?.inputPath;
-    if (!inputPath) return;
-    setRemovingBgIds(prev => new Set(prev).add(itemId));
-    (window as any).ufm.startCutout(itemId, inputPath);
-  };
+  useEffect(() => {
+    const clearId = (id: string) =>
+      setRerunningCutoutMap(prev => { const m = new Map(prev); m.delete(id); return m; });
+    const unsubOk  = (window as any).ufm.onCutoutComplete((data: { id: string; cutoutPath: string }) => {
+      clearId(data.id);
+      if (data.cutoutPath) onCutoutErased?.(data.id, data.cutoutPath);
+    });
+    const unsubErr = (window as any).ufm.onCutoutError?.((data: { id: string; error: string }) => {
+      clearId(data.id);
+    });
+    return () => { unsubOk?.(); unsubErr?.(); };
+  }, [onCutoutErased]);
 
   const page = config ? findPageForDepartment(config, department) : null;
   const region = page?.departments?.[department] ?? null;
@@ -180,6 +187,31 @@ export default function EditorCanvas({
 
   const isCard = region ? isCardDepartment(region) : false;
   const isSlotted = region ? isSlottedDepartment(region) : false;
+
+  const selectedCard = useMemo(
+    () => (isCard && cardLayout ? cardLayout.find(c => c.itemId === selectedItemId) ?? null : null),
+    [isCard, cardLayout, selectedItemId],
+  );
+
+  const handleUpdateSelectedCard = useCallback((patch: ImageToolbarPatch) => {
+    if (!selectedItemId || !cardLayout || !onCardLayoutChange) return;
+    onCardLayoutChange(cardLayout.map(c => c.itemId === selectedItemId ? { ...c, ...patch } : c));
+  }, [selectedItemId, cardLayout, onCardLayoutChange]);
+
+  const handleRerunCutout = useCallback((model: string) => {
+    if (!selectedItemId) return;
+    const item = items.find((it: any) => it.id === selectedItemId);
+    // Always use the original photo (before any cutout), never the cutout derivative.
+    // inputPath is set by ingestPhoto/downloadAndIngest and is never overwritten by applyCutoutPatch.
+    const originalPath = item?.result?.inputPath ?? item?.path ?? null;
+    if (!originalPath) return;
+    // Track the specific display src being replaced so only that image cell freezes.
+    const rawSrc = item?.result?.cutoutPaths?.[0] ?? item?.result?.cutoutPath ?? originalPath;
+    const displaySrc = rawSrc.startsWith("http") || rawSrc.startsWith("file://")
+      ? rawSrc : `file://${rawSrc}`;
+    setRerunningCutoutMap(prev => new Map(prev).set(selectedItemId, displaySrc));
+    (window as any).ufm.rerunCutout(selectedItemId, originalPath, model);
+  }, [selectedItemId, items]);
 
 
   // ── Slot drag/resize state (for slot-based departments) ──
@@ -1031,6 +1063,27 @@ export default function EditorCanvas({
     };
   }, []); // empty deps — uses only refs
 
+  // ── Card selection — capture phase so child stopPropagation doesn't block it ──
+  const handleSelectionCapture = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !scaledCanvasRef.current || !onSelectItem) return;
+    const canvasRect = scaledCanvasRef.current.getBoundingClientRect();
+    const canvasX = (e.clientX - canvasRect.left) / PREVIEW_SCALE;
+    const canvasY = (e.clientY - canvasRect.top) / PREVIEW_SCALE;
+    const hit = cardRectsRef.current.find(r =>
+      canvasX >= r.x && canvasX <= r.x + r.width &&
+      canvasY >= r.y && canvasY <= r.y + r.height
+    );
+    // Don't select cards that are currently being processed (cutout or replacement running)
+    if (hit?.itemId) {
+      const hitItem = itemsRef.current.find((it: any) => it.id === hit.itemId);
+      const isProcessing = hitItem?.status === "processing_cutout" || hitItem?.status === "running" ||
+        rerunningCutoutMap.has(hit.itemId) ||
+        (replacementJobs ?? []).some((j: any) => j.itemId === hit.itemId && j.status === "processing");
+      if (isProcessing) return;
+    }
+    onSelectItem(hit?.itemId ?? null);
+  }, [onSelectItem, replacementJobs]);
+
   if (!config || !page) {
     return <div style={{ padding: 24 }}>Loading…</div>;
   }
@@ -1111,8 +1164,7 @@ export default function EditorCanvas({
 
   // ── Swap drag — hold-to-lift detection ──
   const handleCanvasMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || !onCardLayoutChange || !scaledCanvasRef.current) return;
-    if (dividerDrag || activeDrag || elementScaleDrag || elementRotateDrag || editMode) return; // don't conflict with other drags
+    if (e.button !== 0 || !scaledCanvasRef.current) return;
 
     const canvasRect = scaledCanvasRef.current.getBoundingClientRect();
     const canvasX = (e.clientX - canvasRect.left) / PREVIEW_SCALE;
@@ -1123,6 +1175,10 @@ export default function EditorCanvas({
       canvasX >= r.x && canvasX <= r.x + r.width &&
       canvasY >= r.y && canvasY <= r.y + r.height
     );
+
+    // Swap-drag only applies when layout changes are allowed and not in conflict with other interactions
+    if (!onCardLayoutChange || dividerDrag || activeDrag || elementScaleDrag || elementRotateDrag || editMode) return;
+
     if (!hit) return;
 
     // Cancel any in-flight hold
@@ -1614,11 +1670,21 @@ export default function EditorCanvas({
     {/* Cutout eraser modal */}
     {eraserItemId && (() => {
       const it = items.find((i: any) => i.id === eraserItemId);
-      const cutoutPath = it?.result?.cutoutPath ?? it?.cutoutPath;
+      // Use the same source priority as RenderFlyerPlacements so the modal opens
+      // the exact file that the editor card is displaying.
+      const rawDisplaySrc = it?.image?.src ?? it?.cutoutPath ?? (it?.result?.cutoutPath || null) ?? null;
+      const cutoutPath = (rawDisplaySrc && !String(rawDisplaySrc).startsWith("http"))
+        ? rawDisplaySrc
+        : (it?.result?.cutoutPath ?? it?.cutoutPath ?? null);
+      const sourcePath = it?.result?.inputPath ?? it?.path ?? null;
+      const sourceUrl = it?.result?.sourceUrl ?? null;
       if (!cutoutPath) return null;
       return (
         <CutoutEraserModal
+          key={eraserItemId}
           cutoutPath={cutoutPath}
+          sourcePath={sourcePath}
+          sourceUrl={sourceUrl}
           onSave={(newPath) => {
             onCutoutErased?.(eraserItemId, newPath);
             setEraserItemId(null);
@@ -1627,6 +1693,19 @@ export default function EditorCanvas({
         />
       );
     })()}
+
+    {/* Image properties sidebar toolbar */}
+    {isCard && editMode && selectedItemId && onCardLayoutChange && (
+      <ImageToolbar
+        card={selectedCard}
+        itemId={selectedItemId}
+        onUpdateCard={handleUpdateSelectedCard}
+        onEditCutout={() => setEraserItemId(selectedItemId)}
+        onRerunCutout={handleRerunCutout}
+        rerunningCutout={rerunningCutoutMap.has(selectedItemId ?? '')}
+        visible={true}
+      />
+    )}
 
     {/* AddImageModal for slot-based */}
     {addImageModalSlot !== null && (
@@ -1724,6 +1803,7 @@ export default function EditorCanvas({
             overflow: "visible",
           }}
           onMouseDown={isCard && onCardLayoutChange ? handleCanvasMouseDown : undefined}
+          onMouseDownCapture={isCard && onSelectItem ? handleSelectionCapture : undefined}
           onContextMenu={isCard && editMode ? (e) => {
             e.preventDefault();
             if (!scaledCanvasRef.current) return;
@@ -1747,7 +1827,7 @@ export default function EditorCanvas({
             if (onGoogleSearch) menuActions.push({ id: 'googleSearch', label: 'Google Search' });
             menuActions.push({ id: 'dbResults', label: 'Database Results', enabled: !!onChooseDatabaseResults });
             menuActions.push({ id: 'uploadLocal', label: 'Upload from Local' });
-            menuActions.push({ id: 'editCutout', label: 'Edit Cutout' });
+            if (item?.result?.sourceUrl) menuActions.push({ id: 'openSource', label: 'Open Source Image' });
             (window as any).ufm.showContextMenu(itemId, menuActions);
           } : undefined}
         >
@@ -1786,6 +1866,7 @@ export default function EditorCanvas({
                 />
               ))}
 
+
               {/* Product content on filled cards */}
               {cardPlacements.length > 0 && (
                 <RenderFlyerPlacements
@@ -1811,6 +1892,7 @@ export default function EditorCanvas({
                   onEditBannerDays={onEditBannerDays && editMode ? onEditBannerDays : undefined}
                   onElementSelect={editMode ? handleElementSelect : undefined}
                   replacementJobs={replacementJobs}
+                  rerunningCutoutMap={rerunningCutoutMap}
                 />
               )}
 
@@ -1830,8 +1912,6 @@ export default function EditorCanvas({
                   onGoogleSearch={onGoogleSearch}
                   onEditTitle={onEditTitle}
                   onPickSeriesFlavors={onPickSeriesFlavors}
-                  onRemoveBackground={handleRemoveBackground}
-                  removingBgIds={removingBgIds}
                   cardMode
                   cardRects={cardRects}
                   cardLayout={cardLayout ?? undefined}
@@ -2149,8 +2229,6 @@ export default function EditorCanvas({
               onGoogleSearch={onGoogleSearch}
               onEditTitle={onEditTitle}
               onPickSeriesFlavors={onPickSeriesFlavors}
-              onRemoveBackground={handleRemoveBackground}
-              removingBgIds={removingBgIds}
               isLocked={isLocked}
             />
           )}

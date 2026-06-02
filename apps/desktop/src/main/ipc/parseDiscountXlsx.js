@@ -82,7 +82,7 @@ export function buildPriceDisplay(item) {
 
 /* -------------------- department aliases -------------------- */
 
-const DEPARTMENT_ALIASES = {
+export const DEPARTMENT_ALIASES = {
   grocery:   ["grocery", "groceries"],
   frozen:    ["frozen"],
   hot_food:  ["hot food", "hotfood", "prepared food"],
@@ -321,8 +321,8 @@ export async function parseDiscountXlsx(_event, filePath, department) {
         console.log(`[parseDiscountXlsx] Multi-sheet: matched dept "${department}" → sheet "${matchingSheet}"`);
         rows = sheetToRows(workbook, matchingSheet);
       } else {
-        console.warn(`[parseDiscountXlsx] Multi-sheet: dept "${department}" not found — concatenating all sheets`);
-        rows = workbook.SheetNames.flatMap((n) => sheetToRows(workbook, n));
+        console.warn(`[parseDiscountXlsx] Multi-sheet: dept "${department}" not found — returning empty`);
+        return [];
       }
     } else {
       // No department hint: concatenate all sheets
@@ -338,8 +338,8 @@ export async function parseDiscountXlsx(_event, filePath, department) {
         console.log(`[parseDiscountXlsx] Matched department "${department}" → header "${match.header}" (${match.rows.length} rows)`);
         rows = match.rows;
       } else {
-        console.warn(`[parseDiscountXlsx] Department "${department}" not found in xlsx — using all rows`);
-        rows = allRows;
+        console.warn(`[parseDiscountXlsx] Department "${department}" not found in xlsx — returning empty`);
+        return [];
       }
     } else {
       rows = allRows;

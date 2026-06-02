@@ -78,7 +78,9 @@ export type IngestResult = {
   };
 
   matchScore?: number;
+  matchSource?: "db" | "serper" | "none";
   matchConfidence?: "high" | "low" | "none";
+  sourceUrl?: string | null;
 };
 
 export type IngestItem = {
@@ -207,6 +209,13 @@ export type CardDef = {
   priceShowDollar?: boolean;
   bannerOffsetX?: number;
   bannerOffsetY?: number;
+  imageRadius?: number;
+  imageBrightness?: number;
+  imageContrast?: number;
+  imageSaturation?: number;
+  imageOpacity?: number;
+  imageFlipH?: boolean;
+  imageFlipV?: boolean;
 };
 
 export type CardLayout = CardDef[];

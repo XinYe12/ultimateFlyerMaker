@@ -140,6 +140,7 @@ declare global {
       ingestPhoto: (path: string) => Promise<IngestResult>;
       ingestPhotoPhase1: (path: string) => Promise<{ inputPath: string; cutoutPath: null; layout: null; title: any; aiTitle: any; ocr: any; llmResult: any }>;
       startCutout: (id: string, path: string) => Promise<{ queued: boolean }>;
+      rerunCutout: (id: string, path: string, model: string) => Promise<{ queued: boolean }>;
       onCutoutComplete: (cb: (data: { id: string; cutoutPath: string; layout: { size: string } }) => void) => () => void;
       onCutoutError: (cb: (data: { id: string; error: string }) => void) => () => void;
       parseDiscountText: (text: string) => Promise<ParsedDiscount[]>;
@@ -226,7 +227,27 @@ declare global {
       scanNonProducts: () => Promise<{ ok: boolean }>;
       onScanNonProductsProgress: (cb: (data: ScanNonProductsProgressEvent) => void) => () => void;
       onScanNonProductsComplete: (cb: (data: ScanNonProductsCompleteEvent) => void) => () => void;
-      saveErasedCutout: (cutoutPath: string, pngDataUrl: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
+      saveErasedCutout: (
+        cutoutPath: string,
+        pngDataUrl: string,
+        options?: { sourceMode?: boolean },
+      ) => Promise<{ ok: boolean; path?: string; error?: string }>;
+      cutoutEditedImage: (
+        basePath: string,
+        pngDataUrl: string,
+      ) => Promise<{ ok: boolean; path?: string; error?: string; diagnostics?: any }>;
+      refineCutoutWithClicks: (args: {
+        image_path?: string | null;
+        cutout_path: string;
+        positive_points: Array<{ x: number; y: number }>;
+        negative_points: Array<{ x: number; y: number }>;
+        point_radius?: number;
+      }) => Promise<{ ok: boolean; path?: string; error?: string; diagnostics?: any }>;
+      restoreOriginalCutout: (args: {
+        cutoutPath: string;
+        sourcePath?: string | null;
+        sourceUrl?: string | null;
+      }) => Promise<{ ok: boolean; path?: string; error?: string }>;
       showContextMenu: (itemId: string, actions: Array<{ id: string; label: string; enabled?: boolean }>) => void;
       onContextMenuAction: (cb: (data: { itemId: string; action: string }) => void) => () => void;
 

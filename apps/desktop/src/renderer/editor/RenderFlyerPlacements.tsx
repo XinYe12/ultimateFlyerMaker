@@ -294,6 +294,11 @@ function PlacementCard({
   onBannerPanStart, onEditBanner,
   onElementSelect,
   onContextMenu,
+  selectedEl = null,
+  onSetSelectedEl,
+  selectedSubIdx = null,
+  onSelectSubIdx,
+  rerunningCutoutPath = null,
   activeReplacementJobs,
 }: {
   p: any;
@@ -318,6 +323,11 @@ function PlacementCard({
   onEditBanner?: () => void;
   onElementSelect?: (element: 'title' | 'price' | 'banner' | null) => void;
   onContextMenu?: () => void;
+  selectedEl?: 'image' | 'title' | 'price' | null;
+  onSetSelectedEl?: (el: 'image' | 'title' | 'price' | null) => void;
+  selectedSubIdx?: number | null;
+  onSelectSubIdx?: (idx: number | null) => void;
+  rerunningCutoutPath?: string | null;
   activeReplacementJobs?: Array<{ id: string; status: "processing" | "done" | "error" }>;
 }) {
   const [imgInfo, setImgInfo] = useState<{
@@ -325,7 +335,6 @@ function PlacementCard({
     bboxX: number; bboxY: number; bboxW: number; bboxH: number;
     arW: number; arH: number;
   } | null>(null);
-  const [selectedEl, setSelectedEl] = useState<'image' | 'title' | 'price' | null>(null);
   const [rotatingActive, setRotatingActive] = useState(false);
   // Suppresses spurious click-to-edit after a corner-handle drag ends inside the text div.
   const suppressClickRef = useRef(false);
@@ -337,21 +346,18 @@ function PlacementCard({
     hoveredZone: 'vertical' | 'horizontal' | 'top' | null;
   } | null>(null);
 
-  // Which sub-image is selected in edit mode (for per-image controls)
-  const [selectedSubIdx, setSelectedSubIdx] = useState<number | null>(null);
-
   useEffect(() => {
     if (!selectedEl && selectedSubIdx === null) return;
     const handleOutside = (e: MouseEvent) => {
       if (cardRef.current && !cardRef.current.contains(e.target as Node)) {
-        setSelectedEl(null);
-        setSelectedSubIdx(null);
+        onSetSelectedEl?.(null);
+        onSelectSubIdx?.(null);
         onElementSelectRef.current?.(null);
       }
     };
     document.addEventListener('mousedown', handleOutside);
     return () => document.removeEventListener('mousedown', handleOutside);
-  }, [selectedEl, selectedSubIdx]);
+  }, [selectedEl, selectedSubIdx, onSetSelectedEl, onSelectSubIdx]);
 
   // For n=3 multi-image: randomly choose diagonal vs 2+1 grid (decided once per mount)
   const diagonalRef = useRef<boolean>(Math.random() < 0.5);
@@ -377,9 +383,33 @@ function PlacementCard({
     }
 
     let top = -1, bottom = -1, left = SCAN, right = -1;
+    let alphaFg = 0;
+    let borderLight = 0;
+    let borderCount = 0;
+    const borderPx = Math.max(4, Math.round(SCAN * 0.03));
     for (let y = 0; y < SCAN; y++) {
       for (let x = 0; x < SCAN; x++) {
-        if (data[(y * SCAN + x) * 4 + 3] > 1) {
+        const idx = (y * SCAN + x) * 4;
+        const a = data[idx + 3];
+        if (a > 1) alphaFg++;
+        if (x < borderPx || y < borderPx || x >= SCAN - borderPx || y >= SCAN - borderPx) {
+          borderCount++;
+          if (a > 1 && data[idx] > 240 && data[idx + 1] > 240 && data[idx + 2] > 240) borderLight++;
+        }
+      }
+    }
+    const alphaCoverage = alphaFg / Math.max(1, SCAN * SCAN);
+    const lightBorderCoverage = borderLight / Math.max(1, borderCount);
+    const ignoreWhiteBackground = alphaCoverage > 0.97 && lightBorderCoverage > 0.55;
+    const isForegroundPixel = (arr: Uint8ClampedArray, idx: number) => {
+      if (arr[idx + 3] <= 1) return false;
+      if (!ignoreWhiteBackground) return true;
+      return !(arr[idx] > 240 && arr[idx + 1] > 240 && arr[idx + 2] > 240);
+    };
+
+    for (let y = 0; y < SCAN; y++) {
+      for (let x = 0; x < SCAN; x++) {
+        if (isForegroundPixel(data, (y * SCAN + x) * 4)) {
           if (top === -1) top = y;
           bottom = y;
           if (x < left) left = x;
@@ -408,7 +438,7 @@ function PlacementCard({
         for (let y = 0; y < TOP_PX; y++) {
           let found = false;
           for (let x = 0; x < SCAN; x++) {
-            if (topData[(y * SCAN + x) * 4 + 3] > 1) { bboxY = y; found = true; break; }
+            if (isForegroundPixel(topData, (y * SCAN + x) * 4)) { bboxY = y; found = true; break; }
           }
           if (found) break;
         }
@@ -448,7 +478,7 @@ function PlacementCard({
   }, [onElementDragStart]);
 
   const handleTitleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (!editMode || !onOrientationChange) return;
+    if (!effectiveEditMode || !onOrientationChange) return;
     e.stopPropagation();
     const startX = e.clientX;
     const startY = e.clientY;
@@ -491,6 +521,13 @@ function PlacementCard({
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
   }, [editMode, onOrientationChange]);
+
+  // ── processing guard — disable all edit interactions while cutout or replacement is running ──
+  const isProcessing = item?.status === "processing_cutout" || item?.status === "running" ||
+    !!rerunningCutoutPath ||
+    !!(activeReplacementJobs && activeReplacementJobs.length > 0);
+  // Replace editMode with this throughout — all guards like `onXxx && editMode` naturally become no-ops
+  const effectiveEditMode = !isProcessing && !!editMode;
 
   // ── source resolution ──
   const isPendingFlavors = item?.result?.pendingFlavorSelection === true;
@@ -545,6 +582,18 @@ function PlacementCard({
   const cropT = (p.cropTop   ?? 0) as number;
   const cropB = (p.cropBottom ?? 0) as number;
   const hasCrop = cropL > 0 || cropR > 0 || cropT > 0 || cropB > 0;
+  const imageRadius     = (p.imageRadius     ?? 0) as number;
+  const imageBrightness = (p.imageBrightness ?? 100) as number;
+  const imageContrast   = (p.imageContrast   ?? 100) as number;
+  const imageSaturation = (p.imageSaturation ?? 100) as number;
+  const imageOpacity    = (p.imageOpacity    ?? 100) as number;
+  const imageFlipH      = !!(p.imageFlipH);
+  const imageFlipV      = !!(p.imageFlipV);
+  const imgFilterStr = [
+    imageBrightness !== 100 && `brightness(${imageBrightness}%)`,
+    imageContrast   !== 100 && `contrast(${imageContrast}%)`,
+    imageSaturation !== 100 && `saturate(${imageSaturation}%)`,
+  ].filter(Boolean).join(' ') || undefined;
 
   // ── font customization ──
   const titleFontFamily = p.titleFontFamily as string | undefined;
@@ -710,11 +759,12 @@ function PlacementCard({
     const subOffsetX = isMulti ? (subOverride.x ?? 0) : imgOffsetX;
     const subOffsetY = isMulti ? (subOverride.y ?? 0) : imgOffsetY;
     const totalRotation = imgRotation + subRotation;
-    const transform = `translate(${subOffsetX}px, ${subOffsetY}px) rotate(${totalRotation}deg) scale(${subScale})`;
+    const flipExtra = [imageFlipH && 'scaleX(-1)', imageFlipV && 'scaleY(-1)'].filter(Boolean).join(' ');
+    const transform = `translate(${subOffsetX}px, ${subOffsetY}px) rotate(${totalRotation}deg) scale(${subScale})${flipExtra ? ' ' + flipExtra : ''}`;
 
     // Selection UI lives INSIDE the transformed wrapper so it tracks the image exactly
-    const isSelected = isMulti && editMode && selectedSubIdx === idx;
-    const handleMouseDown = isMulti && editMode
+    const isSelected = isMulti && effectiveEditMode && selectedSubIdx === idx;
+    const handleMouseDown = isMulti && effectiveEditMode
       ? (e: React.MouseEvent) => {
           e.stopPropagation();
           if (selectedSubIdx === idx) {
@@ -722,11 +772,11 @@ function PlacementCard({
             onSubImagePanStart?.(idx, subOverride.x ?? 0, subOverride.y ?? 0, e);
           } else if (selectedSubIdx !== null) {
             // A sibling is selected → auto-select this one and start drag immediately
-            setSelectedSubIdx(idx);
+            onSelectSubIdx?.(idx);
             onSubImagePanStart?.(idx, subOverride.x ?? 0, subOverride.y ?? 0, e);
           } else {
             // Nothing selected → select only
-            setSelectedSubIdx(idx);
+            onSelectSubIdx?.(idx);
           }
         }
       : undefined;
@@ -818,13 +868,37 @@ function PlacementCard({
             position: 'relative', width: imgRender.wrapperStyle.width, height: imgRender.wrapperStyle.height,
             flexShrink: 0, transform, transformOrigin: 'center center',
             cursor: isMulti && editMode ? (isSelected ? 'grab' : 'pointer') : undefined,
+            opacity: imageOpacity < 100 ? imageOpacity / 100 : undefined,
           }}
         >
-          <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', clipPath: !isMulti && hasCrop ? `inset(${cropT}px ${cropR}px ${cropB}px ${cropL}px)` : (isMulti && subHasCrop ? `inset(${subCropT}px ${subCropR}px ${subCropB}px ${subCropL}px)` : undefined) }}>
+          <div style={{
+            position: 'absolute', inset: 0, overflow: 'hidden',
+            borderRadius: imageRadius > 0 && !hasCrop && !(isMulti && subHasCrop) ? `${imageRadius}%` : undefined,
+            clipPath: !isMulti && hasCrop
+              ? `inset(${cropT}px ${cropR}px ${cropB}px ${cropL}px${imageRadius > 0 ? ` round ${imageRadius}%` : ''})`
+              : (isMulti && subHasCrop
+                ? `inset(${subCropT}px ${subCropR}px ${subCropB}px ${subCropL}px${imageRadius > 0 ? ` round ${imageRadius}%` : ''})`
+                : undefined),
+            filter: imgFilterStr,
+          }}>
             <img style={imgRender.imgAbsStyle} src={src} alt="" />
           </div>
           {selectionUI}
           {overlay}
+          {isMulti && rerunningCutoutPath && src === rerunningCutoutPath && (
+            <div style={{ position: 'absolute', inset: 0, zIndex: 202, pointerEvents: 'all', cursor: 'not-allowed',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          background: 'rgba(255,255,255,0.72)', backdropFilter: 'blur(3px)', borderRadius: 'inherit' }}
+              onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                <div style={{ width: 18, height: 18, border: '2.5px solid rgba(59,130,246,0.18)',
+                              borderTopColor: '#3b82f6', borderRadius: '50%',
+                              animation: 'ufm-spin 0.75s linear infinite' }} />
+                <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: '0.06em',
+                               color: '#3b82f6', textTransform: 'uppercase' }}>Cutout…</span>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
@@ -833,10 +907,24 @@ function PlacementCard({
         key={idx}
         onMouseDown={handleMouseDown}
         onClick={handleClick}
-        style={{ position: 'relative', display: 'inline-block', transform, transformOrigin: 'center center', cursor: isMulti && editMode ? (isSelected ? 'grab' : 'pointer') : undefined }}
+        style={{ position: 'relative', display: 'inline-block', transform, transformOrigin: 'center center', cursor: isMulti && editMode ? (isSelected ? 'grab' : 'pointer') : undefined, opacity: imageOpacity < 100 ? imageOpacity / 100 : undefined }}
       >
-        <img style={fallbackImgStyle} src={src} alt="" onLoad={isFirst ? onFirstImgLoad : undefined} />
+        <img style={{ ...fallbackImgStyle, filter: imgFilterStr, borderRadius: imageRadius > 0 ? `${imageRadius}%` : undefined }} src={src} alt="" onLoad={isFirst ? onFirstImgLoad : undefined} />
         {selectionUI}
+        {isMulti && rerunningCutoutPath && src === rerunningCutoutPath && (
+          <div style={{ position: 'absolute', inset: 0, zIndex: 202, pointerEvents: 'all', cursor: 'not-allowed',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: 'rgba(255,255,255,0.72)', backdropFilter: 'blur(3px)' }}
+            onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+              <div style={{ width: 18, height: 18, border: '2.5px solid rgba(59,130,246,0.18)',
+                            borderTopColor: '#3b82f6', borderRadius: '50%',
+                            animation: 'ufm-spin 0.75s linear infinite' }} />
+              <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: '0.06em',
+                             color: '#3b82f6', textTransform: 'uppercase' }}>Cutout…</span>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -939,6 +1027,7 @@ function PlacementCard({
     </div>
   ) : null;
 
+
   // ── Days-only promotional badge overlay ──
   const daysBanner = label?.price?.days && label.price.days.length > 0 ? (
     <DaysOnlyBanner
@@ -968,6 +1057,72 @@ function PlacementCard({
     );
   }
 
+  // ── Image-zone-only processing overlays (scoped to image area, not the full card) ──
+  // These are injected inside each layout's image div so price/title stay visible and interactive.
+  const imgZoneOverlay = (
+    <>
+      {activeReplacementJobs && activeReplacementJobs.length > 0 && (
+        <div
+          style={{ position: "absolute", inset: 0, zIndex: 201, pointerEvents: "all", cursor: "not-allowed",
+                   display: "flex", alignItems: "center", justifyContent: "center",
+                   background: "rgba(255,255,255,0.6)", backdropFilter: "blur(2px)" }}
+          onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
+        >
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, width: "70%" }}>
+            <div style={{ width: 22, height: 22, border: "3px solid rgba(0,0,0,0.12)",
+                          borderTopColor: "#4C6EF5", borderRadius: "50%",
+                          animation: "ufm-spin 0.75s linear infinite" }} />
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
+                           color: "rgba(0,0,0,0.5)", textTransform: "uppercase", textAlign: "center" }}>
+              Replacing…
+            </span>
+            <div style={{ width: "100%", height: 3, borderRadius: 2, background: "rgba(0,0,0,0.1)", overflow: "hidden" }}>
+              <div style={{ height: "100%", width: "30%", background: "#4C6EF5", borderRadius: 2,
+                            animation: "ufm-progress-pulse 1.4s ease-in-out infinite" }} />
+            </div>
+          </div>
+        </div>
+      )}
+      {item?.status === "processing_cutout" && (
+        <div
+          style={{ position: "absolute", inset: 0, zIndex: 200, pointerEvents: "all", cursor: "not-allowed",
+                   display: "flex", alignItems: "center", justifyContent: "center",
+                   background: "rgba(255,255,255,0.55)", backdropFilter: "blur(2px)" }}
+          onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
+        >
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+            <div style={{ width: 22, height: 22, border: "3px solid rgba(0,0,0,0.15)",
+                          borderTopColor: "#1a1a1a", borderRadius: "50%",
+                          animation: "ufm-spin 0.75s linear infinite" }} />
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
+                           color: "rgba(0,0,0,0.45)", textTransform: "uppercase" }}>
+              Processing…
+            </span>
+          </div>
+        </div>
+      )}
+      {!!rerunningCutoutPath && !hasMultiImages && (
+        <div
+          style={{ position: "absolute", inset: 0, zIndex: 202, pointerEvents: "all", cursor: "not-allowed",
+                   display: "flex", alignItems: "center", justifyContent: "center",
+                   background: "rgba(255,255,255,0.65)", backdropFilter: "blur(3px)" }}
+          onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
+        >
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 7 }}>
+            <div style={{ width: 26, height: 26, border: "3px solid rgba(59,130,246,0.18)",
+                          borderTopColor: "#3b82f6", borderRadius: "50%",
+                          animation: "ufm-spin 0.75s linear infinite" }} />
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
+                           color: "#3b82f6", textTransform: "uppercase", textAlign: "center" }}>
+              Cutout…
+            </span>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+
   // ── Horizontal layout ──
   if (p.orientation === 'horizontal') {
     return (
@@ -977,7 +1132,7 @@ function PlacementCard({
           position: "absolute", left: p.x, top: p.y,
           width: p.width, height: p.height, overflow: "visible",
         }}
-        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl(null); onElementSelect?.(null); if (selectedSubIdx !== null) setSelectedSubIdx(null); } : undefined}
+        onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.(null); onElementSelect?.(null); if (selectedSubIdx !== null) onSelectSubIdx?.(null); } : undefined}
       >
         {/* Content wrapper — crop applied only to image div below */}
         <div style={{ position: 'absolute', inset: 0, overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden' }}>
@@ -998,8 +1153,8 @@ function PlacementCard({
           {/* Left 55% — image; crop applied in renderImg */}
           <div
             onMouseDown={editMode && onImagePanStart ? (e) => { e.stopPropagation(); onImagePanStart(imgOffsetX, imgOffsetY, e); } : undefined}
-            onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('image'); onElementSelect?.(null); } : undefined}
-            style={{ width: '55%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden', cursor: editMode ? 'grab' : undefined }}
+            onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('image'); onElementSelect?.(null); } : undefined}
+            style={{ width: '55%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden', cursor: editMode ? 'grab' : undefined }}
           >
             {displaySrcs && displaySrcs.length > 1
               ? (() => {
@@ -1055,6 +1210,7 @@ function PlacementCard({
                 </>
               );
             })() : undefined) : null}
+            {imgZoneOverlay}
           </div>
           {/* Right 45% — title (top-right; top edge 23% down from card top) + price (bottom-right) */}
           <div style={{ width: '45%', position: 'relative', overflow: 'hidden' }}>
@@ -1078,7 +1234,7 @@ function PlacementCard({
                     userSelect: editMode ? 'none' : undefined,
                   }}
                   onMouseDown={handleTitleMouseDown}
-                  onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('title'); onElementSelect?.('title'); } : undefined}
+                  onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('title'); onElementSelect?.('title'); } : undefined}
                   onDoubleClick={editMode && onEditTitle ? (e) => { e.stopPropagation(); onEditTitle(); } : undefined}
                 >
                   {editMode && onElementDragStart && selectedEl === 'title' && (
@@ -1118,7 +1274,7 @@ function PlacementCard({
                   opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'price') ? 0.5 : 1,
                   cursor: editMode ? 'pointer' : undefined,
                 }}
-                onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('price'); onElementSelect?.('price'); } : undefined}
+                onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('price'); onElementSelect?.('price'); } : undefined}
                 onDoubleClick={editMode && onEditPrice ? (e) => { e.stopPropagation(); onEditPrice(); } : undefined}
               >
                 {editMode && onElementDragStart && selectedEl === 'price' && (
@@ -1174,7 +1330,7 @@ function PlacementCard({
           position: "absolute", left: p.x, top: p.y,
           width: p.width, height: p.height, overflow: "visible",
         }}
-        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl(null); onElementSelect?.(null); if (selectedSubIdx !== null) setSelectedSubIdx(null); } : undefined}
+        onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.(null); onElementSelect?.(null); if (selectedSubIdx !== null) onSelectSubIdx?.(null); } : undefined}
       >
         {/* Content wrapper — crop applied only to image div below */}
         <div style={{ position: 'absolute', inset: 0, overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden' }}>
@@ -1205,7 +1361,7 @@ function PlacementCard({
                 userSelect: editMode ? 'none' : undefined,
               }}
               onMouseDown={handleTitleMouseDown}
-              onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('title'); onElementSelect?.('title'); } : undefined}
+              onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('title'); onElementSelect?.('title'); } : undefined}
               onDoubleClick={editMode && onEditTitle ? (e) => { e.stopPropagation(); onEditTitle(); } : undefined}
             >
               {editMode && onElementDragStart && selectedEl === 'title' && (
@@ -1238,8 +1394,8 @@ function PlacementCard({
           {/* Image: centered in remaining flex space; crop applied in renderImg; handles inside wrapper for alignment */}
           <div
             onMouseDown={editMode && onImagePanStart ? (e) => { e.stopPropagation(); onImagePanStart(imgOffsetX, imgOffsetY, e); } : undefined}
-            onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('image'); onElementSelect?.(null); } : undefined}
-            style={{ flex: 1, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden', minHeight: 0, cursor: editMode ? 'grab' : undefined }}
+            onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('image'); onElementSelect?.(null); } : undefined}
+            style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden', minHeight: 0, cursor: editMode ? 'grab' : undefined }}
           >
             {displaySrcs && displaySrcs.length > 1
               ? (() => {
@@ -1295,6 +1451,7 @@ function PlacementCard({
                 </>
               );
             })() : undefined) : null}
+            {imgZoneOverlay}
           </div>
         </div>
         {/* Price: absolute bottom-right */}
@@ -1307,7 +1464,7 @@ function PlacementCard({
               opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'price') ? 0.5 : 1,
               cursor: editMode ? 'pointer' : undefined,
             }}
-            onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('price'); onElementSelect?.('price'); } : undefined}
+            onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('price'); onElementSelect?.('price'); } : undefined}
             onDoubleClick={editMode && onEditPrice ? (e) => { e.stopPropagation(); onEditPrice(); } : undefined}
           >
             {editMode && onElementDragStart && selectedEl === 'price' && (
@@ -1360,7 +1517,7 @@ function PlacementCard({
         position: "absolute", left: p.x, top: p.y,
         width: p.width, height: p.height, overflow: "visible",
       }}
-      onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl(null); onElementSelect?.(null); if (selectedSubIdx !== null) setSelectedSubIdx(null); } : undefined}
+      onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.(null); onElementSelect?.(null); if (selectedSubIdx !== null) onSelectSubIdx?.(null); } : undefined}
     >
       {/* Content wrapper — crop is applied only to image zone below */}
       <div style={{ position: 'absolute', inset: 0, overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden' }}>
@@ -1383,7 +1540,7 @@ function PlacementCard({
         onMouseDown={editMode && !(displaySrcs && displaySrcs.length > 1) && onImagePanStart
           ? (e) => { e.stopPropagation(); onImagePanStart(imgOffsetX, imgOffsetY, e); }
           : undefined}
-        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('image'); onElementSelect?.(null); } : undefined}
+        onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('image'); onElementSelect?.(null); } : undefined}
         style={{
         position: "absolute",
         top: topPad, left: SIDE_PAD,
@@ -1515,6 +1672,7 @@ function PlacementCard({
                 </>
               );
             })() : undefined) : null}
+        {imgZoneOverlay}
       </div>
 
       {/* Title — absolute bottom-left, no clipping */}
@@ -1532,7 +1690,7 @@ function PlacementCard({
           userSelect: editMode ? "none" : undefined,
         }}
         onMouseDown={handleTitleMouseDown}
-        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('title'); onElementSelect?.('title'); } : undefined}
+        onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('title'); onElementSelect?.('title'); } : undefined}
         onDoubleClick={editMode && onEditTitle ? (e) => { e.stopPropagation(); onEditTitle(); } : undefined}
         >
           {editMode && onElementDragStart && selectedEl === 'title' && (
@@ -1574,7 +1732,7 @@ function PlacementCard({
           opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'price') ? 0.5 : 1,
           cursor: editMode ? "pointer" : undefined,
         }}
-        onClick={editMode ? (e) => { e.stopPropagation(); setSelectedEl('price'); onElementSelect?.('price'); } : undefined}
+        onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('price'); onElementSelect?.('price'); } : undefined}
         onDoubleClick={editMode && onEditPrice ? (e) => { e.stopPropagation(); onEditPrice(); } : undefined}
         >
           {editMode && onElementDragStart && selectedEl === 'price' && (
@@ -1616,50 +1774,6 @@ function PlacementCard({
       </div>{/* end content clip wrapper */}
 
       {/* Replacement-in-progress overlay — shown while downloadAndIngestFromUrl is running */}
-      {activeReplacementJobs && activeReplacementJobs.length > 0 && (
-        <div
-          style={{ position: "absolute", inset: 0, zIndex: 201, pointerEvents: "all", cursor: "not-allowed",
-                   display: "flex", alignItems: "center", justifyContent: "center",
-                   background: "rgba(255,255,255,0.6)", backdropFilter: "blur(2px)" }}
-          onMouseDown={e => e.stopPropagation()}
-          onClick={e => e.stopPropagation()}
-        >
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, width: "70%" }}>
-            <div style={{ width: 22, height: 22, border: "3px solid rgba(0,0,0,0.12)",
-                          borderTopColor: "#4C6EF5", borderRadius: "50%",
-                          animation: "ufm-spin 0.75s linear infinite" }} />
-            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
-                           color: "rgba(0,0,0,0.5)", textTransform: "uppercase", textAlign: "center" }}>
-              Replacing…
-            </span>
-            <div style={{ width: "100%", height: 3, borderRadius: 2, background: "rgba(0,0,0,0.1)", overflow: "hidden" }}>
-              <div style={{ height: "100%", width: "30%", background: "#4C6EF5", borderRadius: 2,
-                            animation: "ufm-progress-pulse 1.4s ease-in-out infinite" }} />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Phase-2 pending overlay — blocks all interaction while cutout is processing */}
-      {item?.status === "processing_cutout" && (
-        <div
-          style={{ position: "absolute", inset: 0, zIndex: 200, pointerEvents: "all", cursor: "not-allowed",
-                   display: "flex", alignItems: "center", justifyContent: "center",
-                   background: "rgba(255,255,255,0.55)", backdropFilter: "blur(2px)" }}
-          onMouseDown={e => e.stopPropagation()}
-          onClick={e => e.stopPropagation()}
-        >
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-            <div style={{ width: 22, height: 22, border: "3px solid rgba(0,0,0,0.15)",
-                          borderTopColor: "#1a1a1a", borderRadius: "50%",
-                          animation: "ufm-spin 0.75s linear infinite" }} />
-            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
-                           color: "rgba(0,0,0,0.45)", textTransform: "uppercase" }}>
-              Processing…
-            </span>
-          </div>
-        </div>
-      )}
       {/* Days-only promotional badge */}
       {daysBanner}
       {/* Confidence badge (automation slots) */}
@@ -1702,6 +1816,7 @@ export default function RenderFlyerPlacements({
   onElementSelect,
   onCardContextMenu,
   replacementJobs,
+  rerunningCutoutMap,
 }: {
   items: any[];
   placements: any[];
@@ -1732,7 +1847,15 @@ export default function RenderFlyerPlacements({
   onElementSelect?: (itemId: string, element: 'title' | 'price' | 'banner' | null) => void;
   onCardContextMenu?: (itemId: string) => void;
   replacementJobs?: Array<{ id: string; itemId: string; url: string; status: "processing" | "done" | "error"; errorMessage?: string }>;
+  rerunningCutoutMap?: Map<string, string>;
 }) {
+  // Single unified selection: only one card element or sub-image can be selected at a time
+  const [activeSel, setActiveSel] = useState<
+    | { itemId: string; kind: 'el'; element: 'image' | 'title' | 'price' }
+    | { itemId: string; kind: 'sub'; subIdx: number }
+    | null
+  >(null);
+
   if (!Array.isArray(items) || !Array.isArray(placements)) return null;
 
   const labelMap = new Map(
@@ -1846,6 +1969,11 @@ export default function RenderFlyerPlacements({
               ? (element) => onElementSelect(p.itemId, element)
               : undefined}
             onContextMenu={onCardContextMenu ? () => onCardContextMenu(p.itemId) : undefined}
+            selectedEl={activeSel != null && activeSel.kind === 'el' && activeSel.itemId === p.itemId ? activeSel.element : null}
+            onSetSelectedEl={(el) => setActiveSel(el != null ? { itemId: p.itemId, kind: 'el', element: el } : null)}
+            selectedSubIdx={activeSel != null && activeSel.kind === 'sub' && activeSel.itemId === p.itemId ? activeSel.subIdx : null}
+            onSelectSubIdx={(idx) => setActiveSel(idx != null ? { itemId: p.itemId, kind: 'sub', subIdx: idx } : null)}
+            rerunningCutoutPath={rerunningCutoutMap?.get(p.itemId) ?? null}
             activeReplacementJobs={(replacementJobs ?? []).filter(j => j.itemId === p.itemId && j.status === "processing")}
           />
         );
