@@ -5,17 +5,23 @@ import React, { useEffect, useState, useMemo, useCallback, useRef } from "react"
 import {
   loadFlyerTemplateConfig,
   findPageForDepartment,
+  findDepartmentArea,
+  CardStyleDef,
 } from "./loadFlyerTemplateConfig";
 import RenderFlyerPlacements from "./RenderFlyerPlacements";
 import SlotOverlays from "./SlotOverlays";
 import AddImageModal from "./AddImageModal";
+import type { PanelImageDropHandler } from "./panelImageDrag";
+import { computeTextNudgePatch, TEXT_NUDGE_STEP, TEXT_NUDGE_STEP_FAST } from "./textElementNudge";
 import { layoutFlyer, layoutFlyerSlots } from "../../../../shared/flyer/layout/layoutFlyer";
 import { isSlottedDepartment, isCardDepartment } from "./loadFlyerTemplateConfig";
-import { layoutCardRows, computeCardRects, deriveRowCount, CARD_GAP, CARD_BG } from "../../../../shared/flyer/layout/layoutCardRows";
-import { saveDepartmentDraft } from "./draftStorage";
+import { layoutCardRows, computeCardRects, deriveRowCount, resolveLayoutRows, CARD_GAP, CARD_BG } from "../../../../shared/flyer/layout/layoutCardRows";
+
 import { IngestItem, CardDef, CardLayout, ReplacementJob } from "../types";
 import MergeSelectionDialog, { MergeCandidate } from "./MergeSelectionDialog";
-import GlobalFontToolbar from "./GlobalFontToolbar";
+import TextSideToolbar from "./TextSideToolbar";
+import { applyTextStylePatch, textStylePatchFromCard, type TextFieldSection } from "./textFieldStyle";
+import TextComponentsDialog, { PriceCompValues, TitleCompValues, PRICE_COMP_DEFAULTS, TITLE_COMP_DEFAULTS } from "./TextComponentsDialog";
 import CutoutEraserModal from "./CutoutEraserModal";
 import ImageToolbar, { ImageToolbarPatch } from "./ImageToolbar";
 
@@ -39,6 +45,30 @@ type GroupVDivider = {
   y: number;      // center of the gap (absolute pixels)
   width: number;  // full width of combined x range
 };
+
+function getItemPriceDisplay(item: any): string {
+  const rawSaleFromDiscount = item?.result?.discount?.price ?? item?.result?.discount?.display;
+  const saleFromDiscount =
+    rawSaleFromDiscount != null && typeof rawSaleFromDiscount === "object"
+      ? rawSaleFromDiscount.display
+      : rawSaleFromDiscount;
+
+  if (saleFromDiscount != null && String(saleFromDiscount).trim() !== "") {
+    const s = String(saleFromDiscount).trim();
+    if (s.startsWith("$") || /FOR/i.test(s) || s.includes("/")) return s;
+    return `$${s}`;
+  }
+
+  const llmItem = item?.result?.llmResult?.items?.[0];
+  const llmSalePrice = llmItem?.sale_price;
+  if (llmSalePrice != null) {
+    const qty = Number(llmItem?.quantity);
+    const rawPrice = parseFloat(String(llmSalePrice)).toFixed(2);
+    return qty > 1 ? `${qty} FOR $${rawPrice}` : `$${rawPrice}`;
+  }
+
+  return "";
+}
 
 export default function EditorCanvas({
   editorQueue,
@@ -69,8 +99,12 @@ export default function EditorCanvas({
   onCutoutErased,
   flyerWeekStart,
   replacementJobs,
+  onCancelReplacementJob,
   selectedItemId,
   onSelectItem,
+  onPanelImageDrop,
+  onApplyTextStyleGlobally,
+  departmentLabel,
 }: {
   editorQueue: any[];
   templateId: string;
@@ -104,8 +138,12 @@ export default function EditorCanvas({
   onDeleteSubImage?: (itemId: string, subIdx: number) => void;
   onCutoutErased?: (itemId: string, newPath: string) => void;
   replacementJobs?: ReplacementJob[];
+  onCancelReplacementJob?: (jobId: string) => void;
   selectedItemId?: string | null;
   onSelectItem?: (id: string | null) => void;
+  onPanelImageDrop?: PanelImageDropHandler;
+  onApplyTextStyleGlobally?: (section: TextFieldSection, patch: Partial<CardDef>) => void;
+  departmentLabel?: string;
 }) {
   const [config, setConfig] = useState<any | null>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
@@ -125,6 +163,9 @@ export default function EditorCanvas({
     const p = config.pages.find((pg: any) => pg.departments && pg.departments[department]);
     if (p && !p.imagePath && p.canvasWidth && p.canvasHeight) {
       setImageSize({ width: p.canvasWidth, height: p.canvasHeight });
+    } else if (p?.imagePath) {
+      // Do NOT null out imageSize here. On same-page department switches, pageId/imagePath
+      // stay the same, so img onLoad won't re-fire; clearing imageSize would blank the canvas.
     } else {
       setImageSize(null);
     }
@@ -135,12 +176,6 @@ export default function EditorCanvas({
   const itemsRef = useRef(items);
   itemsRef.current = items;
 
-  // persist draft
-  useEffect(() => {
-    if (items.length > 0) {
-      saveDepartmentDraft(templateId, department, items);
-    }
-  }, [items, templateId, department]);
 
   // Keep a ref to onReplaceImage so the IPC handler always uses the latest version
   // without capturing a potentially-uninitialized handleReplaceImage (defined after early return)
@@ -159,6 +194,11 @@ export default function EditorCanvas({
         const it = items.find((it: any) => it.id === itemId);
         const url = it?.result?.sourceUrl;
         if (url) (window as any).ufm.openExternal(url);
+      }
+      else if (action === 'showInFolder') {
+        const it = items.find((it: any) => it.id === itemId);
+        const filePath = it?.result?.inputPath ?? it?.path ?? null;
+        if (filePath) (window as any).ufm.showItemInFolder(filePath);
       }
     });
     return unsub;
@@ -183,6 +223,8 @@ export default function EditorCanvas({
 
   const page = config ? findPageForDepartment(config, department) : null;
   const region = page?.departments?.[department] ?? null;
+  const departmentArea = config ? findDepartmentArea(config, department) : null;
+  const templateCardStyle: CardStyleDef | undefined = departmentArea?.cardStyle;
   const imagePath = page?.imagePath ?? "";
 
   const isCard = region ? isCardDepartment(region) : false;
@@ -193,7 +235,7 @@ export default function EditorCanvas({
     [isCard, cardLayout, selectedItemId],
   );
 
-  const handleUpdateSelectedCard = useCallback((patch: ImageToolbarPatch) => {
+  const handleUpdateSelectedCard = useCallback((patch: Partial<CardDef>) => {
     if (!selectedItemId || !cardLayout || !onCardLayoutChange) return;
     onCardLayoutChange(cardLayout.map(c => c.itemId === selectedItemId ? { ...c, ...patch } : c));
   }, [selectedItemId, cardLayout, onCardLayoutChange]);
@@ -201,16 +243,32 @@ export default function EditorCanvas({
   const handleRerunCutout = useCallback((model: string) => {
     if (!selectedItemId) return;
     const item = items.find((it: any) => it.id === selectedItemId);
-    // Always use the original photo (before any cutout), never the cutout derivative.
-    // inputPath is set by ingestPhoto/downloadAndIngest and is never overwritten by applyCutoutPatch.
     const originalPath = item?.result?.inputPath ?? item?.path ?? null;
     if (!originalPath) return;
-    // Track the specific display src being replaced so only that image cell freezes.
-    const rawSrc = item?.result?.cutoutPaths?.[0] ?? item?.result?.cutoutPath ?? originalPath;
-    const displaySrc = rawSrc.startsWith("http") || rawSrc.startsWith("file://")
-      ? rawSrc : `file://${rawSrc}`;
+
+    // Resolve the currently displayed local path (what the user sees in the card).
+    // Web URLs (Firebase Storage) are not usable as local paths — fall back to originalPath.
+    const currentCutoutRaw = item?.result?.cutoutPaths?.[0] ?? item?.result?.cutoutPath ?? null;
+    const displayedLocalPath = (currentCutoutRaw && !String(currentCutoutRaw).startsWith('http'))
+      ? (currentCutoutRaw.startsWith('file://') ? currentCutoutRaw.slice(7) : currentCutoutRaw)
+      : null;
+
+    // ML models fail when fed a fully-processed cutout PNG (transparent bg composited over white
+    // makes product-white indistinguishable from background → product disappears).
+    // Fully-processed cutouts match *.cutout[.shadow].png. User-erased files (*.erased-NNN.png)
+    // are only partially transparent and are safe to feed to ML.
+    const isFullCutout = Boolean(displayedLocalPath &&
+      /\.cutout(?:\.shadow)?\.png$/i.test(displayedLocalPath));
+    const isML = !['border-trim', 'contour-bg'].includes(model);
+
+    const currentPath = (isML && isFullCutout)
+      ? originalPath
+      : (displayedLocalPath ?? originalPath);
+
+    const displaySrc = currentPath.startsWith("http") || currentPath.startsWith("file://")
+      ? currentPath : `file://${currentPath}`;
     setRerunningCutoutMap(prev => new Map(prev).set(selectedItemId, displaySrc));
-    (window as any).ufm.rerunCutout(selectedItemId, originalPath, model);
+    (window as any).ufm.rerunCutout(selectedItemId, currentPath, model);
   }, [selectedItemId, items]);
 
 
@@ -285,8 +343,16 @@ export default function EditorCanvas({
     startOffsetX: number; startOffsetY: number;
   } | null>(null);
 
+  // ── Price vertical pan drag state ──
+  const [pricePanDrag, setPricePanDrag] = useState<{
+    itemId: string;
+    startY: number;
+    startOffsetY: number;
+  } | null>(null);
+
   // ── Active toolbar section (set when user clicks title/price/banner element) ──
   const [activeToolbarSection, setActiveToolbarSection] = useState<'title' | 'price' | 'banner' | null>(null);
+  const [showTextCompDialog, setShowTextCompDialog] = useState(false);
 
   // ── Banner pan drag state ──
   const [bannerPanDrag, setBannerPanDrag] = useState<{
@@ -366,25 +432,44 @@ export default function EditorCanvas({
   }, [region, slotOverrides, liveSlotOverride]);
 
   // Card placements (for card-based departments)
+  const layoutRows = useMemo(() => {
+    if (!region || !isCardDepartment(region)) return undefined;
+    return rowCount ?? departmentArea?.rows ?? region.rows;
+  }, [region, rowCount, departmentArea]);
+
   const cardPlacements = useMemo(() => {
     if (!page || !region || !isCard || !cardLayout || cardLayout.length === 0) return [];
     const cardRegion = (region as any).region;
     return layoutCardRows({
       cards: cardLayout,
       region: cardRegion,
+      rows: layoutRows,
       pageId: page.pageId,
       regionId: department,
     });
-  }, [page, region, isCard, cardLayout, department]);
+  }, [page, region, isCard, cardLayout, department, layoutRows]);
 
   // Card rects (for rendering backgrounds of all cards including empty)
   const cardRects = useMemo(() => {
     if (!region || !isCard || !cardLayout || cardLayout.length === 0) return [];
     const cardRegion = (region as any).region;
-    return computeCardRects({ cards: cardLayout, region: cardRegion });
-  }, [region, isCard, cardLayout]);
+    return computeCardRects({ cards: cardLayout, region: cardRegion, rows: layoutRows });
+  }, [region, isCard, cardLayout, layoutRows]);
   const cardRectsRef = useRef(cardRects);
   cardRectsRef.current = cardRects;
+
+  const cardClipStyle = useMemo((): React.CSSProperties | undefined => {
+    if (!region || !isCardDepartment(region) || !imageSize) return undefined;
+    const cardRegion = region.region;
+    return {
+      position: "absolute",
+      left: 0,
+      top: 0,
+      width: imageSize.width,
+      height: imageSize.height,
+      clipPath: `inset(${cardRegion.y}px ${Math.max(0, imageSize.width - cardRegion.x - cardRegion.width)}px ${Math.max(0, imageSize.height - cardRegion.y - cardRegion.height)}px ${cardRegion.x}px)`,
+    };
+  }, [region, imageSize]);
 
   // Slot-based placements
   const slotPlacements = useMemo(() => {
@@ -524,12 +609,55 @@ export default function EditorCanvas({
     [onCardLayoutChange]
   );
 
+  const handlePricePanStart = useCallback(
+    (itemId: string, startOffsetY: number, e: React.MouseEvent) => {
+      if (!onCardLayoutChange) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setPricePanDrag({ itemId, startY: e.clientY, startOffsetY });
+    },
+    [onCardLayoutChange]
+  );
+
   const handleElementSelect = useCallback(
     (_itemId: string, element: 'title' | 'price' | 'banner' | null) => {
       setActiveToolbarSection(element);
     },
     []
   );
+
+  useEffect(() => {
+    if (!editMode || !isCard || !selectedItemId || !cardLayout || !onCardLayoutChange) return;
+    if (activeToolbarSection !== 'title' && activeToolbarSection !== 'price') return;
+
+    const handler = (e: KeyboardEvent) => {
+      if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable) return;
+
+      const card = cardLayout.find(c => c.itemId === selectedItemId);
+      if (!card) return;
+
+      e.preventDefault();
+      const step = e.shiftKey ? TEXT_NUDGE_STEP_FAST : TEXT_NUDGE_STEP;
+      let dx = 0;
+      let dy = 0;
+      if (e.key === 'ArrowRight') dx = step;
+      if (e.key === 'ArrowLeft') dx = -step;
+      if (e.key === 'ArrowUp') dy = step;
+      if (e.key === 'ArrowDown') dy = -step;
+
+      const patch = computeTextNudgePatch(card, activeToolbarSection, dx, dy);
+      if (!patch) return;
+
+      onCardLayoutChange(cardLayout.map(c =>
+        c.itemId === selectedItemId ? { ...c, ...patch } : c
+      ));
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [editMode, isCard, selectedItemId, cardLayout, onCardLayoutChange, activeToolbarSection]);
 
   const handleBannerPanStart = useCallback(
     (itemId: string, startOffsetX: number, startOffsetY: number, e: React.MouseEvent) => {
@@ -562,38 +690,98 @@ export default function EditorCanvas({
     [cardLayout, onCardLayoutChange]
   );
 
-  // All-card global font/style update helpers
-  const handleAllTitleFontChange = useCallback((family: string) => {
-    if (!cardLayout || !onCardLayoutChange) return;
-    onCardLayoutChange(cardLayout.map(c => ({ ...c, titleFontFamily: family || undefined })));
-  }, [cardLayout, onCardLayoutChange]);
+  // Selected-card text style update helpers
+  const handleSelectedTitleFontChange = useCallback((family: string) => {
+    handleUpdateSelectedCard({ titleFontFamily: family || undefined });
+  }, [handleUpdateSelectedCard]);
 
-  const handleAllTitleColorChange = useCallback((color: string) => {
-    if (!cardLayout || !onCardLayoutChange) return;
-    onCardLayoutChange(cardLayout.map(c => ({ ...c, titleColor: color })));
-  }, [cardLayout, onCardLayoutChange]);
+  const handleSelectedTitleColorChange = useCallback((color: string) => {
+    handleUpdateSelectedCard({ titleColor: color });
+  }, [handleUpdateSelectedCard]);
 
-  const handleAllTitleItalicToggle = useCallback(() => {
-    if (!cardLayout || !onCardLayoutChange) return;
-    const currentValue = cardLayout.some(c => c.titleItalic);
-    onCardLayoutChange(cardLayout.map(c => ({ ...c, titleItalic: !currentValue })));
-  }, [cardLayout, onCardLayoutChange]);
+  const handleSelectedTitleItalicToggle = useCallback(() => {
+    handleUpdateSelectedCard({ titleItalic: !selectedCard?.titleItalic });
+  }, [handleUpdateSelectedCard, selectedCard?.titleItalic]);
 
-  const handleAllPriceFontChange = useCallback((family: string) => {
-    if (!cardLayout || !onCardLayoutChange) return;
-    onCardLayoutChange(cardLayout.map(c => ({ ...c, priceFontFamily: family || undefined })));
-  }, [cardLayout, onCardLayoutChange]);
+  const handleSelectedPriceFontChange = useCallback((family: string) => {
+    handleUpdateSelectedCard({ priceFontFamily: family || undefined });
+  }, [handleUpdateSelectedCard]);
 
-  const handleAllPriceColorChange = useCallback((color: string) => {
-    if (!cardLayout || !onCardLayoutChange) return;
-    onCardLayoutChange(cardLayout.map(c => ({ ...c, priceColor: color })));
-  }, [cardLayout, onCardLayoutChange]);
+  const handleSelectedPriceColorChange = useCallback((color: string) => {
+    handleUpdateSelectedCard({ priceColor: color });
+  }, [handleUpdateSelectedCard]);
 
-  const handleShowDollarToggleAll = useCallback(() => {
-    if (!cardLayout || !onCardLayoutChange) return;
-    const currentValue = cardLayout.some(c => c.itemId && c.priceShowDollar);
-    onCardLayoutChange(cardLayout.map(c => ({ ...c, priceShowDollar: !currentValue })));
-  }, [cardLayout, onCardLayoutChange]);
+  const handleSelectedShowDollarToggle = useCallback(() => {
+    handleUpdateSelectedCard({ priceShowDollar: !selectedCard?.priceShowDollar });
+  }, [handleUpdateSelectedCard, selectedCard?.priceShowDollar]);
+
+  const handleSelectedTitleBgChange = useCallback((color: string | undefined) => {
+    handleUpdateSelectedCard({ titleBg: color });
+  }, [handleUpdateSelectedCard]);
+
+  const handleSelectedTitleBgPadChange = useCallback((pad: number) => {
+    handleUpdateSelectedCard({ titleBgPad: pad });
+  }, [handleUpdateSelectedCard]);
+
+  const handleSelectedTitleEffectChange = useCallback((effect: string | undefined) => {
+    handleUpdateSelectedCard({ titleEffect: effect as CardDef["titleEffect"] });
+  }, [handleUpdateSelectedCard]);
+
+  const handleSelectedPriceBgChange = useCallback((color: string | undefined) => {
+    handleUpdateSelectedCard({ priceBg: color });
+  }, [handleUpdateSelectedCard]);
+
+  const handleSelectedPriceBgPadChange = useCallback((pad: number) => {
+    handleUpdateSelectedCard({ priceBgPad: pad });
+  }, [handleUpdateSelectedCard]);
+
+  const handleSelectedPriceEffectChange = useCallback((effect: string | undefined) => {
+    handleUpdateSelectedCard({ priceEffect: effect as CardDef["priceEffect"] });
+  }, [handleUpdateSelectedCard]);
+
+  const handleSelectedPriceCompChange = useCallback((patch: Partial<PriceCompValues>) => {
+    const fieldMap: Record<string, string> = {
+      dollarRatio: 'priceCompDollarRatio', dollarOffsetY: 'priceCompDollarOffsetY',
+      qtyRatio: 'priceCompQtyRatio',
+      decRatio: 'priceCompDecRatio', decOffsetY: 'priceCompDecOffsetY',
+      unitRatio: 'priceCompUnitRatio', unitOffsetY: 'priceCompUnitOffsetY',
+    };
+    const cardPatch: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(patch)) {
+      const field = fieldMap[k];
+      if (field) cardPatch[field] = v;
+    }
+    handleUpdateSelectedCard(cardPatch);
+  }, [handleUpdateSelectedCard]);
+
+  const handleSelectedTitleCompChange = useCallback((patch: Partial<TitleCompValues>) => {
+    const fieldMap: Record<string, string> = {
+      metaScale: 'titleCompMetaScale', metaOffsetY: 'titleCompMetaOffsetY',
+    };
+    const cardPatch: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(patch)) {
+      const field = fieldMap[k];
+      if (field) cardPatch[field] = v;
+    }
+    handleUpdateSelectedCard(cardPatch);
+  }, [handleUpdateSelectedCard]);
+
+  const handleApplyTextStyleToDepartment = useCallback(() => {
+    if (!selectedItemId || !cardLayout || !onCardLayoutChange || !activeToolbarSection) return;
+    if (activeToolbarSection !== 'title' && activeToolbarSection !== 'price') return;
+    const source = cardLayout.find(c => c.itemId === selectedItemId);
+    if (!source) return;
+    const patch = textStylePatchFromCard(source, activeToolbarSection);
+    onCardLayoutChange(cardLayout.map(c => c.itemId ? applyTextStylePatch(c, patch) : c));
+  }, [selectedItemId, cardLayout, onCardLayoutChange, activeToolbarSection]);
+
+  const handleApplyTextStyleGlobally = useCallback(() => {
+    if (!selectedItemId || !cardLayout || !onApplyTextStyleGlobally || !activeToolbarSection) return;
+    if (activeToolbarSection !== 'title' && activeToolbarSection !== 'price') return;
+    const source = cardLayout.find(c => c.itemId === selectedItemId);
+    if (!source) return;
+    onApplyTextStyleGlobally(activeToolbarSection, textStylePatchFromCard(source, activeToolbarSection));
+  }, [selectedItemId, cardLayout, onApplyTextStyleGlobally, activeToolbarSection]);
 
   const handleCropDragStart = useCallback(
     (itemId: string, side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds?: { width: number; height: number }) => {
@@ -745,8 +933,23 @@ export default function EditorCanvas({
     const handleMouseMove = (e: MouseEvent) => {
       const rect = cardRectsRef.current.find(r => r.itemId === elementScaleDrag.itemId);
       const refPx = rect ? Math.min(rect.width, rect.height) * PREVIEW_SCALE : 100;
-      const dx = (e.clientX - elementScaleDrag.startX) / refPx;
-      const dy = (e.clientY - elementScaleDrag.startY) / refPx;
+      let dx = (e.clientX - elementScaleDrag.startX) / refPx;
+      let dy = (e.clientY - elementScaleDrag.startY) / refPx;
+      // Project mouse delta into the image's un-rotated local frame so corners
+      // behave correctly regardless of the image's current rotation angle.
+      if (elementScaleDrag.type === 'image') {
+        const card = cardLayout.find(c => c.itemId === elementScaleDrag.itemId);
+        const rotDeg = (card as any)?.imageRotation ?? 0;
+        if (rotDeg !== 0) {
+          const theta = rotDeg * Math.PI / 180;
+          const cos = Math.cos(theta);
+          const sin = Math.sin(theta);
+          const rdx = dx * cos + dy * sin;
+          const rdy = -dx * sin + dy * cos;
+          dx = rdx;
+          dy = rdy;
+        }
+      }
       const rawDelta =
         elementScaleDrag.corner === 'br' ? (dx + dy) / 2 :
         elementScaleDrag.corner === 'tl' ? (-dx - dy) / 2 :
@@ -877,6 +1080,29 @@ export default function EditorCanvas({
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [imagePanDrag, cardLayout, onCardLayoutChange]);
+
+  // Global mouse handlers for price vertical pan drag
+  useEffect(() => {
+    if (!pricePanDrag || !onCardLayoutChange || !cardLayout) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const dy = (e.clientY - pricePanDrag.startY) / PREVIEW_SCALE;
+      // Dragging up (negative dy) increases bottom offset → price moves up
+      const newOffsetY = Math.round(pricePanDrag.startOffsetY - dy);
+      const updated = cardLayout.map(c =>
+        c.itemId === pricePanDrag.itemId ? { ...c, priceOffsetY: newOffsetY } : c
+      );
+      onCardLayoutChange(updated);
+    };
+
+    const handleMouseUp = () => setPricePanDrag(null);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [pricePanDrag, cardLayout, onCardLayoutChange]);
 
   // Global mouse handlers for banner pan drag
   useEffect(() => {
@@ -1081,8 +1307,30 @@ export default function EditorCanvas({
         (replacementJobs ?? []).some((j: any) => j.itemId === hit.itemId && j.status === "processing");
       if (isProcessing) return;
     }
+    // Reset text section on every canvas click; text element handlers will re-set it in bubble phase
+    setActiveToolbarSection(null);
     onSelectItem(hit?.itemId ?? null);
   }, [onSelectItem, replacementJobs]);
+
+  // ── Deselect when clicking outside the canvas or image toolbar ──
+  useEffect(() => {
+    if (!selectedItemId || !onSelectItem) return;
+    const handler = (e: MouseEvent) => {
+      if ((e.target as HTMLElement)?.closest('[data-keep-selection]')) return;
+      onSelectItem(null);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [selectedItemId, onSelectItem]);
+
+  // ── Reset element selection when the selected card changes ──
+  const prevSelectedItemIdRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (prevSelectedItemIdRef.current !== selectedItemId) {
+      prevSelectedItemIdRef.current = selectedItemId;
+      setActiveToolbarSection(null);
+    }
+  }, [selectedItemId]);
 
   if (!config || !page) {
     return <div style={{ padding: 24 }}>Loading…</div>;
@@ -1221,7 +1469,7 @@ export default function EditorCanvas({
 
   if (isCard && cardRects.length > 0 && cardLayout) {
     const cardRegion = (region as any).region;
-    const rowCount = deriveRowCount(cardLayout);
+    const rowCount = resolveLayoutRows(cardLayout, layoutRows);
     const rowHeight = (cardRegion.height - (rowCount - 1) * CARD_GAP) / rowCount;
 
     const getRectForCard = (cardId: string) => cardRects.find(r => r.cardId === cardId);
@@ -1694,8 +1942,8 @@ export default function EditorCanvas({
       );
     })()}
 
-    {/* Image properties sidebar toolbar */}
-    {isCard && editMode && selectedItemId && onCardLayoutChange && (
+    {/* Image properties sidebar toolbar — hidden when a text element is active */}
+    {isCard && selectedItemId && onCardLayoutChange && !activeToolbarSection && (
       <ImageToolbar
         card={selectedCard}
         itemId={selectedItemId}
@@ -1759,25 +2007,100 @@ export default function EditorCanvas({
       );
     })()}
 
-    {/* Contextual font toolbar — only shown when user has clicked a title/price/banner element */}
-    {isCard && editMode && cardLayout && onCardLayoutChange && activeToolbarSection && (() => {
+    {/* Text side toolbar — shown in place of image toolbar when title/price is active */}
+    {isCard && editMode && selectedItemId && cardLayout && onCardLayoutChange &&
+      (activeToolbarSection === 'title' || activeToolbarSection === 'price') && (() => {
       const firstCard = cardLayout.find(c => c.itemId);
+      const activeCard = selectedCard ?? firstCard;
       return (
-        <GlobalFontToolbar
-          activeSection={activeToolbarSection}
-          titleFont={firstCard?.titleFontFamily}
-          titleColor={firstCard?.titleColor ?? "#000000"}
-          titleItalic={cardLayout.some(c => c.titleItalic)}
-          priceFont={firstCard?.priceFontFamily}
-          priceColor={firstCard?.priceColor ?? "#000000"}
-          priceShowDollar={cardLayout.some(c => c.itemId && c.priceShowDollar)}
-          onTitleFontChange={handleAllTitleFontChange}
-          onTitleColorChange={handleAllTitleColorChange}
-          onTitleItalicToggle={handleAllTitleItalicToggle}
-          onPriceFontChange={handleAllPriceFontChange}
-          onPriceColorChange={handleAllPriceColorChange}
-          onShowDollarToggle={handleShowDollarToggleAll}
+        <TextSideToolbar
+          activeSection={activeToolbarSection as 'title' | 'price'}
+          itemId={selectedItemId}
+          titleFont={activeCard?.titleFontFamily}
+          titleColor={activeCard?.titleColor ?? "#000000"}
+          titleItalic={!!activeCard?.titleItalic}
+          titleBg={activeCard?.titleBg}
+          titleBgPad={activeCard?.titleBgPad ?? 2}
+          titleEffect={activeCard?.titleEffect}
+          priceFont={activeCard?.priceFontFamily}
+          priceColor={activeCard?.priceColor ?? "#000000"}
+          priceShowDollar={!!activeCard?.priceShowDollar}
+          priceBg={activeCard?.priceBg}
+          priceBgPad={activeCard?.priceBgPad ?? 2}
+          priceEffect={activeCard?.priceEffect}
+          onTitleFontChange={handleSelectedTitleFontChange}
+          onTitleColorChange={handleSelectedTitleColorChange}
+          onTitleItalicToggle={handleSelectedTitleItalicToggle}
+          onTitleBgChange={handleSelectedTitleBgChange}
+          onTitleBgPadChange={handleSelectedTitleBgPadChange}
+          onTitleEffectChange={handleSelectedTitleEffectChange}
+          onPriceFontChange={handleSelectedPriceFontChange}
+          onPriceColorChange={handleSelectedPriceColorChange}
+          onShowDollarToggle={handleSelectedShowDollarToggle}
+          onPriceBgChange={handleSelectedPriceBgChange}
+          onPriceBgPadChange={handleSelectedPriceBgPadChange}
+          onPriceEffectChange={handleSelectedPriceEffectChange}
+          onOpenComponentEditor={() => setShowTextCompDialog(true)}
+          onApplyToDepartment={handleApplyTextStyleToDepartment}
+          onApplyGlobally={onApplyTextStyleGlobally ? handleApplyTextStyleGlobally : undefined}
+          departmentLabel={departmentLabel}
           onClose={() => setActiveToolbarSection(null)}
+          visible={true}
+        />
+      );
+    })()}
+
+    {/* Text components dialog — fine-tune sub-component sizes/offsets */}
+    {showTextCompDialog && isCard && editMode && cardLayout && onCardLayoutChange &&
+      (activeToolbarSection === 'title' || activeToolbarSection === 'price') && (() => {
+      const firstCard = cardLayout.find(c => c.itemId);
+      const activeCard = selectedCard ?? firstCard;
+      const selectedLabel = (discountLabels as any)?.find((l: any) => l?.id === selectedItemId);
+      const selectedItem = items.find((it: any) => it.id === selectedItemId);
+      const priceCompValues: PriceCompValues = {
+        dollarRatio:  (activeCard?.priceCompDollarRatio as number | undefined) ?? PRICE_COMP_DEFAULTS.dollarRatio,
+        dollarOffsetY:(activeCard?.priceCompDollarOffsetY as number | undefined) ?? PRICE_COMP_DEFAULTS.dollarOffsetY,
+        qtyRatio:     (activeCard?.priceCompQtyRatio as number | undefined) ?? PRICE_COMP_DEFAULTS.qtyRatio,
+        decRatio:     (activeCard?.priceCompDecRatio as number | undefined) ?? PRICE_COMP_DEFAULTS.decRatio,
+        decOffsetY:   (activeCard?.priceCompDecOffsetY as number | undefined) ?? PRICE_COMP_DEFAULTS.decOffsetY,
+        unitRatio:    (activeCard?.priceCompUnitRatio as number | undefined) ?? PRICE_COMP_DEFAULTS.unitRatio,
+        unitOffsetY:  (activeCard?.priceCompUnitOffsetY as number | undefined) ?? PRICE_COMP_DEFAULTS.unitOffsetY,
+      };
+      const titleCompValues: TitleCompValues = {
+        metaScale:   (activeCard?.titleCompMetaScale as number | undefined) ?? TITLE_COMP_DEFAULTS.metaScale,
+        metaOffsetY: (activeCard?.titleCompMetaOffsetY as number | undefined) ?? TITLE_COMP_DEFAULTS.metaOffsetY,
+      };
+      const samplePrice =
+        selectedLabel?.price?.display ||
+        getItemPriceDisplay(selectedItem) ||
+        (discountLabels as any)?.find((l: any) => l.price?.display)?.price?.display ||
+        "$9.99";
+      const sampleMeta = (() => {
+        const lbl = selectedLabel?.title?.size || selectedLabel?.title?.regularPrice
+          ? selectedLabel
+          : (discountLabels as any)?.find((l: any) => l.title?.size || l.title?.regularPrice);
+        if (!lbl) return undefined;
+        return [lbl.title?.size, lbl.title?.regularPrice ? `REG $${lbl.title.regularPrice}` : undefined].filter(Boolean).join('  /  ');
+      })();
+      return (
+        <TextComponentsDialog
+          section={activeToolbarSection as 'title' | 'price'}
+          priceDisplay={samplePrice}
+          priceShowDollar={!!(activeCard?.priceShowDollar)}
+          priceFont={activeCard?.priceFontFamily}
+          priceColor={activeCard?.priceColor ?? '#000000'}
+          priceEffect={activeCard?.priceEffect}
+          priceEffectColor={activeCard?.priceBg}
+          priceEffectSize={activeCard?.priceBgPad ?? 2}
+          priceCompValues={priceCompValues}
+          onPriceCompChange={handleSelectedPriceCompChange}
+          titleSampleMeta={sampleMeta}
+          titleFont={activeCard?.titleFontFamily}
+          titleColor={activeCard?.titleColor ?? '#000000'}
+          titleItalic={!!activeCard?.titleItalic}
+          titleCompValues={titleCompValues}
+          onTitleCompChange={handleSelectedTitleCompChange}
+          onClose={() => setShowTextCompDialog(false)}
         />
       );
     })()}
@@ -1801,7 +2124,9 @@ export default function EditorCanvas({
             height: imageSize?.height ?? 2400,
             background: "#fff",
             overflow: "visible",
+            userSelect: "none",
           }}
+          data-keep-selection="true"
           onMouseDown={isCard && onCardLayoutChange ? handleCanvasMouseDown : undefined}
           onMouseDownCapture={isCard && onSelectItem ? handleSelectionCapture : undefined}
           onContextMenu={isCard && editMode ? (e) => {
@@ -1828,6 +2153,8 @@ export default function EditorCanvas({
             menuActions.push({ id: 'dbResults', label: 'Database Results', enabled: !!onChooseDatabaseResults });
             menuActions.push({ id: 'uploadLocal', label: 'Upload from Local' });
             if (item?.result?.sourceUrl) menuActions.push({ id: 'openSource', label: 'Open Source Image' });
+            const sourceFilePath = item?.result?.inputPath ?? item?.path ?? null;
+            if (sourceFilePath) menuActions.push({ id: 'showInFolder', label: 'Show Source in Folder' });
             (window as any).ufm.showContextMenu(itemId, menuActions);
           } : undefined}
         >
@@ -1848,23 +2175,34 @@ export default function EditorCanvas({
           />
 
           {/* ═══ CARD-BASED DEPARTMENT ═══ */}
-          {imageSize && isCard && (
-            <>
+          {imageSize && isCard && cardClipStyle && (
+            <div style={cardClipStyle}>
               {/* Grey card backgrounds */}
-              {cardRects.map((rect) => (
-                <div
-                  key={`card-bg-${rect.cardId}`}
-                  style={{
-                    position: "absolute",
-                    left: rect.x,
-                    top: rect.y,
-                    width: rect.width,
-                    height: rect.height,
-                    background: CARD_BG,
-                    boxSizing: "border-box",
-                  }}
-                />
-              ))}
+              {cardRects.map((rect) => {
+                const cs = templateCardStyle;
+                const borderW = Math.max(0, cs?.borderWidth ?? 0);
+                return (
+                  <div
+                    key={`card-bg-${rect.cardId}`}
+                    style={{
+                      position: "absolute",
+                      left: rect.x,
+                      top: rect.y,
+                      width: rect.width,
+                      height: rect.height,
+                      background: cs?.backgroundColor ?? CARD_BG,
+                      boxSizing: "border-box",
+                      border: borderW > 0
+                        ? `${borderW}px solid ${cs?.borderColor ?? "#e2e8f0"}`
+                        : undefined,
+                      borderRadius: cs?.borderRadius ?? 0,
+                      boxShadow: cs?.hasShadow
+                        ? "0 2px 8px rgba(15, 23, 42, 0.18)"
+                        : undefined,
+                    }}
+                  />
+                );
+              })}
 
 
               {/* Product content on filled cards */}
@@ -1889,10 +2227,13 @@ export default function EditorCanvas({
                   onCropDragStart={onCardLayoutChange && editMode ? handleCropDragStart : undefined}
                   onSubImageCropDragStart={onSubImageUpdate && editMode ? handleSubImageCropDragStart : undefined}
                   onBannerPanStart={onCardLayoutChange && editMode ? handleBannerPanStart : undefined}
+                  onPricePanStart={onCardLayoutChange && editMode ? handlePricePanStart : undefined}
                   onEditBannerDays={onEditBannerDays && editMode ? onEditBannerDays : undefined}
                   onElementSelect={editMode ? handleElementSelect : undefined}
                   replacementJobs={replacementJobs}
+                  onCancelReplacementJob={onCancelReplacementJob}
                   rerunningCutoutMap={rerunningCutoutMap}
+                  onPanelImageDrop={onPanelImageDrop}
                 />
               )}
 
@@ -1912,6 +2253,7 @@ export default function EditorCanvas({
                   onGoogleSearch={onGoogleSearch}
                   onEditTitle={onEditTitle}
                   onPickSeriesFlavors={onPickSeriesFlavors}
+                  onPanelImageDrop={onPanelImageDrop}
                   cardMode
                   cardRects={cardRects}
                   cardLayout={cardLayout ?? undefined}
@@ -2106,7 +2448,7 @@ export default function EditorCanvas({
                   )}
                 </div>
               ))}
-            </>
+            </div>
           )}
 
           {/* ═══ SLOT-BASED DEPARTMENT ═══ */}
@@ -2213,6 +2555,7 @@ export default function EditorCanvas({
               discountLabels={discountLabels as any}
               flyerWeekStart={flyerWeekStart}
               replacementJobs={replacementJobs}
+              onCancelReplacementJob={onCancelReplacementJob}
             />
           )}
 

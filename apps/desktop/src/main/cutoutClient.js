@@ -12,7 +12,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // project-owned exports dir
-const EXPORT_ROOT = path.resolve(__dirname, "../../../exports/cutouts");
+export const EXPORT_ROOT = path.resolve(__dirname, "../../../exports/cutouts");
 
 async function ensureExportDir() {
   await fs.mkdir(EXPORT_ROOT, { recursive: true });
@@ -64,11 +64,15 @@ export async function waitForCutoutReady({ maxWaitMs = 20000, intervalMs = 400 }
  * Python side for high-res user photos (editor cutouts) vs. small Serper images.
  * Returns { sendPath, isTemp } — caller must delete isTemp files after use.
  */
-async function preshrinkForCutout(inputPath) {
+async function preshrinkForCutout(inputPath, modelOverride = null) {
+  // Border-trim is pixel-exact flood-fill — full resolution gives cleaner edges.
+  if (modelOverride === "border-trim") return { sendPath: inputPath, isTemp: false };
+
   const rp = getResourceProfile();
   let cap = rp.cutoutMaxEdgePx || 1536;
   // Mirror Python's birefnet hard cap: attention matrices scale quadratically with pixels
-  if ((rp.rembgModel || "").startsWith("birefnet") && cap > 768) cap = 768;
+  const modelName = modelOverride || rp.rembgModel || "";
+  if (modelName.startsWith("birefnet") && cap > 768) cap = 768;
   if (cap <= 0) return { sendPath: inputPath, isTemp: false };
 
   let meta;
@@ -90,14 +94,16 @@ async function preshrinkForCutout(inputPath) {
   return { sendPath: tempPath, isTemp: true };
 }
 
-export async function runCutout(inputPath, externalSignal) {
+export async function runCutout(inputPath, externalSignal, options = {}) {
   await ensureExportDir();
 
-  const { sendPath, isTemp } = await preshrinkForCutout(inputPath);
+  const modelOverride = options.model || null;
+  const { sendPath, isTemp } = await preshrinkForCutout(inputPath, modelOverride);
 
   const form = new FormData();
   const stream = fsSync.createReadStream(sendPath);
   form.append("file", stream);
+  if (modelOverride) form.append("model", modelOverride);
 
   const fetchTimeoutMs = getResourceProfile().cutoutFetchTimeoutMs;
   const signal = externalSignal
@@ -125,14 +131,38 @@ export async function runCutout(inputPath, externalSignal) {
     throw new Error(`Cutout failed: ${detail}`);
   }
 
-  const { output_path, alpha_coverage, low_confidence } = await res.json();
+  const body = await res.json();
+  const {
+    output_path,
+    alpha_coverage,
+    low_confidence,
+    border_alpha,
+    component_count,
+    bbox_area_ratio,
+    bbox_fill_ratio,
+    light_halo,
+    quality_reason,
+    model,
+  } = body;
 
+  const modelSuffix = modelOverride ? `.${String(modelOverride).replace(/[^a-z0-9_-]+/gi, "_")}` : "";
   const finalName =
-    path.basename(inputPath).replace(/\s+/g, "_") + ".cutout.png";
+    path.basename(inputPath).replace(/\s+/g, "_") + modelSuffix + `-${Date.now()}.cutout.png`;
 
   const finalPath = path.join(EXPORT_ROOT, finalName);
 
   await moveFileTo(output_path, finalPath);
 
-  return { path: finalPath, alphaCoverage: alpha_coverage ?? null, lowConfidence: low_confidence ?? false };
+  return {
+    path: finalPath,
+    alphaCoverage: alpha_coverage ?? null,
+    lowConfidence: low_confidence ?? false,
+    borderAlpha: border_alpha ?? null,
+    componentCount: component_count ?? null,
+    bboxAreaRatio: bbox_area_ratio ?? null,
+    bboxFillRatio: bbox_fill_ratio ?? null,
+    lightHalo: light_halo ?? null,
+    qualityReason: quality_reason ?? null,
+    model: model ?? modelOverride ?? null,
+  };
 }

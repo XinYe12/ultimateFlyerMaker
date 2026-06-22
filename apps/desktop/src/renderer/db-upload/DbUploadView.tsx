@@ -1325,7 +1325,7 @@ function ScanNonProductsButton({ onComplete }: { onComplete: () => void }) {
   }, [onComplete]);
 
   const handleScan = () => {
-    if (!confirm("Scan all product images with Gemini and delete non-products (banners, logos, etc.)?\n\nThis uses ~1 Gemini API call per image. Non-products will be permanently deleted.")) return;
+    if (!confirm("Scan all product images with Gemini and delete non-products (flyer title graphics, banners, logos, price-only art, etc.)?\n\nThis uses ~1 Gemini API call per image. Non-products will be permanently deleted.")) return;
     setPhase("scanning");
     setResult(null);
     setError(null);
@@ -1342,7 +1342,7 @@ function ScanNonProductsButton({ onComplete }: { onComplete: () => void }) {
         type="button"
         onClick={handleScan}
         disabled={phase === "scanning"}
-        title="Send all DB images to Gemini — delete non-products"
+        title="Send all DB images to Gemini — delete flyer title graphics, banners, logos, etc."
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -1651,10 +1651,15 @@ function TodaysSavesPanel() {
 }
 
 function ProductSearchPanel() {
+  type R = import("../global").DbSearchResult;
+
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<import("../global").DbSearchResult[]>([]);
+  const [results, setResults] = useState<R[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchedOnce, setSearchedOnce] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [infoProduct, setInfoProduct] = useState<R | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleSearch = async () => {
@@ -1669,6 +1674,21 @@ function ProductSearchPanel() {
       console.error("Library search failed:", err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDelete = async (r: R) => {
+    const name = r.englishTitle || r.chineseTitle || r.id;
+    if (!confirm(`Delete "${name}" from the product library?\n\nThis permanently removes it from Firestore and Firebase Storage.`)) return;
+    setInfoProduct(null);
+    setDeletingId(r.id);
+    try {
+      await window.ufm.deleteDbProduct(r.id);
+      setResults(prev => prev.filter(x => x.id !== r.id));
+    } catch (err: any) {
+      alert(`Delete failed: ${err?.message || String(err)}`);
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -1716,47 +1736,211 @@ function ProductSearchPanel() {
             {results.length} result{results.length !== 1 ? "s" : ""}
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-            {results.map((r) => (
-              <div
-                key={r.id}
-                style={{
-                  border: "1px solid #DEE2E6", borderRadius: 8,
-                  overflow: "hidden", background: "#fff",
-                }}
-              >
-                {r.publicUrl ? (
-                  <img
-                    src={r.publicUrl}
-                    alt={r.englishTitle ?? r.chineseTitle ?? r.id}
-                    style={{ width: "100%", height: 120, objectFit: "contain", display: "block", background: "#F8F9FA" }}
-                  />
-                ) : (
-                  <div style={{ width: "100%", height: 120, background: "#F1F3F5", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <span style={{ fontSize: 11, color: "#ADB5BD" }}>No image</span>
-                  </div>
-                )}
-                <div style={{ padding: "8px 10px" }}>
-                  {r.englishTitle && (
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "#212529", marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {r.englishTitle}
+            {results.map((r) => {
+              const isDeleting = deletingId === r.id;
+              const isHovered = hoveredId === r.id;
+              return (
+                <div
+                  key={r.id}
+                  onMouseEnter={() => setHoveredId(r.id)}
+                  onMouseLeave={() => setHoveredId(null)}
+                  style={{
+                    position: "relative", border: "1px solid #DEE2E6", borderRadius: 8,
+                    overflow: "hidden", background: "#fff",
+                  }}
+                >
+                  {/* Product image */}
+                  {r.publicUrl ? (
+                    <img
+                      src={r.publicUrl}
+                      alt={r.englishTitle ?? r.chineseTitle ?? r.id}
+                      style={{ width: "100%", height: 120, objectFit: "contain", display: "block", background: "#F8F9FA" }}
+                    />
+                  ) : (
+                    <div style={{ width: "100%", height: 120, background: "#F1F3F5", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <span style={{ fontSize: 11, color: "#ADB5BD" }}>No image</span>
                     </div>
                   )}
-                  {r.chineseTitle && (
-                    <div style={{ fontSize: 11, color: "#495057", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {r.chineseTitle}
+
+                  {/* Deletion loading overlay */}
+                  {isDeleting && (
+                    <div style={{
+                      position: "absolute", inset: 0, zIndex: 10,
+                      background: "rgba(255,255,255,0.82)", backdropFilter: "blur(2px)",
+                      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 7,
+                    }}>
+                      <div style={{
+                        width: 20, height: 20,
+                        border: "2.5px solid #FFCDD2", borderTopColor: "#C92A2A",
+                        borderRadius: "50%", animation: "ufm-spin 0.7s linear infinite",
+                      }} />
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#C92A2A", letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                        Deleting…
+                      </span>
                     </div>
                   )}
-                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    {r.size && <span style={{ fontSize: 10, color: "#868E96" }}>{r.size}</span>}
-                    <span style={{ marginLeft: "auto", fontSize: 10, color: "#2F9E44", fontWeight: 600 }}>
-                      {Math.round(r.score * 100)}%
-                    </span>
+
+                  {/* Hover action buttons (delete + more info) */}
+                  {isHovered && !isDeleting && (
+                    <div style={{
+                      position: "absolute", top: 4, right: 4,
+                      display: "flex", flexDirection: "column", gap: 4,
+                    }}>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(r)}
+                        title="Delete from product library"
+                        style={{
+                          width: 20, height: 20, padding: 0,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          background: "rgba(201,42,42,0.88)", color: "#fff",
+                          border: "none", borderRadius: "50%",
+                          fontSize: 11, fontWeight: 700, lineHeight: 1, cursor: "pointer",
+                        }}
+                      >
+                        ×
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInfoProduct(r)}
+                        title="More info"
+                        style={{
+                          width: 20, height: 20, padding: 0,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          background: "rgba(34,139,230,0.88)", color: "#fff",
+                          border: "none", borderRadius: "50%",
+                          fontSize: 10, fontWeight: 700, lineHeight: 1, cursor: "pointer",
+                        }}
+                      >
+                        i
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Card footer */}
+                  <div style={{ padding: "8px 10px" }}>
+                    {r.englishTitle && (
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "#212529", marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {r.englishTitle}
+                      </div>
+                    )}
+                    {r.chineseTitle && (
+                      <div style={{ fontSize: 11, color: "#495057", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {r.chineseTitle}
+                      </div>
+                    )}
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      {r.size && <span style={{ fontSize: 10, color: "#868E96" }}>{r.size}</span>}
+                      <span style={{ marginLeft: "auto", fontSize: 10, color: "#2F9E44", fontWeight: 600 }}>
+                        {Math.round(r.score * 100)}%
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </>
+      )}
+
+      {/* Product info dialog */}
+      {infoProduct && (
+        <div
+          onClick={() => setInfoProduct(null)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 1000,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#fff", borderRadius: 12, width: 340, maxHeight: "80vh",
+              overflow: "auto", boxShadow: "0 8px 32px rgba(0,0,0,0.22)",
+            }}
+          >
+            {/* Image */}
+            {infoProduct.publicUrl ? (
+              <img
+                src={infoProduct.publicUrl}
+                alt={infoProduct.englishTitle ?? infoProduct.id}
+                style={{ width: "100%", height: 200, objectFit: "contain", display: "block", background: "#F8F9FA", borderRadius: "12px 12px 0 0" }}
+              />
+            ) : (
+              <div style={{ width: "100%", height: 160, background: "#F1F3F5", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "12px 12px 0 0" }}>
+                <span style={{ fontSize: 12, color: "#ADB5BD" }}>No image</span>
+              </div>
+            )}
+
+            {/* Content */}
+            <div style={{ padding: "16px 18px 20px" }}>
+              {/* Title */}
+              {infoProduct.englishTitle && (
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#212529", marginBottom: 2 }}>
+                  {infoProduct.englishTitle}
+                </div>
+              )}
+              {infoProduct.chineseTitle && (
+                <div style={{ fontSize: 13, color: "#495057", marginBottom: 12 }}>
+                  {infoProduct.chineseTitle}
+                </div>
+              )}
+
+              {/* Info rows */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {[
+                  { label: "Brand",         value: infoProduct.brand },
+                  { label: "Size",          value: infoProduct.size },
+                  { label: "Category",      value: infoProduct.category },
+                  { label: "Sale Price",    value: infoProduct.salePrice ? `$${infoProduct.salePrice}` : undefined },
+                  { label: "Regular Price", value: infoProduct.regularPrice ? `$${infoProduct.regularPrice}` : undefined },
+                  { label: "Unit",          value: infoProduct.unit },
+                  { label: "Quantity",      value: infoProduct.quantity != null ? String(infoProduct.quantity) : undefined },
+                  { label: "Source",        value: infoProduct.source },
+                  { label: "Match Score",   value: `${Math.round(infoProduct.score * 100)}%` },
+                  { label: "Product ID",    value: infoProduct.id, mono: true },
+                ].filter(row => row.value).map(row => (
+                  <div key={row.label} style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                    <span style={{ fontSize: 11, color: "#868E96", fontWeight: 600, minWidth: 96, flexShrink: 0 }}>
+                      {row.label}
+                    </span>
+                    <span style={{ fontSize: 12, color: "#212529", fontFamily: (row as any).mono ? "monospace" : undefined, wordBreak: "break-all" }}>
+                      {row.value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Actions */}
+              <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                <button
+                  type="button"
+                  onClick={() => handleDelete(infoProduct)}
+                  disabled={deletingId === infoProduct.id}
+                  style={{
+                    flex: 1, padding: "8px 0", fontSize: 12, fontWeight: 600,
+                    background: "#FFF5F5", color: "#C92A2A",
+                    border: "1px solid #FFB3B3", borderRadius: 7, cursor: "pointer",
+                  }}
+                >
+                  Delete
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInfoProduct(null)}
+                  style={{
+                    flex: 1, padding: "8px 0", fontSize: 12, fontWeight: 600,
+                    background: "#F1F3F5", color: "#495057",
+                    border: "1px solid #DEE2E6", borderRadius: 7, cursor: "pointer",
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -44,7 +44,9 @@ export function useJobQueue() {
   // Persist to file whenever jobs change (guard prevents overwriting before initial load)
   useEffect(() => {
     if (!initialized.current) return;
-    saveJobsToFile(jobs);
+    saveJobsToFile(jobs).catch(err => {
+      console.error("[useJobQueue] Persistent save failed — data is in memory but may not survive a restart:", err);
+    });
   }, [jobs]);
 
   // Listen for IPC events
@@ -289,37 +291,37 @@ export function useJobQueue() {
     );
   }, []);
 
-  // Queue a job for processing
+  // Queue a job for processing — read latest job from setJobs to avoid stale closure
+  // when discount/xlsx was just attached in the same render cycle.
   const startJob = useCallback(async (jobId: string) => {
-    const job = jobs.find(j => j.id === jobId);
-    if (!job || job.status !== "drafting") return;
+    let jobToStart: FlyerJob | undefined;
 
-    if (job.images.length === 0 && !job.discount?.source) {
-      console.warn("[useJobQueue] Cannot start job with no images and no discount");
-      return;
-    }
+    setJobs(prev => {
+      const job = prev.find(j => j.id === jobId);
+      if (!job || job.status !== "drafting") return prev;
 
-    // Update status to queued
-    setJobs(prev =>
-      prev.map(j =>
-        j.id === jobId
-          ? {
-              ...j,
-              status: "queued" as JobStatus,
-              startedAt: Date.now(),
-              progress: {
-                ...j.progress,
-                currentStep: "Queued",
-              },
-            }
-          : j
-      )
-    );
+      if (job.images.length === 0 && !job.discount?.source) {
+        console.warn("[useJobQueue] Cannot start job with no images and no discount");
+        return prev;
+      }
 
-    // Send to main process
+      jobToStart = {
+        ...job,
+        status: "queued" as JobStatus,
+        startedAt: Date.now(),
+        progress: {
+          ...job.progress,
+          currentStep: "Queued",
+        },
+      };
+
+      return prev.map(j => (j.id === jobId ? jobToStart! : j));
+    });
+
+    if (!jobToStart) return;
+
     try {
-      const updatedJob = { ...job, status: "queued" as JobStatus, startedAt: Date.now() };
-      await window.ufm.startJob(updatedJob);
+      await window.ufm.startJob(jobToStart);
     } catch (err) {
       console.error("[useJobQueue] Failed to start job:", err);
       setJobs(prev =>
@@ -334,7 +336,7 @@ export function useJobQueue() {
         )
       );
     }
-  }, [jobs]);
+  }, []);
 
   // Create/update jobs for all departments at once and immediately start each one.
   // Uses a single setJobs call to avoid stale-closure issues with per-job startJob.
@@ -431,25 +433,33 @@ export function useJobQueue() {
   const syncJobFromEditorItems = useCallback(
     (jobId: string, items: IngestItem[], discountLabels?: any[], slotOverrides?: Record<number, { x: number; y: number; width: number; height: number }>, cardLayouts?: Record<string, CardLayout>, verificationDone?: boolean, verificationProgress?: any, departmentLocked?: boolean) => {
       // Exclude skeleton placeholder items (status "pending" with no result) from job persistence
-      const images: ImageTask[] = items
-        .filter(item => !(item.status === "pending" && !item.result))
-        .map((item) => ({
-          id: item.id,
-          path: item.path,
-          status: item.status === "done" ? "done" : item.status === "error" ? "error" : item.status === "running" ? "processing" : "pending",
-          result: item.result,
-          error: item.error,
-          slotIndex: item.slotIndex,
-        }));
+      const filteredItems = items.filter(item => !(item.status === "pending" && !item.result));
+      const images: ImageTask[] = filteredItems.map((item) => ({
+        id: item.id,
+        path: item.path,
+        status: item.status === "done" ? "done" : item.status === "error" ? "error" : item.status === "running" ? "processing" : "pending",
+        result: item.result,
+        error: item.error,
+        slotIndex: item.slotIndex,
+      }));
+      // Don't overwrite processedImages that have real file paths with XLSX placeholder items
+      // that have no paths yet. This prevents synthetic pending items from clobbering
+      // completed job results when the editor briefly shows placeholder cards.
+      const hasRealPaths = images.some(img => img.path || img.result?.inputPath || img.result?.cutoutPath);
+      const hasOnlyXlsxPlaceholders = filteredItems.length > 0 && !hasRealPaths;
       setJobs((prev) =>
         prev.map((j) => {
           if (j.id !== jobId) return j;
           // Don't let editor item count overwrite the IPC-driven progress counter while a job
           // is actively running — that causes the denominator to grow as items stream in.
           const isActiveJob = j.status === "processing" || j.status === "queued";
+          const processedImages = hasOnlyXlsxPlaceholders
+            ? (j.result?.processedImages ?? [])
+            : images;
           return {
             ...j,
             images,
+            discount: j.discount,
             progress: isActiveJob
               ? j.progress
               : {
@@ -459,14 +469,19 @@ export function useJobQueue() {
                   currentStep: j.progress.currentStep,
                 },
             result: {
-              processedImages: images,
-              discountLabels: discountLabels ?? j.result?.discountLabels ?? [],
+              processedImages,
+              discountLabels: discountLabels !== undefined ? discountLabels : (j.result?.discountLabels ?? []),
               verificationDone: verificationDone ?? j.result?.verificationDone ?? false,
               verificationProgress: verificationProgress !== undefined ? verificationProgress : j.result?.verificationProgress,
               departmentLocked: departmentLocked ?? j.result?.departmentLocked ?? false,
             },
-            slotOverrides: slotOverrides ?? j.slotOverrides,
-            cardLayouts: cardLayouts ?? j.cardLayouts,
+            slotOverrides: slotOverrides !== undefined ? slotOverrides : j.slotOverrides,
+            cardLayouts: cardLayouts !== undefined
+              ? {
+                  ...(j.cardLayouts ?? {}),
+                  ...(cardLayouts[j.department] ? { [j.department]: cardLayouts[j.department] } : {}),
+                }
+              : j.cardLayouts,
           };
         })
       );

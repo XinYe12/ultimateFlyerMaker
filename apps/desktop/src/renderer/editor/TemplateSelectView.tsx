@@ -1,13 +1,14 @@
 import React, { useState } from "react";
 import { CustomFlyerTemplateConfig, CustomTemplatePage, DepartmentAreaDef, isCardDepartment, loadFlyerTemplateConfig } from "./loadFlyerTemplateConfig";
 import { listCustomTemplates, deleteCustomTemplate, saveCustomTemplate } from "./customTemplateStorage";
-import TemplateBuilder from "./TemplateBuilder";
 import { ALL_REPLICAS } from "./replicaTemplates";
 import { FlyerJob } from "../types";
 
 type Props = {
   jobs: FlyerJob[];
   onSelect: (templateId: string) => void;
+  onCreateNew: () => void;
+  onEdit: (template: CustomFlyerTemplateConfig) => void;
 };
 
 const BUILT_IN_TEMPLATES = [
@@ -78,6 +79,14 @@ function fmtLabel(key: string): string {
   return key.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
+function imageUrl(p?: string): string | undefined {
+  if (!p) return undefined;
+  if (p.startsWith("data:") || p.startsWith("http://") || p.startsWith("https://")) return p;
+  if (p.startsWith("file://")) return p;
+  if (p.startsWith("/")) return p;
+  return `file:///${p.replace(/\\/g, "/")}`;
+}
+
 function CustomBoxPreview({ template }: { template: CustomFlyerTemplateConfig }) {
   const page = template.pages[0];
   if (!page || (page.boxes.length === 0 && !page.backgroundImage)) {
@@ -93,7 +102,7 @@ function CustomBoxPreview({ template }: { template: CustomFlyerTemplateConfig })
   const w = page.canvasWidth * scale;
   const h = page.canvasHeight * scale;
   return (
-    <div style={{ width: w, height: h, position: "relative", overflow: "hidden", background: page.backgroundImage ? `url(${page.backgroundImage}) center/cover` : (page.backgroundColor ?? "#fff") }}>
+    <div style={{ width: w, height: h, position: "relative", overflow: "hidden", background: page.backgroundImage ? `url(${imageUrl(page.backgroundImage)}) center/cover` : (page.backgroundColor ?? "#fff") }}>
       <svg width={w} height={h} style={{ display: "block", position: "absolute", inset: 0 }}>
         {page.boxes.map(box => {
           const type = box.boxType ?? "product";
@@ -132,26 +141,12 @@ function CustomBoxPreview({ template }: { template: CustomFlyerTemplateConfig })
   );
 }
 
-export default function TemplateSelectView({ jobs, onSelect }: Props) {
+export default function TemplateSelectView({ jobs, onSelect, onCreateNew, onEdit }: Props) {
   const [customTemplates, setCustomTemplates] = useState<CustomFlyerTemplateConfig[]>(() => listCustomTemplates());
-  const [showBuilder, setShowBuilder] = useState(false);
-  const [editingTemplate, setEditingTemplate] = useState<CustomFlyerTemplateConfig | undefined>(undefined);
 
   const handleLoadExamples = () => {
     ALL_REPLICAS.forEach(saveCustomTemplate);
     setCustomTemplates(listCustomTemplates());
-  };
-
-  const handleBuilderSave = (templateId: string) => {
-    setCustomTemplates(listCustomTemplates());
-    setShowBuilder(false);
-    setEditingTemplate(undefined);
-    onSelect(templateId);
-  };
-
-  const handleBuilderClose = () => {
-    setShowBuilder(false);
-    setEditingTemplate(undefined);
   };
 
   const handleDelete = (e: React.MouseEvent, templateId: string) => {
@@ -159,12 +154,6 @@ export default function TemplateSelectView({ jobs, onSelect }: Props) {
     if (!confirm("Delete this template? This cannot be undone.")) return;
     deleteCustomTemplate(templateId);
     setCustomTemplates(listCustomTemplates());
-  };
-
-  const handleEdit = (e: React.MouseEvent, template: CustomFlyerTemplateConfig) => {
-    e.stopPropagation();
-    setEditingTemplate(template);
-    setShowBuilder(true);
   };
 
   const handleCopyBuiltIn = async (e: React.MouseEvent, builtIn: typeof BUILT_IN_TEMPLATES[0]) => {
@@ -258,14 +247,6 @@ export default function TemplateSelectView({ jobs, onSelect }: Props) {
 
   return (
     <>
-      {showBuilder && (
-        <TemplateBuilder
-          onSave={handleBuilderSave}
-          onClose={handleBuilderClose}
-          initialConfig={editingTemplate}
-        />
-      )}
-
       <div style={{
         minHeight: "100vh", background: "#f0f2f5",
         padding: "40px 48px",
@@ -344,8 +325,8 @@ export default function TemplateSelectView({ jobs, onSelect }: Props) {
                     <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                       <button
                         title="Edit template"
-                        onClick={e => handleEdit(e, t)}
-                        style={{ padding: "2px 7px", border: "none", borderRadius: 4, background: "#e2e8f0", cursor: "pointer", fontSize: 12, color: "#475569", fontWeight: 600 }}
+                        onClick={e => { e.stopPropagation(); onEdit(t); }}
+                        style={{ padding: "2px 7px", border: "none", borderRadius: 4, background: "#dbeafe", cursor: "pointer", fontSize: 12, color: "#3b82f6", fontWeight: 600 }}
                       >
                         Edit
                       </button>
@@ -365,7 +346,7 @@ export default function TemplateSelectView({ jobs, onSelect }: Props) {
             {/* + Create New */}
             <div
               style={{ ...cardStyle, border: "2px dashed #cbd5e1", background: "#f8fafc", alignItems: "center", justifyContent: "center", minHeight: 160 }}
-              onClick={() => { setEditingTemplate(undefined); setShowBuilder(true); }}
+              onClick={onCreateNew}
               onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.borderColor = "#3b82f6"; (e.currentTarget as HTMLDivElement).style.background = "#eff6ff"; }}
               onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.borderColor = "#cbd5e1"; (e.currentTarget as HTMLDivElement).style.background = "#f8fafc"; }}
             >

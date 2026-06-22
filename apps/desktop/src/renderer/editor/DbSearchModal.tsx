@@ -4,26 +4,37 @@ import type { DbSearchResult } from "../global.d";
 type Props = {
   itemId: string;
   initialQuery: string;
-  onReplace: (itemId: string, data: { path: string; result: any }) => void;
+  cutoutPaths?: string[];
+  /** Parent runs download/replace in the background (card shows "Replacing…"). */
+  onSelectProduct: (itemId: string, publicUrl: string, targetFlavorIndex?: number) => void;
   onClose: () => void;
   zIndex?: number;
 };
 
-export default function DbSearchModal({ itemId, initialQuery, onReplace, onClose, zIndex = 10000 }: Props) {
+export default function DbSearchModal({
+  itemId,
+  initialQuery,
+  cutoutPaths,
+  onSelectProduct,
+  onClose,
+  zIndex = 10000,
+}: Props) {
   const [searchQuery, setSearchQuery] = useState(initialQuery);
   const [results, setResults] = useState<DbSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchedOnce, setSearchedOnce] = useState(false);
-  const [replacing, setReplacing] = useState(false);
+  const hasMultiFlavors = Array.isArray(cutoutPaths) && cutoutPaths.length > 1;
+  const [selectedFlavorIdx, setSelectedFlavorIdx] = useState<number | null>(
+    hasMultiFlavors ? 0 : null,
+  );
 
-  // Close on Escape
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !replacing) onClose();
+      if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [replacing, onClose]);
+  }, [onClose]);
 
   const handleSearch = async () => {
     const query = searchQuery.trim();
@@ -45,18 +56,14 @@ export default function DbSearchModal({ itemId, initialQuery, onReplace, onClose
     }
   };
 
-  const handleSelect = async (publicUrl: string) => {
+  const handleSelect = (publicUrl: string) => {
     if (!publicUrl?.trim()) return;
-    setReplacing(true);
-    try {
-      const data = await window.ufm.downloadAndIngestFromUrl(publicUrl.trim());
-      onReplace(itemId, data);
-      onClose();
-    } catch (err) {
-      console.error("Replace from URL failed:", err);
-      setReplacing(false);
-      alert("Failed to replace image: " + (err instanceof Error ? err.message : String(err)));
+    if (hasMultiFlavors && selectedFlavorIdx == null) {
+      alert("Select which flavor slot to replace first.");
+      return;
     }
+    onSelectProduct(itemId, publicUrl.trim(), selectedFlavorIdx ?? undefined);
+    onClose();
   };
 
   return (
@@ -70,166 +77,202 @@ export default function DbSearchModal({ itemId, initialQuery, onReplace, onClose
         justifyContent: "center",
         zIndex,
       }}
-      onClick={() => !replacing && onClose()}
+      onClick={onClose}
     >
       <div
         style={{
+          position: "relative",
           background: "#fff",
           borderRadius: 12,
-          padding: 24,
-          maxWidth: 720,
+          maxWidth: hasMultiFlavors ? 820 : 720,
           width: "90%",
           maxHeight: "85vh",
-          overflow: "auto",
+          overflow: "hidden",
           boxShadow: "0 12px 48px rgba(0,0,0,0.3)",
+          display: "flex",
+          flexDirection: "row",
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 style={{ margin: "0 0 16px", fontSize: 20 }}>
-          {results.length > 0 ? "Choose a product" : "Search database by product name"}
-        </h2>
-        {loading ? (
-          <p style={{ color: "#666" }}>Searching database…</p>
-        ) : replacing ? (
-          <p style={{ color: "#666" }}>Downloading and processing image…</p>
-        ) : results.length === 0 ? (
-          <>
-            {searchedOnce && (
-              <p style={{ color: "#c92a2a", marginBottom: 12 }}>
-                No matching products found. Try a different name.
-              </p>
-            )}
-            <p style={{ color: "#666", marginBottom: 12 }}>
-              Enter or edit the product name, then click Search. New images may have no title yet.
-            </p>
-            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="e.g. Norwegian Mackerel Fillet"
-                style={{
-                  flex: 1,
-                  padding: "10px 12px",
-                  fontSize: 14,
-                  border: "1px solid #ddd",
-                  borderRadius: 8,
-                }}
-                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-              />
-              <button
-                type="button"
-                onClick={handleSearch}
-                style={{
-                  padding: "10px 20px",
-                  background: "#9C27B0",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  fontWeight: 600,
-                }}
-              >
-                Search
-              </button>
+        {/* Left flavor column — only when multi-flavor */}
+        {hasMultiFlavors && (
+          <div style={{
+            width: 100,
+            flexShrink: 0,
+            borderRight: "1px solid #E9ECEF",
+            overflowY: "auto",
+            padding: "16px 8px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            background: "#FAFAFA",
+          }}>
+            <div style={{
+              fontSize: 10, fontWeight: 700, color: "#94A3B8",
+              textTransform: "uppercase", letterSpacing: "0.06em",
+              marginBottom: 6, textAlign: "center",
+            }}>
+              Flavor
             </div>
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              onClick={() => { setResults([]); setSearchedOnce(false); }}
-              style={{
-                marginBottom: 12,
-                padding: "6px 12px",
-                fontSize: 12,
-                background: "#f0f0f0",
-                border: "none",
-                borderRadius: 6,
-                cursor: "pointer",
-              }}
-            >
-              ← Change search
-            </button>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
-                gap: 16,
-              }}
-            >
-              {results.map((r) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  onClick={() => r.publicUrl && handleSelect(r.publicUrl)}
-                  disabled={!r.publicUrl}
-                  style={{
-                    padding: 0,
-                    border: "2px solid #ddd",
-                    borderRadius: 8,
-                    overflow: "hidden",
-                    background: "#fff",
-                    cursor: r.publicUrl ? "pointer" : "not-allowed",
-                  }}
-                >
-                  {r.publicUrl ? (
-                    <img
-                      src={r.publicUrl}
-                      alt={r.englishTitle ?? r.chineseTitle ?? r.id}
-                      style={{
-                        width: "100%",
-                        height: 140,
-                        objectFit: "contain",
-                        display: "block",
-                      }}
-                    />
-                  ) : (
-                    <div
-                      style={{
-                        width: "100%",
-                        height: 140,
-                        background: "#f0f0f0",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      No image
-                    </div>
-                  )}
-                  <div
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {cutoutPaths!.map((p, idx) => {
+                const active = selectedFlavorIdx === idx;
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setSelectedFlavorIdx(idx)}
+                    title={`Flavor ${idx + 1}`}
                     style={{
-                      padding: 8,
-                      fontSize: 12,
-                      textAlign: "left",
-                      color: "#333",
+                      padding: 2,
+                      border: active ? "2px solid #228BE6" : "2px solid #DEE2E6",
+                      borderRadius: 8,
+                      background: active ? "#E7F5FF" : "#fff",
+                      cursor: "pointer",
+                      width: 76,
+                      height: 76,
+                      overflow: "hidden",
+                      margin: "0 auto",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      transition: "border-color 0.12s, background 0.12s",
                     }}
                   >
-                    {r.englishTitle || r.chineseTitle || r.id}
-                  </div>
-                </button>
-              ))}
+                    <img
+                      src={`file://${p}`}
+                      alt={`Flavor ${idx + 1}`}
+                      style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                    />
+                  </button>
+                );
+              })}
             </div>
-          </>
+          </div>
         )}
-        {!loading && results.length > 0 && (
-          <p style={{ marginTop: 12, fontSize: 12, color: "#666" }}>
-            No match? Click "Change search" to try a different name.
-          </p>
-        )}
-        <button
-          type="button"
-          onClick={onClose}
-          disabled={replacing}
-          style={{
-            marginTop: 16,
-            padding: "8px 16px",
-            cursor: replacing ? "wait" : "pointer",
-          }}
-        >
-          Cancel
-        </button>
+
+        {/* Right content area */}
+        <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
+          <h2 style={{ margin: "0 0 16px", fontSize: 20 }}>
+            {results.length > 0 ? "Choose a product" : "Search database by product name"}
+          </h2>
+
+          {loading ? (
+            <p style={{ color: "#666" }}>Searching database…</p>
+          ) : results.length === 0 ? (
+            <>
+              {searchedOnce && (
+                <p style={{ color: "#c92a2a", marginBottom: 12 }}>
+                  No matching products found. Try a different name.
+                </p>
+              )}
+              <p style={{ color: "#666", marginBottom: 12 }}>
+                Enter or edit the product name, then click Search.
+              </p>
+              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="e.g. Baby Bok Choy"
+                  style={{
+                    flex: 1,
+                    padding: "10px 12px",
+                    fontSize: 14,
+                    border: "1px solid #ddd",
+                    borderRadius: 8,
+                  }}
+                  onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                />
+                <button
+                  type="button"
+                  onClick={handleSearch}
+                  style={{
+                    padding: "10px 20px",
+                    background: "#228BE6",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    fontWeight: 600,
+                  }}
+                >
+                  Search
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => { setResults([]); setSearchedOnce(false); }}
+                style={{
+                  marginBottom: 12,
+                  padding: "6px 12px",
+                  fontSize: 12,
+                  background: "#f0f0f0",
+                  border: "none",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                }}
+              >
+                ← Change search
+              </button>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+                {results.map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => r.publicUrl && handleSelect(r.publicUrl)}
+                    disabled={!r.publicUrl}
+                    style={{
+                      padding: 0,
+                      border: "2px solid #ddd",
+                      borderRadius: 8,
+                      overflow: "hidden",
+                      background: "#fff",
+                      cursor: r.publicUrl ? "pointer" : "not-allowed",
+                    }}
+                  >
+                    {r.publicUrl ? (
+                      <img
+                        src={r.publicUrl}
+                        alt={r.englishTitle ?? r.chineseTitle ?? r.id}
+                        style={{ width: "100%", height: 140, objectFit: "contain", display: "block" }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          width: "100%",
+                          height: 140,
+                          background: "#f0f0f0",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        No image
+                      </div>
+                    )}
+                    <div style={{ padding: 8, fontSize: 12, textAlign: "left", color: "#333" }}>
+                      {r.englishTitle || r.chineseTitle || r.id}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {!loading && results.length > 0 && (
+            <p style={{ marginTop: 12, fontSize: 12, color: "#666" }}>
+              Click a result to download and replace. The card will show progress.
+            </p>
+          )}
+
+          <button type="button" onClick={onClose} style={{ marginTop: 16, padding: "8px 16px", cursor: "pointer" }}>
+            Cancel
+          </button>
+        </div>
       </div>
     </div>
   );

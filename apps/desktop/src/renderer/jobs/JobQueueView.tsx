@@ -136,10 +136,13 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
     }
   };
 
-  const handleQueueJob = () => {
+  const handleQueueJob = async () => {
     if (draftingJobId && draftingJob) {
-      startJob(draftingJobId);
-      onOpenDraft?.(draftingJob);  // Navigate to editor immediately — items stream in
+      await startJob(draftingJobId);
+      const latest = getJob(draftingJobId) ?? draftingJob;
+      if (latest.status === "queued" || latest.status === "processing") {
+        onOpenDraft?.(latest);
+      }
       setDraftingJobId(null);
     }
   };
@@ -233,12 +236,27 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
       </div>
 
       {/* Department Overview */}
-      <DepartmentOverview
-        jobs={jobs}
-        availableDepartments={availableDepartments}
-        templateId={templateId}
-        onDepartmentClick={handleDepartmentClick}
-      />
+      {availableDepartments.length === 0 ? (
+        <div style={{
+          marginTop: 16,
+          padding: "14px 16px",
+          background: "#fef2f2",
+          border: "1px solid #fecaca",
+          borderRadius: 10,
+          color: "#b91c1c",
+          fontSize: 13,
+          lineHeight: 1.5,
+        }}>
+          This template has no department regions yet. Open it in the template editor and add at least one department area before uploading discounts.
+        </div>
+      ) : (
+        <DepartmentOverview
+          jobs={jobs}
+          availableDepartments={availableDepartments}
+          templateId={templateId}
+          onDepartmentClick={handleDepartmentClick}
+        />
+      )}
 
       {/* ── Bulk Discount Upload ── */}
       <div style={{

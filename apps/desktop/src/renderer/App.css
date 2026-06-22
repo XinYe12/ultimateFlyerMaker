@@ -1,6 +1,6 @@
 .app-root {
   height: 100vh;
-  padding: 32px;
+  padding: 10px 24px;
   box-sizing: border-box;
   background: var(--color-bg-subtle);
   font-family: var(--font-sans);
@@ -8,7 +8,7 @@
 }
 
 .app-header {
-  margin-bottom: 20px;
+  margin-bottom: 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -144,6 +144,86 @@
   border-radius: 2px;
   transition: width 0.4s ease;
   min-width: 4px;
+}
+
+/* Full-editor block layer while XLSX / automation pipeline is running */
+.ufm-editor-canvas-viewport {
+  position: relative;
+  height: calc(100vh - 180px);
+  min-height: 420px;
+  overflow: auto;
+}
+
+.ufm-editor-canvas-viewport--locked {
+  overflow: hidden;
+}
+
+.ufm-editor-canvas-viewport--chrome-collapsed {
+  height: calc(100vh - 70px);
+}
+
+.ufm-editor-blocker {
+  position: absolute;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(248, 250, 252, 0.82);
+  backdrop-filter: blur(2px);
+  cursor: wait;
+  pointer-events: all;
+}
+.ufm-editor-blocker__panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 420px;
+  padding: 24px 28px;
+  background: #fff;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.12);
+  text-align: center;
+}
+.ufm-editor-blocker__spin {
+  width: 28px;
+  height: 28px;
+  border: 3px solid #dbeafe;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: ufm-banner-spin 0.7s linear infinite;
+}
+.ufm-editor-blocker__message {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2937;
+}
+.ufm-editor-blocker__progress {
+  margin: 0;
+  font-size: 13px;
+  color: #4b5563;
+}
+.ufm-editor-blocker__bar {
+  width: 100%;
+  height: 6px;
+  background: #dbeafe;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.ufm-editor-blocker__bar > div {
+  height: 100%;
+  background: #3b82f6;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+  min-width: 4px;
+}
+.ufm-editor-blocker__hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #6b7280;
 }
 
 

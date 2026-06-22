@@ -228,10 +228,15 @@ export default function FlyerExportRenderer({
                 if (!cardLayout || cardLayout.length === 0) return null;
 
                 const cardRegion = deptDef.region;
+                const deptArea = (page as any).departmentAreas?.find(
+                  (a: { departmentKey: string }) => a.departmentKey === deptId
+                );
+                const layoutRows = deptArea?.rows ?? deptDef.rows;
 
                 const placements = layoutCardRows({
                   cards: cardLayout,
                   region: cardRegion,
+                  rows: layoutRows,
                   pageId: page.pageId,
                   regionId: deptId,
                 });
@@ -239,6 +244,7 @@ export default function FlyerExportRenderer({
                 const cardRects = computeCardRects({
                   cards: cardLayout,
                   region: cardRegion,
+                  rows: layoutRows,
                 });
 
                 return (

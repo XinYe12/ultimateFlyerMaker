@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeImage, session } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeImage, session, Notification } from "electron";
 import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
@@ -9,6 +9,8 @@ import "./loadEnv.js";
 
 import { processFlyerImage } from "./imagePipeline.js";
 import { ingestPhoto, ingestPhotoPhase1, ingestPhotoPhase2 } from "./ingestion/ingestPhoto.js";
+import sizeOf from "image-size";
+import { decideSizeFromAspectRatio } from "../../../shared/flyer/layout/sizeFromImage.js";
 import { runCutout } from "./cutoutClient.js";
 import { addShadowToCutout } from "./ingestion/addShadow.js";
 import { parseDiscountText } from "./ipc/parseDiscountText.js";
@@ -39,16 +41,23 @@ import { initSerperScorer, shutdownSerperScorer } from "./ingestion/serperScorer
 import { recordSerperRejection, recordManualGoogleAccepted } from "./ingestion/serperSignalService.js";
 import { getSerperLearningStats } from "./ipc/getSerperLearningStats.js";
 import { testGeminiConnection } from "./ingestion/imageEmbeddingService.js";
-import { parseTemplateFromImages } from "./ipc/parseTemplateFromImages.js";
+import { loadTemplateFromImages, probeTemplateImages } from "./ipc/loadTemplateFromImages.js";
+import { regenerateUnderprint, persistTemplateAssets } from "./ipc/generateUnderprint.js";
 import "./net/longFetch.js";
 import log from "./logger.js";
 
 /* ---------- Process-level startup clock (captured before app.whenReady()) ---------- */
 const PROCESS_T0 = Date.now();
+const APP_USER_MODEL_ID = "com.united.ufm";
 
 /* ---------- ESM __dirname fix ---------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/* ---------- App icon path (dev vs packaged) ---------- */
+const APP_ICON_PATH = app.isPackaged
+  ? path.join(process.resourcesPath, "icon.png")
+  : path.join(__dirname, "../../assets/icon.png");
 
 /* ---------- Crash sentinel ---------- */
 const SENTINEL_PATH = path.join(app.getPath("userData"), ".ufm-running");
@@ -92,6 +101,53 @@ function safeSend(channel, data) {
     }
   } catch (err) {
     console.warn(`[safeSend] dropped ${channel}:`, err?.message ?? err);
+  }
+}
+
+/* ---------- Native system notifications ---------- */
+const completedJobNotifications = new Set();
+const jobNamesById = new Map();
+
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function getCompletedItemCount(result) {
+  const processedImages = Array.isArray(result?.processedImages) ? result.processedImages : [];
+  const doneImages = processedImages.filter(item => item?.status === "done" || item?.result).length;
+  if (doneImages > 0) return doneImages;
+  if (processedImages.length > 0) return processedImages.length;
+
+  const discountLabels = Array.isArray(result?.discountLabels) ? result.discountLabels : [];
+  return discountLabels.length > 0 ? discountLabels.length : null;
+}
+
+function notifyJobComplete(jobId, result) {
+  if (!jobId || completedJobNotifications.has(jobId)) return;
+  completedJobNotifications.add(jobId);
+
+  if (!Notification.isSupported()) {
+    console.warn("[notifications] System notifications are not supported on this platform.");
+    return;
+  }
+
+  const jobName = jobNamesById.get(jobId);
+  const itemCount = getCompletedItemCount(result);
+  const title = "Flyer automation finished";
+  const detail = itemCount == null
+    ? "Your flyer automation job is ready to review."
+    : `${itemCount} product${itemCount === 1 ? "" : "s"} processed and ready to review.`;
+  const body = jobName ? `${jobName}: ${detail}` : detail;
+
+  try {
+    const notification = new Notification({ title, body, silent: false, icon: APP_ICON_PATH });
+    notification.on("click", focusMainWindow);
+    notification.show();
+  } catch (err) {
+    console.warn("[notifications] Failed to show completion notification:", err?.message ?? err);
   }
 }
 
@@ -436,22 +492,24 @@ ipcMain.handle("ufm:restoreOriginalCutout", async (_event, args) => {
 const JOBS_FILE = path.join(app.getPath("userData"), "flyer-jobs.json");
 
 ipcMain.handle("ufm:saveJobs", async (_event, data) => {
+  const tmp = JOBS_FILE + ".tmp";
   try {
-    fs.writeFileSync(JOBS_FILE, JSON.stringify(data), "utf-8");
+    await fs.promises.writeFile(tmp, JSON.stringify(data), "utf-8");
+    await fs.promises.rename(tmp, JOBS_FILE);
     return { ok: true };
   } catch (err) {
     log.error("[saveJobs] failed:", err);
+    try { await fs.promises.unlink(tmp); } catch {}
     return { ok: false, error: String(err) };
   }
 });
 
 ipcMain.handle("ufm:loadJobs", async () => {
   try {
-    if (!fs.existsSync(JOBS_FILE)) return [];
-    const raw = fs.readFileSync(JOBS_FILE, "utf-8");
+    const raw = await fs.promises.readFile(JOBS_FILE, "utf-8");
     return JSON.parse(raw);
   } catch (err) {
-    log.error("[loadJobs] failed:", err);
+    if (err.code !== "ENOENT") log.error("[loadJobs] failed:", err);
     return [];
   }
 });
@@ -558,7 +616,17 @@ ipcMain.handle("ufm:rerunCutout", async (_, id, originalPath, model) => {
         borderAlpha: cutoutResult.borderAlpha,
         bboxAreaRatio: cutoutResult.bboxAreaRatio,
       });
-      safeSend("ufm:cutoutComplete", { id, cutoutPath, layout: { size: "SMALL" } });
+      let layout = { size: "SMALL" };
+      try {
+        let { width, height } = sizeOf(cutoutPath);
+        if (cutoutPath.includes(".shadow.png") && width > 200 && height > 200) {
+          width -= 200;
+          height -= 200;
+        }
+        const ar = (typeof width === "number" && typeof height === "number") ? width / height : null;
+        layout.size = decideSizeFromAspectRatio(ar);
+      } catch {}
+      safeSend("ufm:cutoutComplete", { id, cutoutPath, layout });
     } catch (err) {
       safeSend("ufm:cutoutError", { id, error: err?.message ?? String(err) });
     }
@@ -600,12 +668,39 @@ ipcMain.handle("ufm:parseDiscountText", async (event, ...args) => {
   }
 });
 
-/* ---------- IPC: template import from images ---------- */
-ipcMain.handle("ufm:parseTemplateFromImages", async (event, imagePaths) => {
+/* ---------- IPC: template import from images (manual setup) ---------- */
+ipcMain.handle("ufm:probeTemplateImages", async (event, imagePaths) => {
   try {
-    return await parseTemplateFromImages(event, imagePaths);
+    return await probeTemplateImages(event, imagePaths);
   } catch (err) {
-    log.error("[ufm:parseTemplateFromImages]", err);
+    log.error("[ufm:probeTemplateImages]", err);
+    throw err;
+  }
+});
+
+ipcMain.handle("ufm:loadTemplateFromImages", async (event, payload) => {
+  try {
+    return await loadTemplateFromImages(event, payload);
+  } catch (err) {
+    log.error("[ufm:loadTemplateFromImages]", err);
+    throw err;
+  }
+});
+
+ipcMain.handle("ufm:regenerateUnderprint", async (event, payload) => {
+  try {
+    return await regenerateUnderprint(event, payload);
+  } catch (err) {
+    log.error("[ufm:regenerateUnderprint]", err);
+    throw err;
+  }
+});
+
+ipcMain.handle("ufm:persistTemplateAssets", async (event, templateId, pages) => {
+  try {
+    return await persistTemplateAssets(event, templateId, pages);
+  } catch (err) {
+    log.error("[ufm:persistTemplateAssets]", err);
     throw err;
   }
 });
@@ -694,75 +789,99 @@ ipcMain.handle("ufm:openGoogleSearchWindow", async (_, query) => {
   });
 });
 
-ipcMain.handle("ufm:downloadAndIngestFromUrl", async (_, publicUrl) => {
+// Track AbortControllers for in-flight downloadAndIngest calls, keyed by jobId.
+const activeDownloadControllers = new Map();
+
+ipcMain.handle("ufm:cancelReplacementJob", async (_, jobId) => {
+  const controller = activeDownloadControllers.get(jobId);
+  if (controller) controller.abort();
+});
+
+ipcMain.handle("ufm:downloadAndIngestFromUrl", async (_, jobId, publicUrl) => {
   if (!publicUrl || !String(publicUrl).trim()) {
     throw new Error("Missing publicUrl");
   }
   const url = String(publicUrl).trim();
+  const controller = new AbortController();
+  if (jobId) activeDownloadControllers.set(jobId, controller);
+  const { signal } = controller;
 
-  // Handle base64 data: URLs (Google thumbnail drag gives data:image/jpeg;base64,...)
-  if (url.startsWith("data:image/")) {
-    const [header, base64Data] = url.split(",");
-    const extMatch = header.match(/data:image\/(\w+)/);
-    const rawExt = extMatch ? extMatch[1].toLowerCase() : "jpg";
-    const safeExt = /^(jpg|jpeg|png|gif|webp)$/.test(rawExt) ? `.${rawExt}` : ".jpg";
+  try {
+    // Handle base64 data: URLs (Google thumbnail drag gives data:image/jpeg;base64,...)
+    if (url.startsWith("data:image/")) {
+      if (signal.aborted) throw Object.assign(new Error("Cancelled by user"), { name: "AbortError" });
+      const [header, base64Data] = url.split(",");
+      const extMatch = header.match(/data:image\/(\w+)/);
+      const rawExt = extMatch ? extMatch[1].toLowerCase() : "jpg";
+      const safeExt = /^(jpg|jpeg|png|gif|webp)$/.test(rawExt) ? `.${rawExt}` : ".jpg";
+      const tempPath = path.join(os.tmpdir(), `ufm-download-${Date.now()}${safeExt}`);
+      console.log(`[downloadAndIngest] decoding data: URL (${Math.round(base64Data.length * 3 / 4)} bytes) → ${tempPath}`);
+      await fs.promises.writeFile(tempPath, Buffer.from(base64Data, "base64"));
+      if (signal.aborted) {
+        await fs.promises.unlink(tempPath).catch(() => {});
+        throw Object.assign(new Error("Cancelled by user"), { name: "AbortError" });
+      }
+      try {
+        const result = await ingestPhoto(tempPath);
+        return { path: tempPath, result };
+      } catch (err) {
+        await fs.promises.unlink(tempPath).catch(() => {});
+        throw err;
+      }
+    }
+
+    const ext = path.extname(new URL(url).pathname) || ".jpg";
+    const safeExt = /^\.(jpg|jpeg|png|gif|webp)$/i.test(ext) ? ext : ".jpg";
     const tempPath = path.join(os.tmpdir(), `ufm-download-${Date.now()}${safeExt}`);
-    console.log(`[downloadAndIngest] decoding data: URL (${Math.round(base64Data.length * 3 / 4)} bytes) → ${tempPath}`);
-    await fs.promises.writeFile(tempPath, Buffer.from(base64Data, "base64"));
+
     try {
+      console.log(`[downloadAndIngest] fetching: ${url}`);
+      const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+      const ACCEPT = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
+      // Use Electron's session.fetch so Chromium's network stack (cookies, proxy) is used.
+      // Try multiple Referer strategies: some sites block google.com referer (hotlink protection),
+      // others require their own origin, others work with no Referer at all.
+      const referers = [
+        "https://www.google.com/",
+        new URL(url).origin + "/",
+        null,
+      ];
+      let res;
+      for (const referer of referers) {
+        const headers = { "User-Agent": UA, "Accept": ACCEPT };
+        if (referer) headers["Referer"] = referer;
+        res = await fetch(url, { headers, signal });
+        if (res.status !== 403) break;
+        console.log(`[downloadAndIngest] 403 with Referer=${referer ?? "none"}, retrying…`);
+      }
+      if (res.status === 403) throw new Error("Image blocked (403 Forbidden). Save the image to your computer and drag the local file instead.");
+      if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+
+      const contentType = (res.headers.get("content-type") || "").toLowerCase();
+      console.log(`[downloadAndIngest] content-type: ${contentType}, ext: ${safeExt}`);
+      if (!contentType.startsWith("image/")) {
+        throw new Error(
+          `URL did not return an image (content-type: ${contentType || "unknown"}). Try right-clicking the image and saving it, then drag the local file.`
+        );
+      }
+
+      const ab = await res.arrayBuffer();
+      if (signal.aborted) {
+        await fs.promises.unlink(tempPath).catch(() => {});
+        throw Object.assign(new Error("Cancelled by user"), { name: "AbortError" });
+      }
+      console.log(`[downloadAndIngest] downloaded ${ab.byteLength} bytes → ${tempPath}`);
+      await fs.promises.writeFile(tempPath, Buffer.from(ab));
       const result = await ingestPhoto(tempPath);
       return { path: tempPath, result };
     } catch (err) {
-      await fs.promises.unlink(tempPath).catch(() => {});
+      try {
+        await fs.promises.unlink(tempPath).catch(() => {});
+      } catch (_) {}
       throw err;
     }
-  }
-
-  const ext = path.extname(new URL(url).pathname) || ".jpg";
-  const safeExt = /^\.(jpg|jpeg|png|gif|webp)$/i.test(ext) ? ext : ".jpg";
-  const tempPath = path.join(os.tmpdir(), `ufm-download-${Date.now()}${safeExt}`);
-
-  try {
-    console.log(`[downloadAndIngest] fetching: ${url}`);
-    const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-    const ACCEPT = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
-    // Use Electron's session.fetch so Chromium's network stack (cookies, proxy) is used.
-    // Try multiple Referer strategies: some sites block google.com referer (hotlink protection),
-    // others require their own origin, others work with no Referer at all.
-    const referers = [
-      "https://www.google.com/",
-      new URL(url).origin + "/",
-      null,
-    ];
-    let res;
-    for (const referer of referers) {
-      const headers = { "User-Agent": UA, "Accept": ACCEPT };
-      if (referer) headers["Referer"] = referer;
-      res = await fetch(url, { headers });
-      if (res.status !== 403) break;
-      console.log(`[downloadAndIngest] 403 with Referer=${referer ?? "none"}, retrying…`);
-    }
-    if (res.status === 403) throw new Error("Image blocked (403 Forbidden). Save the image to your computer and drag the local file instead.");
-    if (!res.ok) throw new Error(`Download failed: ${res.status}`);
-
-    const contentType = (res.headers.get("content-type") || "").toLowerCase();
-    console.log(`[downloadAndIngest] content-type: ${contentType}, ext: ${safeExt}`);
-    if (!contentType.startsWith("image/")) {
-      throw new Error(
-        `URL did not return an image (content-type: ${contentType || "unknown"}). Try right-clicking the image and saving it, then drag the local file.`
-      );
-    }
-
-    const ab = await res.arrayBuffer();
-    console.log(`[downloadAndIngest] downloaded ${ab.byteLength} bytes → ${tempPath}`);
-    await fs.promises.writeFile(tempPath, Buffer.from(ab));
-    const result = await ingestPhoto(tempPath);
-    return { path: tempPath, result };
-  } catch (err) {
-    try {
-      await fs.promises.unlink(tempPath).catch(() => {});
-    } catch (_) {}
-    throw err;
+  } finally {
+    if (jobId) activeDownloadControllers.delete(jobId);
   }
 });
 
@@ -780,6 +899,19 @@ ipcMain.handle("ufm:testFirestore", async () => {
 
 ipcMain.handle("ufm:testGemini", async () => {
   return testGeminiConnection();
+});
+
+/* ---------- IPC: confirm dialog ---------- */
+ipcMain.handle("ufm:showConfirmDialog", async (_, { message, detail, confirmLabel = "Confirm", cancelLabel = "Cancel" } = {}) => {
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: "question",
+    buttons: [confirmLabel, cancelLabel],
+    defaultId: 1,
+    cancelId: 1,
+    message: message || "",
+    detail: detail || "",
+  });
+  return response === 0;
 });
 
 /* ---------- IPC: file picker dialog ---------- */
@@ -862,6 +994,8 @@ const jobProcessor = getJobProcessor();
 
 ipcMain.handle("ufm:startJob", async (event, job) => {
   console.log("[main] Starting job:", job.id, job.name);
+  completedJobNotifications.delete(job.id);
+  jobNamesById.set(job.id, job.name || "Flyer automation");
   jobProcessor.enqueue(job);
   return { queued: true, jobId: job.id };
 });
@@ -1182,6 +1316,19 @@ ipcMain.handle("ufm:getQuotaStatus", async () => {
   }
 });
 
+/* ---------- Show file in OS explorer ---------- */
+ipcMain.handle("ufm:showItemInFolder", (_event, rawPath) => {
+  let filePath = String(rawPath || "");
+  if (filePath.startsWith("file://")) {
+    filePath = decodeURIComponent(new URL(filePath).pathname);
+    // On Windows the pathname starts with /C:/... — strip the leading slash
+    if (process.platform === "win32" && filePath.startsWith("/")) {
+      filePath = filePath.slice(1);
+    }
+  }
+  shell.showItemInFolder(filePath);
+});
+
 /* ---------- Native context menu ---------- */
 ipcMain.on("ufm:showContextMenu", (event, { itemId, actions }) => {
   const template = actions.map((action) => ({
@@ -1202,6 +1349,9 @@ const REQUIRED_KEYS = [
 ];
 const OPTIONAL_KEYS = [
   { key: "SERPER_API_KEY", label: "Serper API Key", description: "Enables Google image search for products", url: "https://serper.dev/api-key" },
+  { key: "GEMINI_API_KEY", label: "Gemini API Key", description: "Required for DB ingestion vision/embeddings", url: "https://aistudio.google.com/apikey" },
+  { key: "GEMINI_MODEL", label: "Gemini Vision Model", description: "Gemini model for DB ingestion vision. Auto-detected if blank; set to e.g. gemini-2.0-flash if auto-detection fails.", url: "https://ai.google.dev/gemini-api/docs/models" },
+  { key: "DEEPSEEK_MODEL", label: "DeepSeek Model", description: "DeepSeek model for product parsing", url: "https://api-docs.deepseek.com/" },
 ];
 
 function getMissingRequiredKeys() {
@@ -1221,6 +1371,9 @@ function validateEnv() {
 app.whenReady().then(async () => {
   const phases = {};
   phases.whenReady = Date.now() - PROCESS_T0;
+  if (process.platform === "win32") {
+    app.setAppUserModelId(APP_USER_MODEL_ID);
+  }
 
   // Show splash immediately so the user sees something right away.
   createSplashWindow();
@@ -1339,9 +1492,12 @@ app.whenReady().then(async () => {
     });
     jobProcessor.on("complete", (jobId, result) => {
       safeSend("ufm:jobComplete", { jobId, result });
+      notifyJobComplete(jobId, result);
+      jobNamesById.delete(jobId);
     });
     jobProcessor.on("error", (jobId, error) => {
       safeSend("ufm:jobError", { jobId, error: error?.message || String(error) });
+      jobNamesById.delete(jobId);
     });
     jobProcessor.on("started", (jobId, data) => {
       safeSend("ufm:jobStarted", { jobId, ...data });
@@ -1351,6 +1507,7 @@ app.whenReady().then(async () => {
     });
     jobProcessor.on("aborted", (jobId) => {
       safeSend("ufm:jobAborted", { jobId });
+      jobNamesById.delete(jobId);
     });
   } catch (err) {
     log.error("App startup failed:", err);

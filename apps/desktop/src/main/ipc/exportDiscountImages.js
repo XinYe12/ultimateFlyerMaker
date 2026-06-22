@@ -1,5 +1,16 @@
 // NOTE: PNG rendering removed - now returns structured text data only
 
+import { parseRegularPriceField, isPureUnitMarker } from "./parseDiscountXlsx.js";
+
+function sanitizeRegularPrice(val) {
+  if (val == null || val === "") return "";
+  const fromParser = parseRegularPriceField(val);
+  if (fromParser) return fromParser;
+  const s = String(val).trim();
+  if (isPureUnitMarker(s)) return "";
+  return s;
+}
+
 function pickTitleData(item) {
   const d = item?.result?.discount;
 
@@ -89,24 +100,21 @@ export async function exportDiscountImages(items) {
       quantity = parseInt(multiBuyMatch[1], 10);
     }
 
-    // Single price with no unit → default to /ea
-    const isMultiBuy = /^\d+\s+FOR\s+\$/i.test(after);
-    if (after && !unit && !isMultiBuy) {
-      unit = "ea";
-    }
-
     // Always push one result per item so discountLabels[i] aligns with placement i
+    const rawSize =
+      discount.size ??
+      item.result.title?.size ??
+      item.result.llmResult?.items?.[0]?.size ??
+      "";
+    const size = isPureUnitMarker(rawSize) ? "" : String(rawSize).trim();
+
     results.push({
       id: item.id,
       title: {
         en: titleData.en || "",
         zh: titleData.zh || "",
-        size:
-          discount.size ??
-          item.result.title?.size ??
-          item.result.llmResult?.items?.[0]?.size ??
-          "",
-        regularPrice: discount.regularPrice ?? "",
+        size,
+        regularPrice: sanitizeRegularPrice(discount.regularPrice ?? before),
       },
       price: {
         display: after || "",

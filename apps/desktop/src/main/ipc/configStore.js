@@ -15,7 +15,8 @@ export function loadUserConfig() {
     const raw = fs.readFileSync(configPath(), "utf8");
     const config = JSON.parse(raw);
     for (const [key, value] of Object.entries(config)) {
-      if (typeof value === "string" && value.trim() && !process.env[key]) {
+      // User settings always win over .env defaults so preferences persist across restarts.
+      if (typeof value === "string" && value.trim()) {
         process.env[key] = value;
       }
     }

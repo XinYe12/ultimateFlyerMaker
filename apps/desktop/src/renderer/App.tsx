@@ -1,19 +1,22 @@
 // apps/desktop/src/renderer/App.tsx
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
 
 import "./App.css";
 import DraftSavedToast from "./components/DraftSavedToast";
 import EditorHeader from "./components/EditorHeader";
+import EditorAutomationBlocker from "./components/EditorAutomationBlocker";
 import ErrorBoundary from "./components/ErrorBoundary";
 import RecoveryOverlay from "./components/RecoveryOverlay";
+
 import EditorSidebar from "./editor/EditorSidebar";
+import ProjectImagePanel, { PanelImageItem } from "./editor/ProjectImagePanel";
 import AddProductDialog, { AddProductData } from "./editor/AddProductDialog";
 
 import { useIngestQueue } from "./useIngestQueue";
 import { useJobQueue } from "./hooks/useJobQueue";
-import { IngestItem, FlyerJob, DepartmentId, CardLayout, ReplacementJob } from "./types";
+import { IngestItem, FlyerJob, DepartmentId, CardLayout, CardDef, ReplacementJob } from "./types";
 import EditorCanvas from "./editor/EditorCanvas";
 import DbSearchModal from "./editor/DbSearchModal";
 import GoogleSearchModal from "./editor/GoogleSearchModal";
@@ -21,26 +24,44 @@ import DiscountDetailsDialog from "./editor/DiscountDetailsDialog";
 import DaysBannerEditDialog from "./editor/DaysBannerEditDialog";
 import SeriesFlavorPicker from "./editor/SeriesFlavorPicker";
 import CheckingPanel from "./editor/CheckingPanel";
-import { loadFlyerTemplateConfig, isCardDepartment, findPageForDepartment } from "./editor/loadFlyerTemplateConfig";
-import { clearDepartmentDraft } from "./editor/draftStorage";
 import { autoLayoutCards } from "../../../shared/flyer/layout/autoLayoutCards";
+import { loadFlyerTemplateConfig, isCardDepartment, findPageForDepartment, CustomFlyerTemplateConfig, type FlyerTemplateConfig } from "./editor/loadFlyerTemplateConfig";
+import { clearDepartmentDraft } from "./editor/draftStorage";
 import { CARD_GAP } from "../../../shared/flyer/layout/layoutCardRows";
 import JobQueueView from "./jobs/JobQueueView";
 import DbUploadView from "./db-upload/DbUploadView";
 import TemplateSelectView from "./editor/TemplateSelectView";
+import ImportTemplateFromImagesDialog from "./editor/ImportTemplateFromImagesDialog";
+import { saveCustomTemplate, saveCustomTemplateWithAssets } from "./editor/customTemplateStorage";
+import { reconcileCardLayoutForDepartment, defaultRowsForDepartment } from "./editor/templateDepartmentLayout";
+import { applyTextStylePatch, type TextFieldSection } from "./editor/textFieldStyle";
 import SettingsView from "./settings/SettingsView";
 import SetupView from "./settings/SetupView";
 import WorkflowProgressBar from "./components/WorkflowProgressBar";
 import DepartmentSaveProgress from "./components/DepartmentSaveProgress";
 import type { DbBatchProgressEvent, DbPipelineTimingMs } from "./global";
 
-type AppView = "setup" | "home" | "templateSelect" | "queue" | "editor" | "db-upload" | "settings";
+type AppView = "setup" | "home" | "templateSelect" | "importTemplate" | "queue" | "editor" | "db-upload" | "settings";
 export type DeptSaveEntry = { dept: string; done: number; total: number; status: "saving" | "done" | "error" };
+
+const DEPT_LABELS: Record<string, string> = {
+  grocery: "Grocery",
+  frozen: "Frozen",
+  hot_food: "Hot Food",
+  sushi: "Sushi",
+  meat: "Meat",
+  seafood: "Seafood",
+  fruit: "Fruit",
+  vegetable: "Vegetable",
+  hot_sale: "Hot Sale",
+  produce: "Produce",
+};
 
 export default function App() {
   // ---------------- VIEW STATE ----------------
   const [view, setView] = useState<AppView>("home");
   const [settingsReturnView, setSettingsReturnView] = useState<AppView>("home");
+  const [editingTemplate, setEditingTemplate] = useState<CustomFlyerTemplateConfig | null>(null);
 
   // Check for missing required API keys on mount — show setup screen if needed
   useEffect(() => {
@@ -79,8 +100,20 @@ export default function App() {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [copiedItem, setCopiedItem] = useState<IngestItem | null>(null);
   const [replacementJobs, setReplacementJobs] = useState<ReplacementJob[]>([]);
+  const [chromeCollapsed, setChromeCollapsed] = useState<boolean>(() =>
+    localStorage.getItem("ufm_chrome_collapsed") === "1"
+  );
+  const toggleChrome = () => {
+    setChromeCollapsed(v => {
+      const next = !v;
+      localStorage.setItem("ufm_chrome_collapsed", next ? "1" : "0");
+      return next;
+    });
+  };
   const multiFlavorSessionRef = useRef<Map<string, string[]>>(new Map());
   const prevCardItemIdsRef = useRef<Set<string>>(new Set());
+  /** After explicit Clear Department, skip auto-creating an empty card grid until items are added. */
+  const suppressEmptyCardLayoutRef = useRef(false);
   const [batchUpload, setBatchUpload] = useState<{ total: number; processed: number; isActive: boolean } | null>(null);
   const [discountDetailsDialog, setDiscountDetailsDialog] = useState<{
     itemId: string;
@@ -97,8 +130,18 @@ export default function App() {
   const seriesAutoShownRef = useRef<Set<string>>(new Set());
   // Holds accepted Serper items for DB promotion on export (updated whenever editor queue changes)
   const serperPromotionRef = useRef<Array<{ en: string; zh: string; size: string; cutoutPath: string }>>([]);
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [imagePanelOpen, setImagePanelOpen] = useState(false);
   const [showAddProductDialog, setShowAddProductDialog] = useState(false);
+  const [editorImportActive, setEditorImportActive] = useState(false);
+  const [editorImportProgress, setEditorImportProgress] = useState({ done: 0, total: 0 });
+  const editorImportJobIdRef = useRef<string | null>(null);
+  const [processorStatus, setProcessorStatus] = useState<{
+    isProcessing: boolean;
+    currentJobId: string | null;
+    queueLength: number;
+  }>({ isProcessing: false, currentJobId: null, queueLength: 0 });
   const [originalDiscounts, setOriginalDiscounts] = useState<any[]>([]);
   const [showCheckingPanel, setShowCheckingPanel] = useState(false);
   const [editMode, setEditMode] = useState(false);
@@ -107,12 +150,65 @@ export default function App() {
   const [departmentLocked, setDepartmentLocked] = useState(false);
   const [flyerExported, setFlyerExported] = useState(false);
   const [departmentSaves, setDepartmentSaves] = useState<DeptSaveEntry[]>([]);
+  const [showRecoveryOverlay, setShowRecoveryOverlay] = useState(false);
+
+  const liveViewingJob = viewingJob
+    ? (jobs.find(j => j.id === viewingJob.id) ?? viewingJob)
+    : null;
+
+  const isXlsxParsing = Boolean(
+    liveViewingJob?.discount?.type === "xlsx"
+    && (liveViewingJob.discount.status === "pending"
+      || liveViewingJob.discount.status === "parsing")
+  );
+
+  const jobClaimsActive = liveViewingJob?.status === "queued"
+    || liveViewingJob?.status === "processing";
+
+  const isViewingJobInProcessor = Boolean(
+    liveViewingJob
+    && (
+      processorStatus.currentJobId === liveViewingJob.id
+      || (liveViewingJob.status === "queued" && processorStatus.queueLength > 0)
+    )
+  );
+
+  const isEditorImportInProcessor = Boolean(
+    editorImportActive
+    && editorImportJobIdRef.current
+    && (
+      processorStatus.currentJobId === editorImportJobIdRef.current
+      || processorStatus.queueLength > 0
+    )
+  );
+
+  const isJobAutomationRunning = jobClaimsActive && isViewingJobInProcessor;
+
+  const isEditorAutomationActive = view === "editor"
+    && !showRecoveryOverlay
+    && (
+      isXlsxParsing
+      || isJobAutomationRunning
+      || isEditorImportInProcessor
+    );
+
+  const editorAutomationMessage = isXlsxParsing
+    ? "Loading discount spreadsheet…"
+    : "Searching for product images…";
+
+  const editorAutomationProgress = isJobAutomationRunning
+    ? {
+        done: liveViewingJob?.progress?.processedImages ?? 0,
+        total: liveViewingJob?.progress?.totalImages ?? 0,
+      }
+    : isEditorImportInProcessor
+      ? editorImportProgress
+      : { done: 0, total: 0 };
 
   const [toastState, setToastState] = useState<{ visible: boolean; message: string; variant: "success" | "error" }>({
     visible: false, message: "Draft saved", variant: "success",
   });
   const shownErrorIds = useRef<Set<string>>(new Set(jobs.filter(j => j.status === "failed").map(j => j.id)));
-  const [showRecoveryOverlay, setShowRecoveryOverlay] = useState(false);
   const [startupTiming, setStartupTiming] = useState<{
     totalMs: number;
     rendererReadyMs: number;
@@ -123,7 +219,8 @@ export default function App() {
   >([]);
   const editorSyncRunCount = useRef(0);
   const lastViewingJobIdRef = useRef<string | null>(null);
-  const templateConfigRef = useRef<any>(null);
+  const templateConfigRef = useRef<FlyerTemplateConfig | null>(null);
+  const [templateConfig, setTemplateConfig] = useState<FlyerTemplateConfig | null>(null);
   const xlsxItemsLoadedRef = useRef(false);
 
   // Phase-2 cutout results arrive via push channel — register once on mount
@@ -207,6 +304,9 @@ export default function App() {
   // On mount: if we're recovering from a crash, show progress overlay then auto-hide
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    editorImportJobIdRef.current = null;
+    setEditorImportActive(false);
+    setEditorImportProgress({ done: 0, total: 0 });
     window.ufm.didCrashLastRun().then((crashed: boolean) => {
       if (!crashed) return;
       setShowRecoveryOverlay(true);
@@ -216,6 +316,33 @@ export default function App() {
       if (timeoutId) clearTimeout(timeoutId);
     };
   }, []);
+
+  // Poll main-process job queue so the editor block layer clears after restart/abort/complete
+  useEffect(() => {
+    if (view !== "editor") return;
+    let cancelled = false;
+    const poll = () => {
+      window.ufm.getJobQueueStatus().then((status) => {
+        if (cancelled) return;
+        setProcessorStatus(status);
+      }).catch(() => {});
+    };
+    poll();
+    const id = window.setInterval(poll, 700);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [view, viewingJob?.id, editorImportActive]);
+
+  // Keep viewingJob in sync when automation reaches a terminal state
+  useEffect(() => {
+    if (!viewingJob) return;
+    const live = jobs.find(j => j.id === viewingJob.id);
+    if (!live || live.status === viewingJob.status) return;
+    const terminal = live.status === "completed" || live.status === "failed" || live.status === "drafting";
+    if (terminal) setViewingJob(live);
+  }, [jobs, viewingJob?.id, viewingJob?.status]);
 
   // Fetch startup timing from the main process once the renderer is mounted.
   // rendererReadyMs = now - t0Absolute is the true user-felt startup time.
@@ -233,14 +360,16 @@ export default function App() {
 
   // Escape key exits edit mode
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setEditMode(false); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !isEditorAutomationActive) setEditMode(false);
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [isEditorAutomationActive]);
 
   // Ctrl+C / Ctrl+V — copy-paste product cards in the editor
   useEffect(() => {
-    if (view !== "editor") return;
+    if (view !== "editor" || isEditorAutomationActive) return;
     const handler = (e: KeyboardEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
@@ -257,12 +386,20 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [view, selectedItemId, copiedItem, editorQueue, addItem]);
+  }, [view, isEditorAutomationActive, selectedItemId, copiedItem, editorQueue, addItem]);
 
   // Auto-exit edit mode when switching away from card department
   useEffect(() => {
     if (!isDeptCardBased()) setEditMode(false);
   }, [department]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Close transient editor UI while automation is running
+  useEffect(() => {
+    if (!isEditorAutomationActive) return;
+    setImagePanelOpen(false);
+    setShowAddProductDialog(false);
+    setEditMode(false);
+  }, [isEditorAutomationActive]);
 
   // Sync items from job state to editorQueue as they stream in
   useEffect(() => {
@@ -299,12 +436,34 @@ export default function App() {
         slotIndex: img.slotIndex,
       });
     });
-  }, [view, viewingJob?.id, jobs]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    if (liveJob.department && templateConfigRef.current) {
+      const mergedIds = [
+        ...editorQueueRef.current.map(it => it.id),
+        ...newImages.map((img: any) => img.id),
+      ];
+      const uniqueIds = [...new Set(mergedIds)];
+      setCardLayouts(prev => {
+        const layout = reconcileCardLayoutForDepartment(
+          templateConfigRef.current,
+          liveJob.department,
+          uniqueIds,
+          prev[liveJob.department],
+          { targetRows: userRowCounts[liveJob.department] ?? defaultRowsForDepartment(templateConfigRef.current, liveJob.department) }
+        );
+        if (layout === prev[liveJob.department]) return prev;
+        return { ...prev, [liveJob.department]: layout };
+      });
+    }
+  }, [view, viewingJob?.id, jobs, userRowCounts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // load template config → extract available departments
   useEffect(() => {
+    setTemplateConfig(null);
+    templateConfigRef.current = null;
     loadFlyerTemplateConfig(templateId).then(config => {
       templateConfigRef.current = config;
+      setTemplateConfig(config);
       const depts = new Set<string>();
       config.pages.forEach(page => {
         Object.keys(page.departments).forEach(d => depts.add(d));
@@ -315,10 +474,55 @@ export default function App() {
         setDepartment(deptList[0] ?? "grocery");
       }
     });
-  }, [templateId]);
+  }, [templateId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Get the current department's card layout
   const currentCardLayout = cardLayouts[department] ?? null;
+
+  const hydrateDepartmentCardLayout = useCallback((
+    dept: string,
+    items: IngestItem[],
+    jobCardLayouts?: Record<string, CardLayout>
+  ) => {
+    const config = templateConfigRef.current;
+    if (!config) {
+      if (jobCardLayouts && Object.keys(jobCardLayouts).length > 0) {
+        setCardLayouts(prev => ({ ...prev, ...jobCardLayouts }));
+      }
+      return;
+    }
+
+    const page = findPageForDepartment(config, dept);
+    const deptDef = page?.departments[dept];
+    if (!deptDef || !isCardDepartment(deptDef)) return;
+
+    const doneIds = items
+      .filter((it: IngestItem) => it.status === "done" || it.status === "processing_cutout" || it.status === "cutout_error")
+      .map(it => it.id);
+    const targetRows = userRowCounts[dept] ?? defaultRowsForDepartment(config, dept);
+
+    setUserRowCounts(prev => (
+      prev[dept] != null ? prev : { ...prev, [dept]: targetRows }
+    ));
+
+    setCardLayouts(prev => {
+      const base = jobCardLayouts ? { ...prev, ...jobCardLayouts } : prev;
+      const existing = jobCardLayouts?.[dept] ?? base[dept];
+      const layout = reconcileCardLayoutForDepartment(
+        config,
+        dept,
+        doneIds,
+        existing,
+        { targetRows }
+      );
+
+      prevCardItemIdsRef.current = new Set(
+        layout.filter(c => c.itemId).map(c => c.itemId as string)
+      );
+
+      return { ...base, [dept]: layout };
+    });
+  }, [userRowCounts]);
 
   // Card layout undo history (per department, state-based for re-render)
   const [cardLayoutHistory, setCardLayoutHistory] = useState<Record<string, CardLayout[]>>({});
@@ -338,6 +542,18 @@ export default function App() {
       return { ...prev, [department]: layout };
     });
   }, [department]);
+
+  const handleApplyTextStyleGlobally = useCallback((section: TextFieldSection, patch: Partial<CardDef>) => {
+    setCardLayouts(prev => {
+      const next: Record<string, CardLayout> = { ...prev };
+      for (const dept of Object.keys(next)) {
+        const layout = next[dept];
+        if (!layout?.length) continue;
+        next[dept] = layout.map(c => c.itemId ? applyTextStylePatch(c, patch) : c);
+      }
+      return next;
+    });
+  }, []);
 
   const undoCardLayout = useCallback(() => {
     setCardLayoutHistory(h => {
@@ -457,20 +673,53 @@ export default function App() {
 
   // Check if current department is card-based
   const isDeptCardBased = useCallback(() => {
-    const config = templateConfigRef.current;
-    if (!config) return false;
-    const page = findPageForDepartment(config, department);
+    if (!templateConfig) return false;
+    const page = findPageForDepartment(templateConfig, department);
     if (!page) return false;
     const deptDef = page.departments[department];
     return deptDef ? isCardDepartment(deptDef) : false;
-  }, [department]);
+  }, [department, templateConfig]);
+
+  // When template config loads (or department changes), ensure the active card department has a grid.
+  useEffect(() => {
+    if (view !== "editor" || !templateConfig) return;
+
+    const page = findPageForDepartment(templateConfig, department);
+    const deptDef = page?.departments[department];
+    if (!deptDef || !isCardDepartment(deptDef)) return;
+
+    setCardLayouts(prev => {
+      if (prev[department]?.length) return prev;
+      if (suppressEmptyCardLayoutRef.current) return prev;
+
+      const doneIds = editorQueueRef.current
+        .filter((it: IngestItem) =>
+          it.status === "done" || it.status === "processing_cutout" || it.status === "cutout_error"
+        )
+        .map(it => it.id);
+      const targetRows = userRowCounts[department] ?? defaultRowsForDepartment(templateConfig, department);
+      const layout = reconcileCardLayoutForDepartment(
+        templateConfig,
+        department,
+        doneIds,
+        prev[department],
+        { targetRows }
+      );
+
+      prevCardItemIdsRef.current = new Set(
+        layout.filter(c => c.itemId).map(c => c.itemId as string)
+      );
+
+      return { ...prev, [department]: layout };
+    });
+  }, [view, templateConfig, department, userRowCounts]);
 
   // Auto-generate card layout when items arrive for a card-based department
   useEffect(() => {
     if (view !== "editor") return;
     if (!isDeptCardBased()) return;
 
-    const config = templateConfigRef.current;
+    const config = templateConfig;
     if (!config) return;
     const page = findPageForDepartment(config, department);
     if (!page) return;
@@ -478,17 +727,43 @@ export default function App() {
     if (!deptDef || !isCardDepartment(deptDef)) return;
 
     const doneItems = editorQueue.filter((it: any) => it.status === "done" || it.status === "processing_cutout" || it.status === "cutout_error");
+    const doneIds = doneItems.map((it: any) => it.id);
+    const existing = cardLayouts[department];
 
     // If there are items but no card layout, auto-generate
-    if (doneItems.length > 0 && !cardLayouts[department]) {
-      const layout = autoLayoutCards({
-        itemIds: doneItems.map((it: any) => it.id),
-        regionWidth: deptDef.region.width,
-      });
+    if (doneIds.length > 0 && !existing?.length) {
+      const layout = reconcileCardLayoutForDepartment(
+        config,
+        department,
+        doneIds,
+        undefined,
+        { targetRows: userRowCounts[department] ?? defaultRowsForDepartment(config, department) }
+      );
       setCardLayouts(prev => ({ ...prev, [department]: layout }));
+      return;
     }
-    // If no items and no card layout, generate empty card layout
-    else if (doneItems.length === 0 && !cardLayouts[department]) {
+
+    // If items changed and layout is stale, rebuild
+    if (doneIds.length > 0) {
+      const layout = reconcileCardLayoutForDepartment(
+        config,
+        department,
+        doneIds,
+        existing,
+        { targetRows: userRowCounts[department] ?? defaultRowsForDepartment(config, department) }
+      );
+      if (layout !== existing) {
+        setCardLayouts(prev => ({ ...prev, [department]: layout }));
+      }
+      return;
+    }
+
+    // No items yet — ensure an empty template grid exists for this department
+    if (!existing?.length) {
+      if (suppressEmptyCardLayoutRef.current) {
+        suppressEmptyCardLayoutRef.current = false;
+        return;
+      }
       const layout = autoLayoutCards({
         itemIds: [],
         regionWidth: deptDef.region.width,
@@ -496,7 +771,7 @@ export default function App() {
       });
       setCardLayouts(prev => ({ ...prev, [department]: layout }));
     }
-  }, [view, department, editorQueue, cardLayouts, isDeptCardBased]);
+  }, [view, department, editorQueue, cardLayouts, isDeptCardBased, userRowCounts, templateConfig]);
 
   // When a new item finishes ingestion in card mode, assign it to an empty card.
   // If all cards are occupied, regenerate the layout to accommodate the new items.
@@ -504,7 +779,7 @@ export default function App() {
     if (view !== "editor") return;
     if (!isDeptCardBased()) return;
     const layout = cardLayouts[department];
-    if (!layout) return;
+    if (!layout?.length) return;
 
     const doneItems = editorQueue.filter((it: any) => it.status === "done" || it.status === "processing_cutout" || it.status === "cutout_error");
     const assignedItemIds = new Set(layout.filter(c => c.itemId).map(c => c.itemId));
@@ -545,13 +820,17 @@ export default function App() {
       const deptDef = page?.departments[department];
       if (deptDef && isCardDepartment(deptDef)) {
         const allIds = doneItems.map((it: any) => it.id);
-        const newLayout = autoLayoutCards({ itemIds: allIds, regionWidth: deptDef.region.width, targetRows: userRowCounts[department] });
+        const newLayout = autoLayoutCards({
+          itemIds: allIds,
+          regionWidth: deptDef.region.width,
+          targetRows: userRowCounts[department],
+        });
         setCardLayouts(prev => ({ ...prev, [department]: newLayout }));
       }
     } else if (changed) {
       setCardLayouts(prev => ({ ...prev, [department]: updated }));
     }
-  }, [view, department, editorQueue, cardLayouts, isDeptCardBased]);
+  }, [view, department, editorQueue, cardLayouts, isDeptCardBased, userRowCounts]);
 
   // Sync editor state back to the current job
   useEffect(() => {
@@ -634,10 +913,9 @@ export default function App() {
       }));
 
     loadItems(ingestItems);
+    xlsxItemsLoadedRef.current = true;
 
-    if (job.result.discountLabels) {
-      setDiscountLabels(job.result.discountLabels);
-    }
+    setDiscountLabels(job.result.discountLabels ?? []);
 
     // Populate originalDiscounts from job processedImages for verification
     const discountsFromJob = job.result.processedImages
@@ -649,7 +927,20 @@ export default function App() {
     setDepartmentLocked(job.result?.departmentLocked ?? false);
 
     setSlotOverrides(job.slotOverrides ?? {});
-    setCardLayouts(job.cardLayouts ?? {});
+    // When templateId is changing, templateConfigRef still holds the old config — using it
+    // would produce card slots sized for the wrong template. Skip hydration; restore any
+    // saved layout from the job directly, or clear so the "ensure card layout" effect
+    // rebuilds from the correct config once it arrives.
+    if (job.templateId !== templateId) {
+      setCardLayouts(prev => {
+        const saved = job.cardLayouts?.[job.department];
+        if (saved?.length) return { ...prev, [job.department]: saved };
+        const { [job.department]: _removed, ...rest } = prev;
+        return rest;
+      });
+    } else {
+      hydrateDepartmentCardLayout(job.department, ingestItems, job.cardLayouts);
+    }
     setView("editor");
   };
 
@@ -658,9 +949,13 @@ export default function App() {
     setViewingJob(job);
     setTemplateId(job.templateId);
     setDepartment(job.department);
+    setSelectedItemId(null);
+    xlsxItemsLoadedRef.current = false;
+
+    let loadedItems: IngestItem[] = [];
 
     if (job.result?.processedImages?.length) {
-      const ingestItems: IngestItem[] = job.result.processedImages
+      loadedItems = job.result.processedImages
         .filter(img => img.status === "done" && img.result)
         .map(img => ({
           id: img.id,
@@ -670,13 +965,11 @@ export default function App() {
           slotIndex: img.slotIndex,
           placementOverride: (img as any).placementOverride,
         }));
-      loadItems(ingestItems);
+      loadItems(loadedItems);
+      xlsxItemsLoadedRef.current = true;
 
-      if (job.result.discountLabels) {
-        setDiscountLabels(job.result.discountLabels);
-      }
+      setDiscountLabels(job.result.discountLabels ?? []);
 
-      // Populate originalDiscounts from job processedImages for verification
       const discountsFromJob = job.result.processedImages
         .map((img: any) => img.result?.discount)
         .filter(Boolean);
@@ -685,15 +978,12 @@ export default function App() {
       setVerificationProgress(job.result?.verificationProgress ?? null);
       setDepartmentLocked(job.result?.departmentLocked ?? false);
     } else {
-      // No processed images yet
       const parsedItems = (job.discount as any)?.parsedItems;
       const isXlsx = (job.discount as any)?.type === "xlsx";
 
       if (isXlsx) {
-        xlsxItemsLoadedRef.current = false;
-
         if (parsedItems?.length) {
-          const syntheticItems: IngestItem[] = parsedItems.map(
+          loadedItems = parsedItems.map(
             (di: any, i: number) => ({
               id: crypto.randomUUID(),
               path: "",
@@ -717,9 +1007,8 @@ export default function App() {
             })
           );
           xlsxItemsLoadedRef.current = true;
-          loadItems(syntheticItems);
+          loadItems(loadedItems);
         } else {
-          // Still parsing — reactive effect will load items when ready
           loadItems([]);
         }
       } else {
@@ -733,7 +1022,19 @@ export default function App() {
     }
 
     setSlotOverrides(job.slotOverrides ?? {});
-    setCardLayouts(job.cardLayouts ?? {});
+    // Same guard as handleViewFlyer: if templateId is changing, templateConfigRef still
+    // has the old config. Avoid building a layout from wrong dimensions; let the
+    // "ensure card layout" effect rebuild once the new config arrives.
+    if (job.templateId !== templateId) {
+      setCardLayouts(prev => {
+        const saved = job.cardLayouts?.[job.department];
+        if (saved?.length) return { ...prev, [job.department]: saved };
+        const { [job.department]: _removed, ...rest } = prev;
+        return rest;
+      });
+    } else {
+      hydrateDepartmentCardLayout(job.department, loadedItems, job.cardLayouts);
+    }
     setView("editor");
   };
 
@@ -741,69 +1042,140 @@ export default function App() {
     const processingJob = jobs.find(
       j => j.department === dept && j.templateId === templateId && (j.status === "queued" || j.status === "processing")
     );
-    const draftingJob = jobs.find(
+    const draftingJobForDept = jobs.find(
       j => j.department === dept && j.templateId === templateId && j.status === "drafting"
     );
     const completedJob = jobs.find(
       j => j.department === dept && j.templateId === templateId && j.status === "completed"
     );
-    const jobToOpen = processingJob || draftingJob || completedJob;
-    const hasWork = jobToOpen && (
-      jobToOpen.images.length > 0 || (jobToOpen.result?.processedImages?.length ?? 0) > 0
-    );
-    if (hasWork) {
-      handleOpenDraft(jobToOpen!);
-    } else {
-      loadItems([]);
-      setDiscountLabels([]);
-      setDepartment(dept);
-      setViewingJob(jobToOpen ?? null);
+    const jobToOpen = processingJob || draftingJobForDept || completedJob;
+    if (jobToOpen) {
+      handleOpenDraft(jobToOpen);
+      return;
     }
+    // No job for this department yet
+    xlsxItemsLoadedRef.current = false;
+    prevCardItemIdsRef.current = new Set();
+    setSelectedItemId(null);
+    loadItems([]);
+    setDiscountLabels([]);
+    setOriginalDiscounts([]);
+    setVerificationDone(false);
+    setVerificationProgress(null);
+    setDepartmentLocked(false);
+    setSlotOverrides({});
+    setDepartment(dept);
+    setViewingJob(null);
+    hydrateDepartmentCardLayout(dept, []);
   };
 
-  // ---------------- REPLACE IMAGE IN-PLACE ----------------
-  const handleReplaceImage = async (itemId: string) => {
-    try {
-      const filePath = await window.ufm.openImageDialog();
-      if (!filePath) return;
+  // ---------------- IMAGE PANEL DATA ----------------
+  const allPanelItems = useMemo<PanelImageItem[]>(() => {
+    // Collect all candidates (may include XLSX ghost entries with no paths alongside real results)
+    const candidates: PanelImageItem[] = [];
 
-      const existingItem = editorQueue.find(item => item.id === itemId);
-      if (!existingItem) {
-        console.error("Item not found:", itemId);
-        return;
+    for (const item of editorQueue) {
+      const cutoutPath = item.result?.cutoutPath || null;
+      const inputPath = item.result?.inputPath || item.path || "";
+      if (!cutoutPath && !inputPath) continue;
+      const titleEn = (item.result as any)?.title?.en || (item.result as any)?.aiTitle?.en || "";
+      candidates.push({ id: item.id, cutoutPath, inputPath, titleEn, department });
+    }
+
+    for (const job of jobs) {
+      if (!job.result?.processedImages) continue;
+      for (const img of job.result.processedImages) {
+        const cutoutPath = img.result?.cutoutPath || null;
+        const inputPath = img.result?.inputPath || img.path || "";
+        if (!cutoutPath && !inputPath) continue;
+        const titleEn = (img.result as any)?.title?.en || (img.result as any)?.aiTitle?.en || "";
+        candidates.push({ id: img.id, cutoutPath, inputPath, titleEn, department: job.department });
       }
+    }
 
-      // Phase 2: record rejection signal if replacing a Serper-sourced image
-      if (existingItem.result?.matchSource === "serper") {
-        const ctx = (existingItem.result as any)._serperSignalCtx;
-        (window as any).ufm.recordSerperRejection({
-          url: ctx?.url ?? null,
-          domain: ctx?.domain ?? null,
-          productEn: existingItem.result?.discount?.en ?? "",
-          department: existingItem.result?.discount?.department ?? "",
-          reason: "rejected_user_swap",
-        }).catch(() => {});
+    // Deduplicate by (department, title) — XLSX jobs produce two records per product:
+    // an old placeholder (no paths, skipped above) and a real result. When the same title
+    // appears twice within a department, keep the version with the better paths.
+    const best = new Map<string, PanelImageItem>();
+    for (const item of candidates) {
+      const key = item.titleEn ? `${item.department}:${item.titleEn.toLowerCase()}` : `id:${item.id}`;
+      const existing = best.get(key);
+      if (!existing) {
+        best.set(key, item);
+      } else if (!existing.cutoutPath && item.cutoutPath) {
+        best.set(key, item);
       }
+    }
 
-      updateItem(itemId, { status: "running", path: filePath });
+    return [...best.values()];
+  }, [jobs, editorQueue, department]);
 
-      const result = await window.ufm.ingestPhoto(filePath);
+  const handlePanelImageDrop = useCallback((
+    targetItemId: string | null,
+    cutoutPath: string | null,
+    inputPath: string,
+    meta?: { cardId?: string; sourceItemId?: string }
+  ) => {
+    if (!cutoutPath && !inputPath) return;
 
+    const patchImagePaths = (itemId: string) => {
+      const existing = editorQueue.find((it: any) => it.id === itemId);
+      if (!existing) return;
       updateItem(itemId, {
-        status: "done",
-        path: filePath,
         result: {
-          ...result,
-          discount: existingItem?.result?.discount,
-          cutoutPaths: undefined,
-          allFlavorPaths: undefined,
-          pendingFlavorSelection: undefined,
-          subImageOverrides: undefined,
-        },
+          cutoutPath: cutoutPath ?? null,
+          cutoutPaths: cutoutPath ? [cutoutPath] : undefined,
+          inputPath: inputPath || existing.result?.inputPath,
+        } as any,
       });
-    } catch (err) {
-      console.error("Failed to replace image:", err);
-      updateItem(itemId, { status: "error", error: String(err) });
+    };
+
+    if (targetItemId) {
+      patchImagePaths(targetItemId);
+      return;
+    }
+
+    const { cardId, sourceItemId } = meta ?? {};
+    if (!cardId || !sourceItemId) return;
+
+    const layout = cardLayouts[department];
+    if (!layout?.length) return;
+    const cardIdx = layout.findIndex(c => c.id === cardId);
+    if (cardIdx < 0) return;
+
+    setCardLayouts(prev => {
+      const current = prev[department] ?? [];
+      const updated = current.map(c => {
+        if (c.id === cardId) return { ...c, itemId: sourceItemId };
+        if (c.itemId === sourceItemId) return { ...c, itemId: undefined };
+        return c;
+      });
+      return { ...prev, [department]: updated };
+    });
+
+    patchImagePaths(sourceItemId);
+  }, [editorQueue, updateItem, cardLayouts, department]);
+
+  // ---------------- REPLACE IMAGE IN-PLACE ----------------
+  const handleReplaceImage = async (itemId: string, targetFlavorIndex?: number) => {
+    const filePath = await window.ufm.openImageDialog();
+    if (!filePath) return;
+
+    const jobId = uuidv4();
+    setReplacementJobs(prev => [...prev, { id: jobId, itemId, url: filePath, status: "processing" }]);
+    try {
+      const result = await window.ufm.ingestPhoto(filePath);
+      if (targetFlavorIndex !== undefined) {
+        replaceFlavorAtIndex(itemId, { path: filePath, result }, targetFlavorIndex);
+      } else {
+        handleSearchReplace(itemId, { path: filePath, result });
+      }
+      setReplacementJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: "done" } : j));
+      setTimeout(() => setReplacementJobs(prev => prev.filter(j => j.id !== jobId)), 2000);
+    } catch (err: any) {
+      setReplacementJobs(prev => prev.map(j =>
+        j.id === jobId ? { ...j, status: "error", errorMessage: err?.message ?? String(err) } : j
+      ));
     }
   };
 
@@ -849,18 +1221,44 @@ export default function App() {
     });
   };
 
+  const replaceFlavorAtIndex = (itemId: string, data: { path: string; result: any }, targetIndex: number) => {
+    const existingItem = editorQueueRef.current.find((i: any) => i.id === itemId);
+    if (!existingItem) return;
+    const oldPaths: string[] = existingItem.result?.cutoutPaths
+      ?? (existingItem.result?.cutoutPath ? [existingItem.result.cutoutPath] : []);
+    const newCutoutPath: string = data.result?.cutoutPath ?? data.path;
+    const newPaths = oldPaths.map((p: string, i: number) => i === targetIndex ? newCutoutPath : p);
+    updateItem(itemId, {
+      status: "done",
+      path: data.path,
+      result: {
+        ...data.result,
+        discount: existingItem.result?.discount,
+        cutoutPath: newPaths[0],
+        cutoutPaths: newPaths.length > 1 ? newPaths : undefined,
+        allFlavorPaths: existingItem.result?.allFlavorPaths,
+        subImageOverrides: existingItem.result?.subImageOverrides,
+        pendingFlavorSelection: undefined,
+      },
+    });
+  };
+
   const enqueueReplacementJob = async (
     itemId: string,
     url: string,
     searchQuery: string,
     isMultiFlavor: boolean,
+    targetFlavorIndex?: number,
   ) => {
     const jobId = uuidv4();
     setReplacementJobs(prev => [...prev, { id: jobId, itemId, url, status: "processing" }]);
     try {
-      const data = await (window as any).ufm.downloadAndIngestFromUrl(url.trim());
+      const data = await window.ufm.downloadAndIngestFromUrl(jobId, url.trim());
 
-      if (isMultiFlavor) {
+      if (targetFlavorIndex != null) {
+        // Targeted 1-for-1 flavor slot replacement
+        replaceFlavorAtIndex(itemId, data, targetFlavorIndex);
+      } else if (isMultiFlavor) {
         const session = multiFlavorSessionRef.current;
         const existing = session.get(itemId) ?? [];
         const newPath: string = data.result?.cutoutPath ?? data.path;
@@ -887,11 +1285,29 @@ export default function App() {
       setReplacementJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: "done" } : j));
       setTimeout(() => setReplacementJobs(prev => prev.filter(j => j.id !== jobId)), 2000);
     } catch (err: any) {
+      // Silently drop cancelled jobs without showing an error state
+      if (err?.name === "AbortError" || err?.message === "Cancelled by user") {
+        setReplacementJobs(prev => prev.filter(j => j.id !== jobId));
+        return;
+      }
       setReplacementJobs(prev => prev.map(j =>
         j.id === jobId ? { ...j, status: "error", errorMessage: err?.message ?? String(err) } : j
       ));
       setTimeout(() => setReplacementJobs(prev => prev.filter(j => j.id !== jobId)), 10000);
     }
+  };
+
+  const enqueueDbReplacementJob = (
+    itemId: string,
+    publicUrl: string,
+    targetFlavorIndex?: number,
+  ) => {
+    void enqueueReplacementJob(itemId, publicUrl, "", false, targetFlavorIndex);
+  };
+
+  const cancelReplacementJob = (jobId: string) => {
+    (window as any).ufm.cancelReplacementJob(jobId);
+    setReplacementJobs(prev => prev.filter(j => j.id !== jobId));
   };
 
   const handleChooseDatabaseResults = (itemId: string) => {
@@ -1121,10 +1537,15 @@ export default function App() {
     setDiscountLabels((prev) => prev.filter((l) => l.id !== id));
   }, [remove]);
 
-  const handleDeleteDraft = () => {
+  const handleDeleteDraft = async () => {
     if (!viewingJob) return;
 
-    const confirmed = confirm(`Delete draft "${viewingJob.name}"?\n\nThis action cannot be undone.`);
+    const confirmed = await window.ufm.showConfirmDialog({
+      message: `Delete draft "${viewingJob.name}"?`,
+      detail: "This action cannot be undone.",
+      confirmLabel: "Delete",
+      cancelLabel: "Cancel",
+    });
     if (!confirmed) return;
 
     deleteJob(viewingJob.id);
@@ -1243,8 +1664,11 @@ export default function App() {
     setOriginalDiscounts(prev => [...prev, ...items]);
     setVerificationDone(false);
     setVerificationProgress(null);
+    setEditorImportActive(true);
+    setEditorImportProgress({ done: 0, total: items.length });
 
     const jobId = crypto.randomUUID();
+    editorImportJobIdRef.current = jobId;
     const job: FlyerJob = {
       id: jobId,
       name: "Editor import",
@@ -1264,12 +1688,18 @@ export default function App() {
     };
 
     const unsubFns: (() => void)[] = [];
-    const cleanup = () => unsubFns.forEach(fn => fn());
+    const cleanup = () => {
+      setEditorImportActive(false);
+      setEditorImportProgress({ done: 0, total: 0 });
+      editorImportJobIdRef.current = null;
+      unsubFns.forEach(fn => fn());
+    };
 
     unsubFns.push(
-      window.ufm.onJobItemComplete(({ jobId: jid, processedImage }: any) => {
+      window.ufm.onJobItemComplete(({ jobId: jid, processedImage, index, total }: any) => {
         if (jid !== jobId) return;
         if (processedImage?.id) addItem(processedImage as IngestItem);
+        setEditorImportProgress({ done: index + 1, total });
       })
     );
 
@@ -1279,6 +1709,14 @@ export default function App() {
         if (result?.discountLabels?.length) {
           setDiscountLabels((prev: any[]) => [...prev, ...result.discountLabels]);
         }
+        const count = Array.isArray(result?.processedImages) ? result.processedImages.length : null;
+        setToastState({
+          visible: true,
+          message: count != null
+            ? `Automation complete — ${count} product${count === 1 ? "" : "s"} ready`
+            : "Flyer automation complete",
+          variant: "success",
+        });
         cleanup();
       })
     );
@@ -1290,11 +1728,22 @@ export default function App() {
       })
     );
 
-    await window.ufm.startJob(job);
+    await window.ufm.startJob(job).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err ?? "Automation failed to start");
+      setToastState({ visible: true, message, variant: "error" });
+      cleanup();
+    });
   };
 
   // ---------------- CLEAR DEPARTMENT (wipe all products) ----------------
   const handleClearDepartment = () => {
+    if (viewingJob && (viewingJob.status === "processing" || viewingJob.status === "queued")) {
+      window.ufm.cancelJob(viewingJob.id);
+    }
+    suppressEmptyCardLayoutRef.current = true;
+    xlsxItemsLoadedRef.current = true;
+    prevCardItemIdsRef.current = new Set();
+    setSelectedItemId(null);
     loadItems([]);
     setDiscountLabels([]);
     setOriginalDiscounts([]);
@@ -1313,8 +1762,10 @@ export default function App() {
 
   // ---------------- CLEAR ALL DEPARTMENTS ----------------
   const handleClearAllDepartments = () => {
-    // Clear local editor state (same as clearing current dept)
-    loadItems([]);
+    suppressEmptyCardLayoutRef.current = true;
+    xlsxItemsLoadedRef.current = true;
+    prevCardItemIdsRef.current = new Set();
+    setSelectedItemId(null);
     setDiscountLabels([]);
     setOriginalDiscounts([]);
     setVerificationDone(false);
@@ -1335,9 +1786,14 @@ export default function App() {
     setViewingJob(null);
   };
 
-  const handleToggleLock = () => {
+  const handleToggleLock = async () => {
     if (departmentLocked) {
-      const ok = confirm("Unlock this department? You will need to re-verify before locking again.");
+      const ok = await window.ufm.showConfirmDialog({
+        message: "Unlock this department?",
+        detail: "You will need to re-verify before locking again.",
+        confirmLabel: "Unlock",
+        cancelLabel: "Cancel",
+      });
       if (!ok) return;
       setDepartmentLocked(false);
       setVerificationDone(false);
@@ -1376,7 +1832,7 @@ export default function App() {
     ? Math.max(...currentCardLayout.map((c) => c.row)) + 1
     : (userRowCounts[department] ?? 1);
 
-  // Effective col count = max cards in any single row
+  // Effective col count = max cards in any single row (for Flip control)
   const effectiveColCount = currentCardLayout && currentCardLayout.length > 0
     ? Math.max(...currentCardLayout.map((c) => c.order + 1))
     : 1;
@@ -1432,6 +1888,11 @@ export default function App() {
     }
     // Clean up editor state when leaving the editor view
     if (view === "editor" && step !== 3) {
+      // Flush pending editor state to the job before clearing viewingJob, so the
+      // effect (which guards on viewingJob) doesn't skip the last unsaved changes.
+      if (viewingJob) {
+        syncJobFromEditorItems(viewingJob.id, editorQueue, discountLabels, slotOverrides, cardLayouts, verificationDone, verificationProgress, departmentLocked);
+      }
       setViewingJob(null);
       setToastState(prev => ({ ...prev, visible: false }));
       editorSyncRunCount.current = 0;
@@ -1446,6 +1907,10 @@ export default function App() {
 
   const handleProgressBarExport = () => {
     if (view === "editor") {
+      // Flush pending editor state to the job before clearing viewingJob.
+      if (viewingJob) {
+        syncJobFromEditorItems(viewingJob.id, editorQueue, discountLabels, slotOverrides, cardLayouts, verificationDone, verificationProgress, departmentLocked);
+      }
       // Fire-and-forget: promote accepted Serper images to the product DB
       const toPromote = serperPromotionRef.current;
       if (toPromote.length > 0) {
@@ -1480,35 +1945,39 @@ export default function App() {
     <ErrorBoundary>
       <RecoveryOverlay visible={showRecoveryOverlay} />
       <div className="app-root">
-        <div className="app-header">
-          <button
-            type="button"
-            className="app-logo app-logo-btn"
-            onClick={() => setView("home")}
-            title="Home"
-          >
-            <svg className="app-logo-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect x="4" y="2" width="24" height="28" rx="2" stroke="currentColor" strokeWidth="2" fill="none"/>
-              <path d="M8 10h16M8 16h12M8 22h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-            </svg>
-            <span className="app-logo-text">Ultimate Flyer Maker</span>
-          </button>
-          <button
-            type="button"
-            className="app-quit-btn"
-            onClick={() => window.ufm.requestQuit()}
-            title="Quit application (your drafts are saved)"
-          >
-            Quit
-          </button>
-        </div>
+        {(!chromeCollapsed || view !== "editor") && (
+          <>
+            <div className="app-header">
+              <button
+                type="button"
+                className="app-logo app-logo-btn"
+                onClick={() => setView("home")}
+                title="Home"
+              >
+                <svg className="app-logo-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <rect x="4" y="2" width="24" height="28" rx="2" stroke="currentColor" strokeWidth="2" fill="none"/>
+                  <path d="M8 10h16M8 16h12M8 22h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+                <span className="app-logo-text">Ultimate Flyer Maker</span>
+              </button>
+              <button
+                type="button"
+                className="app-quit-btn"
+                onClick={() => window.ufm.requestQuit()}
+                title="Quit application (your drafts are saved)"
+              >
+                Quit
+              </button>
+            </div>
 
-        {view !== "setup" && view !== "home" && view !== "db-upload" && view !== "settings" && (
-          <WorkflowProgressBar
-            currentStep={workflowStep}
-            onNavigate={handleWorkflowNavigate}
-            onExportClick={allVerified ? handleProgressBarExport : undefined}
-          />
+            {view !== "setup" && view !== "home" && view !== "db-upload" && view !== "settings" && view !== "importTemplate" && view !== "templateSelect" && (
+              <WorkflowProgressBar
+                currentStep={workflowStep}
+                onNavigate={handleWorkflowNavigate}
+                onExportClick={allVerified ? handleProgressBarExport : undefined}
+              />
+            )}
+          </>
         )}
 
         {view === "setup" && (
@@ -1641,6 +2110,22 @@ export default function App() {
               setSelectedTemplateId(id);
               setView("queue");
             }}
+            onCreateNew={() => { setEditingTemplate(null); setView("importTemplate"); }}
+            onEdit={template => { setEditingTemplate(template); setView("importTemplate"); }}
+          />
+        )}
+
+        {view === "importTemplate" && (
+          <ImportTemplateFromImagesDialog
+            initialConfig={editingTemplate ?? undefined}
+            onParsed={async config => {
+              await saveCustomTemplateWithAssets(config);
+              setEditingTemplate(null);
+              setTemplateId(config.templateId);
+              setSelectedTemplateId(config.templateId);
+              setView("queue");
+            }}
+            onClose={() => { setEditingTemplate(null); setView("templateSelect"); }}
           />
         )}
 
@@ -1687,14 +2172,6 @@ export default function App() {
 
         {view === "editor" && (
           <>
-            <EditorHeader
-              viewingJob={viewingJob}
-              onDeleteDraft={handleDeleteDraft}
-              onAbortJob={handleAbortJob}
-            />
-
-            {viewingJob && (
-              <>
                 {/* Primary toolbar */}
                 <div style={{
                   display: "flex", alignItems: "center",
@@ -1703,9 +2180,17 @@ export default function App() {
                   borderRadius: "var(--radius-md)",
                   padding: "6px 10px",
                   gap: 4,
-                  marginBottom: 12,
+                  marginBottom: 8,
+                  pointerEvents: isEditorAutomationActive ? "none" : "auto",
+                  opacity: isEditorAutomationActive ? 0.55 : 1,
+                  transition: "opacity 0.15s",
                 }}>
-                  {/* Left: department picker */}
+                  {/* Viewing label */}
+                  <span style={{ fontSize: 12, color: "var(--color-text-muted)", whiteSpace: "nowrap", flexShrink: 0 }}>
+                    {viewingJob?.name ?? (DEPT_LABELS[department] ?? department.replace(/_/g, " "))}
+                  </span>
+                  <div style={{ width: 1, height: 20, background: "var(--color-border)", margin: "0 6px", flexShrink: 0 }} />
+                  {/* Department picker */}
                   <EditorSidebar
                     isOpen={sidebarOpen}
                     onToggle={() => setSidebarOpen((o) => !o)}
@@ -1718,9 +2203,26 @@ export default function App() {
                   />
 
                   {/* Separator */}
-                  {!departmentLocked && <div style={{ width: 1, height: 20, background: "var(--color-border)", margin: "0 6px" }} />}
+                  <div style={{ width: 1, height: 20, background: "var(--color-border)", margin: "0 6px" }} />
+
+                  {/* Image library toggle */}
+                  <button
+                    onClick={() => setImagePanelOpen(o => !o)}
+                    title="Image library — retrieve any project image"
+                    style={{
+                      ...toolbarBtnBase,
+                      background: imagePanelOpen ? "#eff6ff" : "transparent",
+                      border: imagePanelOpen ? "1px solid #93c5fd" : "1px solid transparent",
+                      color: imagePanelOpen ? "#2563eb" : "#6b7280",
+                    }}
+                    onMouseEnter={(e) => { if (!imagePanelOpen) e.currentTarget.style.background = "#f3f4f6"; }}
+                    onMouseLeave={(e) => { if (!imagePanelOpen) e.currentTarget.style.background = "transparent"; }}
+                  >
+                    ▤ Images
+                  </button>
 
                   {/* Action buttons */}
+                  {!departmentLocked && <div style={{ width: 1, height: 20, background: "var(--color-border)", margin: "0 6px" }} />}
                   {!departmentLocked && (
                     <button
                       onClick={() => setShowAddProductDialog(true)}
@@ -1839,31 +2341,74 @@ export default function App() {
                       </button>
                     </>
                   )}
+
+                  {/* Abort / Delete Draft — from former EditorHeader */}
+                  {(viewingJob?.status === "processing" || viewingJob?.status === "queued") && (
+                    <button
+                      type="button"
+                      onClick={handleAbortJob}
+                      style={{ ...toolbarBtnBase, background: "#dc2626", color: "#fff", marginLeft: 4 }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "#b91c1c"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "#dc2626"; }}
+                    >
+                      Abort
+                    </button>
+                  )}
+                  {viewingJob?.status === "drafting" && (
+                    <button
+                      type="button"
+                      onClick={handleDeleteDraft}
+                      style={{ ...toolbarBtnBase, background: "#dc2626", color: "#fff", marginLeft: 4 }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "#b91c1c"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "#dc2626"; }}
+                    >
+                      Delete Draft
+                    </button>
+                  )}
+
+                  {/* Chrome collapse toggle */}
+                  <div style={{ marginLeft: "auto" }} />
+                  <button
+                    type="button"
+                    onClick={toggleChrome}
+                    title={chromeCollapsed ? "Show header & progress bar" : "Hide header & progress bar"}
+                    style={{
+                      padding: "3px 8px", border: "1px solid var(--color-border)",
+                      borderRadius: 4, background: "none", cursor: "pointer",
+                      fontSize: 12, color: "#868E96", lineHeight: 1, flexShrink: 0,
+                    }}
+                  >
+                    {chromeCollapsed ? "▼" : "▲"}
+                  </button>
                 </div>
 
-                {(() => {
-                  const liveJob = viewingJob ? (jobs.find(j => j.id === viewingJob.id) ?? viewingJob) : null;
-                  const isJobProc = liveJob?.status === "processing" || liveJob?.status === "queued";
-                  const jobDone  = liveJob?.progress?.processedImages ?? 0;
-                  const jobTotal = liveJob?.progress?.totalImages ?? 0;
-                  return isJobProc ? (
-                    <div className="ufm-processing-banner">
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <div className="ufm-processing-banner__spin" />
-                        <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>
-                          Searching for product images…
-                          {jobTotal > 0 ? ` (${jobDone} / ${jobTotal} done)` : ""}
-                        </span>
-                      </div>
-                      {jobTotal > 0 && (
-                        <div className="ufm-processing-banner__bar">
-                          <div style={{ width: `${Math.round((jobDone / jobTotal) * 100)}%` }} />
-                        </div>
-                      )}
+                <div className={`ufm-editor-canvas-viewport${isEditorAutomationActive ? " ufm-editor-canvas-viewport--locked" : ""}${chromeCollapsed ? " ufm-editor-canvas-viewport--chrome-collapsed" : ""}`}
+                  style={{ display: "flex", flexDirection: "row", overflow: "hidden" }}
+                >
+                  {/* Left sidebar — collapses by shrinking width, no overlay */}
+                  <div style={{
+                    width: imagePanelOpen ? 220 : 0,
+                    flexShrink: 0,
+                    overflow: "hidden",
+                    transition: "width 0.22s ease",
+                    borderRight: imagePanelOpen ? "1px solid var(--color-border)" : "none",
+                  }}>
+                    <div style={{ width: 220, height: "100%" }}>
+                      <ProjectImagePanel
+                        items={allPanelItems}
+                        activeDepartment={department}
+                        onClose={() => setImagePanelOpen(false)}
+                      />
                     </div>
-                  ) : null;
-                })()}
-
+                  </div>
+                  {/* Canvas column — takes remaining space, scrolls independently */}
+                  <div style={{ flex: 1, position: "relative", overflow: "auto" }}>
+                    <EditorAutomationBlocker
+                      active={isEditorAutomationActive}
+                      message={editorAutomationMessage}
+                      progressDone={editorAutomationProgress.done}
+                      progressTotal={editorAutomationProgress.total}
+                    />
                 <EditorCanvas
                   editorQueue={editorQueue}
                   templateId={templateId}
@@ -1893,18 +2438,28 @@ export default function App() {
                   onDeleteSubImage={departmentLocked ? undefined : handleDeleteSubImage}
                   onCutoutErased={departmentLocked ? undefined : (id, newPath) => applyCutoutPatch(id, { cutoutPath: newPath })}
                   replacementJobs={replacementJobs}
+                  onCancelReplacementJob={cancelReplacementJob}
                   selectedItemId={selectedItemId}
                   onSelectItem={departmentLocked ? undefined : setSelectedItemId}
+                  onPanelImageDrop={departmentLocked ? undefined : handlePanelImageDrop}
+                  onApplyTextStyleGlobally={departmentLocked ? undefined : handleApplyTextStyleGlobally}
+                  departmentLabel={DEPT_LABELS[department] ?? department.replace(/_/g, " ")}
                 />
+                  </div>{/* end canvas column */}
+                </div>{/* end canvas viewport */}
 
-                {dbSearchItemId && (
-                  <DbSearchModal
-                    itemId={dbSearchItemId}
-                    initialQuery={dbSearchInitialQuery}
-                    onReplace={handleSearchReplace}
-                    onClose={() => setDbSearchItemId(null)}
-                  />
-                )}
+                {dbSearchItemId && (() => {
+                  const _dbItem = editorQueue.find((i: any) => i.id === dbSearchItemId);
+                  return (
+                    <DbSearchModal
+                      itemId={dbSearchItemId}
+                      initialQuery={dbSearchInitialQuery}
+                      cutoutPaths={_dbItem?.result?.cutoutPaths}
+                      onSelectProduct={enqueueDbReplacementJob}
+                      onClose={() => setDbSearchItemId(null)}
+                    />
+                  );
+                })()}
 
                 {googleSearchItemId && (
                   <GoogleSearchModal
@@ -1917,12 +2472,17 @@ export default function App() {
                     })()}
                     isMultiFlavor={googleSearchIsMultiFlavor}
                     jobs={replacementJobs.filter(j => j.itemId === googleSearchItemId)}
-                    onDropImage={(url) =>
+                    cutoutPaths={(() => {
+                      const _gi = editorQueue.find((i: any) => i.id === googleSearchItemId);
+                      return _gi?.result?.cutoutPaths;
+                    })()}
+                    onDropImage={(url, targetFlavorIndex) =>
                       enqueueReplacementJob(
                         googleSearchItemId,
                         url,
                         googleSearchInitialQuery,
                         googleSearchIsMultiFlavor,
+                        targetFlavorIndex,
                       )
                     }
                     onReplace={handleSearchReplace}
@@ -1983,11 +2543,10 @@ export default function App() {
                     onComplete={() => { setVerificationDone(true); setVerificationProgress(null); setShowCheckingPanel(false); }}
                     onReplaceImage={handleReplaceImage}
                     onSearchReplace={handleSearchReplace}
+                    onDbSelectProduct={enqueueDbReplacementJob}
                     onSaveDiscountDetails={handleSaveDiscountDetails}
                   />
                 )}
-              </>
-            )}
           </>
         )}
       </div>

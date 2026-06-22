@@ -11,6 +11,12 @@ export type DbSearchResult = {
   category?: string;
   publicUrl?: string;
   score: number;
+  // Price fields — present when product was saved from a flyer combination
+  salePrice?: string;
+  regularPrice?: string;
+  unit?: string;
+  quantity?: number | null;
+  source?: string;
 };
 
 export type GoogleSearchResult = {
@@ -158,7 +164,8 @@ declare global {
       testGemini: () => Promise<{ apiKeyPresent: boolean; vision: { ok: boolean; status?: number; body?: string; error?: string } | null; embed: { ok: boolean; status?: number; body?: string; error?: string } | null; error?: string }>;
 
       searchDatabaseByText: (query: string, limit?: number) => Promise<DbSearchResult[]>;
-      downloadAndIngestFromUrl: (publicUrl: string) => Promise<{ path: string; result: IngestResult }>;
+      downloadAndIngestFromUrl: (jobIdOrUrl: string, publicUrl?: string) => Promise<{ path: string; result: IngestResult }>;
+      cancelReplacementJob: (jobId: string) => Promise<void>;
       googleImageSearch: (query: string) => Promise<GoogleSearchResult[]>;
       openGoogleSearchWindow: (query: string) => Promise<void>;
 
@@ -251,6 +258,8 @@ declare global {
       showContextMenu: (itemId: string, actions: Array<{ id: string; label: string; enabled?: boolean }>) => void;
       onContextMenuAction: (cb: (data: { itemId: string; action: string }) => void) => () => void;
 
+      showConfirmDialog: (opts: { message: string; detail?: string; confirmLabel?: string; cancelLabel?: string }) => Promise<boolean>;
+
       getStartupTiming: () => Promise<{
         totalMs: number;
         t0Absolute: number;
@@ -274,6 +283,19 @@ declare global {
         firstPickRate: number;
         topDomains: Array<{ domain: string; acceptRate: number; total: number }>;
       } | null>;
+
+      probeTemplateImages: (imagePaths: string[]) => Promise<Array<{ path: string; width: number; height: number }>>;
+      loadTemplateFromImages: (payload: {
+        pages: Array<{ path: string; canvasWidth: number; canvasHeight: number; backgroundColor: string }>;
+      }) => Promise<import("./editor/loadFlyerTemplateConfig").CustomFlyerTemplateConfig>;
+      regenerateUnderprint: (payload: {
+        sourceImagePath: string;
+        outputPath: string;
+        canvasWidth: number;
+        canvasHeight: number;
+        areas: Array<{ x: number; y: number; w: number; h: number }>;
+      }) => Promise<string>;
+      persistTemplateAssets: (templateId: string, pages: unknown[]) => Promise<{ ok: boolean }>;
     };
   }
 }

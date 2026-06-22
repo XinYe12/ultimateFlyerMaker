@@ -30,8 +30,18 @@ contextBridge.exposeInMainWorld("ufm", {
     return ipcRenderer.invoke("ufm:searchDatabaseByText", query, limit);
   },
 
-  downloadAndIngestFromUrl: (publicUrl) => {
-    return ipcRenderer.invoke("ufm:downloadAndIngestFromUrl", publicUrl);
+  downloadAndIngestFromUrl: (jobIdOrUrl, publicUrlMaybe) => {
+    const looksLikeUrl = (v) =>
+      typeof v === "string"
+      && (v.startsWith("http://") || v.startsWith("https://") || v.startsWith("data:image/"));
+    const singleUrlArg = publicUrlMaybe === undefined && looksLikeUrl(jobIdOrUrl);
+    const jobId = singleUrlArg ? null : jobIdOrUrl;
+    const publicUrl = singleUrlArg ? jobIdOrUrl : publicUrlMaybe;
+    return ipcRenderer.invoke("ufm:downloadAndIngestFromUrl", jobId, publicUrl);
+  },
+
+  cancelReplacementJob: (jobId) => {
+    return ipcRenderer.invoke("ufm:cancelReplacementJob", jobId);
   },
 
   googleImageSearch: (query) => {
@@ -304,16 +314,27 @@ contextBridge.exposeInMainWorld("ufm", {
   // ---------- NATIVE CONTEXT MENU ----------
   showContextMenu: (itemId, actions) =>
     ipcRenderer.send("ufm:showContextMenu", { itemId, actions }),
+  showItemInFolder: (filePath) =>
+    ipcRenderer.invoke("ufm:showItemInFolder", filePath),
   onContextMenuAction: (callback) => {
     const handler = (_, data) => callback(data);
     ipcRenderer.on("ufm:contextMenuAction", handler);
     return () => ipcRenderer.removeListener("ufm:contextMenuAction", handler);
   },
 
+  // ---------- CONFIRM DIALOG ----------
+  showConfirmDialog: (opts) => ipcRenderer.invoke("ufm:showConfirmDialog", opts),
+
   // ---------- STARTUP TIMING ----------
   getStartupTiming: () => ipcRenderer.invoke("ufm:getStartupTiming"),
 
-  // ---------- TEMPLATE IMPORT ----------
-  parseTemplateFromImages: (imagePaths) =>
-    ipcRenderer.invoke("ufm:parseTemplateFromImages", imagePaths),
+  // ---------- TEMPLATE IMPORT (manual setup) ----------
+  probeTemplateImages: (imagePaths) =>
+    ipcRenderer.invoke("ufm:probeTemplateImages", imagePaths),
+  loadTemplateFromImages: (payload) =>
+    ipcRenderer.invoke("ufm:loadTemplateFromImages", payload),
+  regenerateUnderprint: (payload) =>
+    ipcRenderer.invoke("ufm:regenerateUnderprint", payload),
+  persistTemplateAssets: (templateId, pages) =>
+    ipcRenderer.invoke("ufm:persistTemplateAssets", templateId, pages),
 });

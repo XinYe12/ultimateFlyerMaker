@@ -9,28 +9,37 @@
 
 import fs from "fs";
 import path from "path";
+import { net } from "electron";
+import sharp from "sharp";
 import { runOCR } from "./ocrService.js";
 import { assertCanCallGemini, trackGeminiRequest } from "../ipc/quotaTracker.js";
-
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+import { resolveGeminiVisionModel } from '../config/geminiModels.js';
 
 /* ---------- Gemini vision ---------- */
 
-function readImageForGemini(imagePath) {
-  const ext = path.extname(imagePath).toLowerCase().replace(".", "");
-  const mimeType = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+async function readImageForGemini(imagePath, maxDim = 1536) {
   const stat = fs.statSync(imagePath);
   if (stat.size < 100) throw new Error(`Image file too small to be valid (${stat.size} bytes): ${imagePath}`);
-  const data = fs.readFileSync(imagePath, { encoding: "base64" });
-  if (!data) throw new Error(`Image read returned empty data: ${imagePath}`);
-  return { data, mimeType };
+  try {
+    const buf = await sharp(imagePath)
+      .resize(maxDim, maxDim, { fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    return { data: buf.toString("base64"), mimeType: "image/jpeg" };
+  } catch {
+    const ext = path.extname(imagePath).toLowerCase().replace(".", "");
+    const mimeType = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+    const data = fs.readFileSync(imagePath, { encoding: "base64" });
+    return { data, mimeType };
+  }
 }
 
 async function runGeminiVision(imagePath, ocrText) {
   const apiKey = String(process.env.GEMINI_API_KEY || "").trim();
   if (!apiKey) throw new Error("GEMINI_API_KEY missing");
 
-  const { data, mimeType } = readImageForGemini(imagePath);
+  const GEMINI_MODEL = await resolveGeminiVisionModel(apiKey);
+  const { data, mimeType } = await readImageForGemini(imagePath);
 
   const ocrContext = ocrText
     ? `\n\nOCR text extracted from this image (use to confirm names, brand, size):\n"""\n${ocrText}\n"""`
@@ -67,7 +76,7 @@ Return ONLY a JSON object — no markdown, no explanation.
   const timeout = setTimeout(() => controller.abort(), 40_000);
 
   try {
-    const res = await fetch(
+    const res = await net.fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
       {
         method: "POST",
@@ -115,35 +124,80 @@ Return ONLY a JSON object — no markdown, no explanation.
 }
 
 /**
+ * Local heuristic for scan-only cleanup. Catches obvious flyer title graphics when
+ * Gemini misclassifies stylized name/price art as a product photo.
+ */
+export function looksLikeFlyerTitleGraphic(ocrText) {
+  const text = String(ocrText || "").trim();
+  if (!text) return false;
+
+  const packagingSignals =
+    /\b(net\s*wt|ingredients|nutrition|allergen|upc|sku|distributed|manufactured|best\s+before|sell\s+by|packed|refrigerat)\b/i;
+  if (packagingSignals.test(text)) return false;
+  if (/\b\d+\s*(oz|fl\s*oz|ml|l|g|kg|lb|lbs)\b/i.test(text)) return false;
+
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length > 20) return false;
+
+  const hasPrice = /(?:\$\s*)?\d+\.\d{2}\b/.test(text) || /\$\s*\d+/.test(text);
+  const hasCategoryBanner =
+    /\b(hot\s*food|weekly\s+special|produce|seafood|meat|dairy|bakery|frozen|deli)\b/i.test(text);
+  const hasSpacedBanner = /\b(?:[A-Z]\s+){3,}[A-Z]\b/.test(text);
+
+  if (hasSpacedBanner || (hasCategoryBanner && words.length <= 12)) return true;
+  if (hasPrice && words.length <= 10 && text.length <= 100) return true;
+
+  return false;
+}
+
+async function readOcrText(imagePath) {
+  try {
+    const ocrResult = await runOCR(imagePath);
+    const texts = Array.isArray(ocrResult) ? (ocrResult[0]?.rec_texts ?? []) : [];
+    return texts.join(" ").trim();
+  } catch (err) {
+    console.warn("[imageEmbedding] OCR failed during classify:", err?.message?.slice(0, 80));
+    return "";
+  }
+}
+
+/**
  * Dedicated classification-only Gemini call.
  * Uses a focused binary prompt — no metadata fields — to avoid biasing Gemini
  * toward "isProduct: true" just to fill a schema.
  */
-async function runGeminiClassify(imagePath) {
+async function runGeminiClassify(imagePath, ocrText = "") {
   const apiKey = String(process.env.GEMINI_API_KEY || "").trim();
   if (!apiKey) throw new Error("GEMINI_API_KEY missing");
 
-  const { data, mimeType } = readImageForGemini(imagePath);
+  const GEMINI_MODEL = await resolveGeminiVisionModel(apiKey);
+  const { data, mimeType } = await readImageForGemini(imagePath);
 
-  const prompt = `You are reviewing images in a grocery store product database.
+  const ocrContext = ocrText
+    ? `\n\nOCR text extracted from this image (may include stylized flyer typography):\n"""\n${ocrText}\n"""`
+    : "\n\nNo OCR text was extracted — rely entirely on visual analysis.";
+
+  const prompt = `You are reviewing images in a grocery store product database cleanup scan.
 Decide whether this image shows a physical retail product (food, drink, packaged goods, produce, seafood, meat, dairy, etc.).
 
-Return {"isProduct": false} if the image is:
-- A plain text label, banner, title card, date card, or sale announcement
-- A store logo, flyer template, decorative graphic, or price tag with no product visible
-- A person, landscape, receipt, document, or anything that is not a physical sellable item
-- Blurry, blank, or completely unrecognizable
+Return {"isProduct": false} if the image is ANY of:
+- Plain text, banners, title cards, date labels, or sale announcements
+- Stylized/decorative product NAME text (cursive, outlined, shadowed flyer typography) on a plain or gradient background with NO visible physical product
+- Example: a graphic reading "Green Ton Choy" or a large standalone "1.88" price with decorative fonts but no food or packaging photographed
+- Store logos, flyer templates, section headers (e.g. "HOT FOOD", "WEEKLY SPECIAL"), or decorative graphics
+- Standalone price numbers or price tags with no product visible
+- People, landscapes, receipts, documents, or blank/unrecognizable images
 
-Return {"isProduct": true} only if a physical grocery/retail product is clearly visible.
+Return {"isProduct": true} ONLY if a physical grocery/retail product is clearly visible — not just its name written as graphic text.
 
 Reply with ONLY valid JSON — no markdown, no explanation:
-{"isProduct": true} or {"isProduct": false}`;
+{"isProduct": true} or {"isProduct": false}${ocrContext}`;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 40_000);
 
   try {
-    const res = await fetch(
+    const res = await net.fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
       {
         method: "POST",
@@ -177,7 +231,7 @@ Reply with ONLY valid JSON — no markdown, no explanation:
 
     const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
     const obj = JSON.parse(cleaned);
-    // Require explicit true — anything ambiguous is treated as a product (safe default)
+    // Require explicit true — ambiguous/missing values are treated as non-product for scan cleanup
     return obj?.isProduct === true;
   } catch (err) {
     clearTimeout(timeout);
@@ -207,10 +261,15 @@ export async function classifyImageAsProduct(imagePathOrUrl) {
   }
 
   try {
+    const ocrText = await readOcrText(localPath);
     assertCanCallGemini();
-    const isProduct = await runGeminiClassify(localPath);
+    let isProduct = await runGeminiClassify(localPath, ocrText);
     trackGeminiRequest();
-    return { isProduct };
+    if (isProduct && looksLikeFlyerTitleGraphic(ocrText)) {
+      console.log("[imageEmbedding] Classify override: flyer title graphic detected via OCR heuristic");
+      isProduct = false;
+    }
+    return { isProduct, ocrText };
   } finally {
     if (isUrl && localPath) {
       try {
@@ -294,7 +353,7 @@ async function geminiEmbed(text) {
   const timeout = setTimeout(() => controller.abort(), EMBED_TIMEOUT_MS);
 
   try {
-    const res = await fetch(
+    const res = await net.fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:embedContent?key=${apiKey}`,
       {
         method: "POST",
@@ -452,21 +511,22 @@ export async function getImageEmbedding(imagePath) {
  */
 export async function testGeminiConnection() {
   const apiKey = String(process.env.GEMINI_API_KEY || "").trim();
-  const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
   const result = { apiKeyPresent: !!apiKey, vision: null, embed: null };
 
   console.log("\n=== [testGemini] Starting connection test ===");
   console.log(`  API key: ${apiKey ? apiKey.slice(0, 8) + "…" + apiKey.slice(-4) : "(missing)"}`);
-  console.log(`  Vision model: ${model}`);
 
   if (!apiKey) {
     console.log("  RESULT: FAIL — GEMINI_API_KEY not set in .env");
     return { ...result, error: "GEMINI_API_KEY not set in .env" };
   }
 
+  const model = await resolveGeminiVisionModel(apiKey);
+  console.log(`  Vision model: ${model}`);
+
   // --- Vision (text-only ping — no image needed) ---
   try {
-    const res = await fetch(
+    const res = await net.fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
       {
         method: "POST",
@@ -490,7 +550,7 @@ export async function testGeminiConnection() {
 
   // --- Embed ---
   try {
-    const res = await fetch(
+    const res = await net.fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent?key=${apiKey}`,
       {
         method: "POST",

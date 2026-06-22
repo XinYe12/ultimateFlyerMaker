@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { CustomBoxDef, CustomFlyerTemplateConfig, CustomTemplatePage, DepartmentAreaDef } from "./loadFlyerTemplateConfig";
-import { saveCustomTemplate } from "./customTemplateStorage";
+import { saveCustomTemplate, saveCustomTemplateWithAssets } from "./customTemplateStorage";
 import ImportTemplateFromImagesDialog from "./ImportTemplateFromImagesDialog";
 
 const BUILDER_SCALE = 0.4;
@@ -64,6 +64,18 @@ function snap(v: number): number {
   return Math.round(v / SNAP_GRID) * SNAP_GRID;
 }
 
+function imageUrl(p?: string): string | undefined {
+  if (!p) return undefined;
+  if (p.startsWith("data:") || p.startsWith("http://") || p.startsWith("https://")) return p;
+  if (p.startsWith("file://")) return p;
+  if (p.startsWith("/")) return p;
+  return `file:///${p.replace(/\\/g, "/")}`;
+}
+
+const FIELD_KINDS = [
+  "date_range", "store_name", "address", "footer", "decorative", "custom",
+] as const;
+
 function defaultPage(): CustomTemplatePage {
   return {
     pageId: uuidv4(),
@@ -121,6 +133,7 @@ export default function TemplateBuilder({ onSave, onClose, initialConfig }: Prop
   const [error, setError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
+  const [showReferenceOverlay, setShowReferenceOverlay] = useState(false);
 
   const dragRef = useRef<DragState | null>(null);
   const deptAreaDragRef = useRef<DeptAreaDragState | null>(null);
@@ -443,7 +456,7 @@ export default function TemplateBuilder({ onSave, onClose, initialConfig }: Prop
     setActivePageIdx(Math.min(activePageIdx, newPages.length - 1));
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setError(null);
     if (!templateName.trim()) { setError("Template name is required."); return; }
 
@@ -492,7 +505,11 @@ export default function TemplateBuilder({ onSave, onClose, initialConfig }: Prop
       name: templateName.trim(),
       pages: migratedPages,
     };
-    saveCustomTemplate(config);
+    try {
+      await saveCustomTemplateWithAssets(config);
+    } catch {
+      saveCustomTemplate(config);
+    }
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 2000);
   };
@@ -642,18 +659,42 @@ export default function TemplateBuilder({ onSave, onClose, initialConfig }: Prop
                 style={{ width: 36, height: 28, cursor: "pointer", border: "1px solid #cbd5e1", borderRadius: 4 }}
                 onMouseDown={e => e.stopPropagation()}
               />
+              {activePage.sourceImagePath && (
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#475569", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={showReferenceOverlay}
+                    onChange={e => setShowReferenceOverlay(e.target.checked)}
+                    onMouseDown={e => e.stopPropagation()}
+                  />
+                  Show reference
+                </label>
+              )}
             </div>
 
             {/* Canvas */}
             <div
               style={{
                 width: canvasScaledW, height: canvasScaledH,
-                background: activePage.backgroundImage ? `url(${activePage.backgroundImage}) center/cover` : (activePage.backgroundColor ?? "#fff"),
+                background: activePage.backgroundImage
+                  ? `url(${imageUrl(activePage.backgroundImage)}) center/cover`
+                  : (activePage.backgroundColor ?? "#fff"),
                 position: "relative",
                 cursor: "default",
               }}
               onMouseDown={e => { e.stopPropagation(); setSelectedBoxId(null); setSelectedDeptAreaId(null); }}
             >
+              {showReferenceOverlay && activePage.sourceImagePath && (
+                <img
+                  src={imageUrl(activePage.sourceImagePath)}
+                  alt=""
+                  style={{
+                    position: "absolute", inset: 0, width: "100%", height: "100%",
+                    objectFit: "cover", opacity: 0.3, pointerEvents: "none", userSelect: "none",
+                  }}
+                  draggable={false}
+                />
+              )}
               {/* Department areas (dashed rectangles) */}
               {(activePage.departmentAreas ?? []).map(area => {
                 const areaId = area.id ?? area.departmentKey;
@@ -1062,8 +1103,39 @@ export default function TemplateBuilder({ onSave, onClose, initialConfig }: Prop
               {/* Text content */}
               <div style={fieldStyle}>
                 <label style={labelStyle}>Text Content</label>
-                <textarea style={{ ...inputStyle, width: "100%", boxSizing: "border-box", minHeight: 60, resize: "vertical" }} value={selectedBox.content ?? ''} onChange={e => updateBox(selectedBox.id, { content: e.target.value })} placeholder="Leave empty for no text" />
+                {selectedBox.isEditable ? (
+                  <textarea style={{ ...inputStyle, width: "100%", boxSizing: "border-box", minHeight: 60, resize: "vertical" }} value={selectedBox.content ?? ''} onChange={e => updateBox(selectedBox.id, { content: e.target.value })} placeholder="Leave empty for no text" />
+                ) : (
+                  <div style={{ ...inputStyle, width: "100%", boxSizing: "border-box", minHeight: 48, background: "#f1f5f9", color: "#64748b", fontSize: 12, lineHeight: 1.4 }}>
+                    Fixed template element — embedded in the background image. This text is not editable when generating weekly flyers.
+                  </div>
+                )}
               </div>
+              {selectedBox.isEditable && (
+                <>
+                  <div style={fieldStyle}>
+                    <label style={{ ...labelStyle, display: "flex", alignItems: "center", gap: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={!!selectedBox.isEditable}
+                        onChange={e => updateBox(selectedBox.id, { isEditable: e.target.checked })}
+                      />
+                      Editable field (user updates weekly)
+                    </label>
+                  </div>
+                  <div style={fieldStyle}>
+                    <label style={labelStyle}>Field Kind</label>
+                    <select
+                      value={selectedBox.fieldKind ?? "date_range"}
+                      onChange={e => updateBox(selectedBox.id, { fieldKind: e.target.value as CustomBoxDef["fieldKind"] })}
+                      style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
+                    >
+                      <option value="date_range">date_range</option>
+                      <option value="custom">custom</option>
+                    </select>
+                  </div>
+                </>
+              )}
               <div style={fieldStyle}>
                 <label style={labelStyle}>Highlight Color</label>
                 <input type="color" value={selectedBox.highlightColor ?? '#fbbf24'} onChange={e => updateBox(selectedBox.id, { highlightColor: e.target.value })} style={{ width: "100%", height: 28, cursor: "pointer", border: "1px solid #cbd5e1", borderRadius: 4 }} />

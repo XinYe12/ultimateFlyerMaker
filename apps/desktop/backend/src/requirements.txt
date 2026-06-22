@@ -7,4 +7,9 @@ opencv-python
 numpy
 rembg[cpu]
 psutil
+torch
+torchvision
+transformers
+timm
+mobile-sam @ git+https://github.com/ChaoningZhang/MobileSAM.git
 

@@ -195,8 +195,11 @@ export default function JobCreationPanel({
     }
   };
 
-  const hasDiscount = xlsxPath !== null || discountText.trim().length > 0;
+  const hasDiscount = xlsxPath !== null
+    || discountText.trim().length > 0
+    || Boolean(job.discount?.source);
   const canQueue = job.images.length > 0 || hasDiscount;
+  const discountItemCount = xlsxParsedCount ?? job.discount?.parsedItems?.length ?? null;
   const isProcessing = job.status === "queued" || job.status === "processing";
 
   return (
@@ -467,7 +470,13 @@ export default function JobCreationPanel({
                 : undefined
             }
           >
-            {isProcessing ? "Processing..." : `Start Processing (${job.images.length} images)`}
+            {isProcessing
+              ? "Processing..."
+              : job.images.length > 0
+                ? `Start Processing (${job.images.length} images)`
+                : hasDiscount
+                  ? `Start Processing (${discountItemCount ?? "…"} discounts)`
+                  : "Start Processing"}
           </Button>
         </div>
 

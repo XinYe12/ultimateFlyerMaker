@@ -25,7 +25,7 @@ const PRESETS = {
     /** Max pHash docs loaded from Firestore for dedup. 0 = no cap (load all). */
     pHashDedupMaxDocs: 0,
     /** rembg background-removal model passed to the Python backend. */
-    rembgModel: "birefnet-general",
+    rembgModel: "border-trim",
     /** Max image edge (px) before sending to rembg. 0 = no cap. */
     cutoutMaxEdgePx: 1024,
   },
@@ -42,7 +42,7 @@ const PRESETS = {
     pythonSingleThread: true,
     batchPauseIfRssMb: 1800,
     pHashDedupMaxDocs: 3000,
-    rembgModel: "u2net",
+    rembgModel: "border-trim",
     cutoutMaxEdgePx: 1024,
   },
   low: {
@@ -58,7 +58,7 @@ const PRESETS = {
     pythonSingleThread: true,
     batchPauseIfRssMb: 1200,
     pHashDedupMaxDocs: 2000,
-    rembgModel: "u2net",
+    rembgModel: "border-trim",
     cutoutMaxEdgePx: 800,
   },
 };

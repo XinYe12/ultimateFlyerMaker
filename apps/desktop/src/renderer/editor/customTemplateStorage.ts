@@ -25,6 +25,15 @@ export function saveCustomTemplate(c: CustomFlyerTemplateConfig): void {
   localStorage.setItem(KEY, JSON.stringify(all));
 }
 
+/** Persist underprint assets to userData, then save template config. */
+export async function saveCustomTemplateWithAssets(c: CustomFlyerTemplateConfig): Promise<void> {
+  let pages = c.pages;
+  if ((window as any).ufm?.persistTemplateAssets) {
+    pages = await (window as any).ufm.persistTemplateAssets(c.templateId, c.pages);
+  }
+  saveCustomTemplate({ ...c, pages });
+}
+
 export function deleteCustomTemplate(id: string): void {
   const all = loadAll();
   delete all[id];

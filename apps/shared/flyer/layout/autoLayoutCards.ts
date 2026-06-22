@@ -14,7 +14,8 @@ export type CardDef = {
   contentScale?: number;
 };
 
-const DEFAULT_CARDS_PER_ROW = 3;
+export const AUTOMATION_COLS_PER_ROW = 3;
+const DEFAULT_CARDS_PER_ROW = AUTOMATION_COLS_PER_ROW;
 
 /**
  * Auto-distribute item IDs across rows.

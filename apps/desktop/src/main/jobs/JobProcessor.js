@@ -16,8 +16,8 @@ import { buildSerperQuery } from "../ingestion/buildSerperQuery.js";
 import { rerankSerperResults } from "../ingestion/serperScorer.js";
 import { recordSerperSignal } from "../ingestion/serperSignalService.js";
 import { getDomain } from "../ingestion/braveSearchService.js";
-import { runCutout, waitForCutoutReady } from "../cutoutClient.js";
-import { addShadowToCutout } from "../ingestion/addShadow.js";
+import { waitForCutoutReady } from "../cutoutClient.js";
+import { runCutoutPipeline } from "../ingestion/cutoutPipeline.js";
 import sizeOf from "image-size";
 import sharp from "sharp";
 import { decideSizeFromAspectRatio } from "../../../../shared/flyer/layout/sizeFromImage.js";
@@ -189,25 +189,6 @@ async function inspectSerperSourceImage(imagePath, sr) {
   return { ok: true, reason: null, metrics };
 }
 
-function getCutoutFallbackModel(primaryModel) {
-  const explicit = String(process.env.UFM_CUTOUT_FALLBACK_MODEL || "").trim();
-  const disabled = explicit === "0" || /^none$/i.test(explicit);
-  if (disabled) return null;
-  if (explicit && explicit !== primaryModel) return explicit;
-
-  const current = primaryModel || getResourceProfile().rembgModel || "u2net";
-  if (current === "u2net" || current === "briaai-rmbg" || current === "bria" || current === "briaai-rmbg-1.4") {
-    return "isnet-general-use";
-  }
-  if (current === "isnet-general-use") {
-    return "birefnet-general-lite";
-  }
-  if (current === "birefnet-general-lite") {
-    return "birefnet-general";
-  }
-  return null;
-}
-
 /** Mutable per-item pipeline timing (ms) for flyer automation jobs. */
 function emptyPipelineSteps() {
   return {
@@ -225,47 +206,9 @@ function emptyPipelineSteps() {
   };
 }
 
-/** rembg + shadow with per-phase accumulation on `ps` (includes time on failure/abort). */
+/** rembg + shadow delegated to the unified pipeline (includes transparent-image fast path). */
 async function runCutoutWithShadowMs(tempPath, signal, ps) {
-  const t0 = performance.now();
-  let cutoutResult;
-  try {
-    cutoutResult = await runCutout(tempPath, signal);
-    const fallbackModel = cutoutResult.lowConfidence ? getCutoutFallbackModel(cutoutResult.model) : null;
-    if (fallbackModel) {
-      console.log(
-        `[JobProcessor] Cutout low-confidence (${cutoutResult.qualityReason || "unknown"}) — ` +
-        `retrying with ${fallbackModel}`
-      );
-      try {
-        const fallbackResult = await runCutout(tempPath, signal, { model: fallbackModel });
-        if (!fallbackResult.lowConfidence) {
-          cutoutResult = fallbackResult;
-        } else {
-          console.log(
-            `[JobProcessor] Fallback cutout still low-confidence ` +
-            `(${fallbackResult.qualityReason || "unknown"}); keeping first result as review fallback`
-          );
-        }
-      } catch (fallbackErr) {
-        console.warn(`[JobProcessor] Fallback cutout failed (${fallbackModel}):`, fallbackErr.message);
-      }
-    }
-  } finally {
-    ps.serperRembgMs += roundMs(performance.now() - t0);
-  }
-  const t1 = performance.now();
-  try {
-    const shadowPath = await addShadowToCutout(cutoutResult.path, {
-      lowConfidence: cutoutResult.lowConfidence,
-      qualityReason: cutoutResult.qualityReason,
-      borderAlpha: cutoutResult.borderAlpha,
-      bboxAreaRatio: cutoutResult.bboxAreaRatio,
-    });
-    return { ...cutoutResult, path: shadowPath };
-  } finally {
-    ps.serperShadowMs += roundMs(performance.now() - t1);
-  }
+  return runCutoutPipeline(tempPath, { signal, stats: ps });
 }
 
 async function ensureExportRoot() {
@@ -422,6 +365,17 @@ export class JobProcessor extends EventEmitter {
       }
     } else {
       console.log("[JobProcessor] No discount info provided for job");
+    }
+
+    // XLSX/text-only job with nothing to process — fail fast instead of silent empty complete.
+    if (totalImages === 0 && job.discount?.source && discountItems.length === 0) {
+      const deptHint = job.department ? ` for department "${job.department}"` : "";
+      this.emit(
+        "error",
+        job.id,
+        new Error(`No discount items found${deptHint}. Check the spreadsheet section or department name.`)
+      );
+      return;
     }
 
     // 2. Process images sequentially

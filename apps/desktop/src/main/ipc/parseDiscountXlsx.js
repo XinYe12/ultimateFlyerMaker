@@ -99,19 +99,23 @@ export const DEPARTMENT_ALIASES = {
 /* -------------------- sale field parser -------------------- */
 
 /**
- * Extracts quantity and price directly from the sale column without LLM.
- * Handles: "2/4.99", "2/$4.99", "3 FOR $5.99", "3for5.99", "$2.99", "2.99"
+ * Extracts quantity, price, and optional unit from the sale column without LLM.
+ * Handles: "2/4.99", "2/$4.99", "3 FOR $5.99", "3for5.99", "$2.99", "2.99", "$1.58/lb"
+ * Units (/lb, /ea) are only accepted when explicitly present in the sale cell.
  */
 export function parseSaleField(sale) {
   const raw = String(sale ?? "").trim();
-  // "2/4.99" or "2/$4.99"
+  // "2/4.99" or "2/$4.99" — multi-buy (digit before slash is quantity, not a unit)
   const slashMatch = raw.match(/^(\d+)\s*\/\s*\$?([0-9.]+)/);
-  if (slashMatch) return { quantity: parseInt(slashMatch[1], 10), salePrice: slashMatch[2] };
+  if (slashMatch) return { quantity: parseInt(slashMatch[1], 10), salePrice: slashMatch[2], unit: "" };
   // "3 FOR $5.99" or "3for5.99"
   const forMatch = raw.match(/^(\d+)\s*for\s*\$?([0-9.]+)/i);
-  if (forMatch) return { quantity: parseInt(forMatch[1], 10), salePrice: forMatch[2] };
+  if (forMatch) return { quantity: parseInt(forMatch[1], 10), salePrice: forMatch[2], unit: "" };
+  // "$1.58/lb" or "1.58/ea" — single price with explicit unit suffix
+  const unitMatch = raw.match(/^\$?([\d.]+)\s*\/\s*([a-z]+)$/i);
+  if (unitMatch) return { quantity: null, salePrice: unitMatch[1], unit: unitMatch[2].toLowerCase() };
   // plain "$2.99" or "2.99"
-  return { quantity: null, salePrice: raw.replace(/[^0-9.]/g, "") };
+  return { quantity: null, salePrice: raw.replace(/[^0-9.]/g, ""), unit: "" };
 }
 
 /* -------------------- department splitting -------------------- */
@@ -182,6 +186,30 @@ function isValidPriceString(s) {
   return typeof s === "string" && /^\d+(\.\d+)?$/.test(s) && s !== "";
 }
 
+/** True when a cell value is only a selling unit, not a size or price (e.g. "/lb", "ea", "each"). */
+export function isPureUnitMarker(value) {
+  const raw = normalizeOptionalString(value);
+  if (!raw) return false;
+  const t = raw.toLowerCase();
+  if (/^\/[a-z]+$/.test(t)) return true;
+  return ["lb", "lbs", "ea", "each", "kg", "oz", "pc", "pcs"].includes(t);
+}
+
+/** Regular Price column (F): numeric only; reject unit-only garbage like "/lb". */
+export function parseRegularPriceField(reg) {
+  const raw = normalizeOptionalString(reg);
+  if (!raw || isPureUnitMarker(raw)) return "";
+  const numeric = raw.replace(/^\$/, "").replace(/[^0-9.]/g, "");
+  return isValidPriceString(numeric) ? numeric : "";
+}
+
+/** Size column (D): reject unit-only values that belong on the sale price, not under the title. */
+export function parseSizeField(size) {
+  const raw = normalizeOptionalString(size);
+  if (!raw || isPureUnitMarker(raw)) return "";
+  return raw;
+}
+
 /** Convert spreadsheet rows directly to normalized discount items (no LLM). */
 function rowsToItems(rows) {
   return rows
@@ -196,14 +224,13 @@ function rowsToItems(rows) {
     .map(row => {
       const en   = normalizeOptionalString(row[1]);
       const zh   = normalizeOptionalString(row[2]);
-      const size = normalizeOptionalString(row[3]);
-      const reg  = normalizeOptionalString(row[5]);
-      const { quantity: rawQty, salePrice } = parseSaleField(row[4]);
+      const reg  = parseRegularPriceField(row[5]);
+      const { quantity: rawQty, salePrice, unit: saleUnit } = parseSaleField(row[4]);
       const { isSeries, flavorCount } = detectSeries(en, zh);
 
       let quantity = rawQty;
-      let unit = "";
-      let finalSize = size;
+      let unit = saleUnit || "";
+      let finalSize = parseSizeField(row[3]);
 
       const qNum = quantity != null ? (typeof quantity === "number" ? quantity : parseInt(String(quantity), 10)) : NaN;
 

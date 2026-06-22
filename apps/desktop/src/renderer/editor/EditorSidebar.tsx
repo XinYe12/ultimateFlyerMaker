@@ -144,14 +144,17 @@ export default function EditorSidebar({
             <div style={{ borderTop: "1px solid var(--color-border)", marginTop: 4, paddingTop: 4 }}>
               {onClear && (itemCount ?? 0) > 0 && (
                 <button
-                  onClick={() => {
+                  onClick={async () => {
+                    onToggle();
                     const label = DEPARTMENT_LABELS[activeDepartment] || activeDepartment;
-                    const confirmed = confirm(
-                      `Clear all products from "${label}"?\n\nThis cannot be undone.`
-                    );
+                    const confirmed = await (window as any).ufm.showConfirmDialog({
+                      message: `Clear all products from "${label}"?`,
+                      detail: "This cannot be undone.",
+                      confirmLabel: "Clear",
+                      cancelLabel: "Cancel",
+                    });
                     if (confirmed) {
                       onClear!();
-                      onToggle();
                     }
                   }}
                   style={{
@@ -175,13 +178,16 @@ export default function EditorSidebar({
               )}
               {onClearAll && (
                 <button
-                  onClick={() => {
-                    const confirmed = confirm(
-                      `Clear ALL departments?\n\nThis will remove all products and price labels from every department. This cannot be undone.`
-                    );
+                  onClick={async () => {
+                    onToggle();
+                    const confirmed = await (window as any).ufm.showConfirmDialog({
+                      message: "Clear ALL departments?",
+                      detail: "This will remove all products and price labels from every department. This cannot be undone.",
+                      confirmLabel: "Clear All",
+                      cancelLabel: "Cancel",
+                    });
                     if (confirmed) {
                       onClearAll();
-                      onToggle();
                     }
                   }}
                   style={{

@@ -98,37 +98,76 @@ function FontDropdown({ value, onChange, label }: FontDropdownProps) {
   );
 }
 
+type TextEffect = 'stroke' | 'glow' | 'shadow';
+
 interface GlobalFontToolbarProps {
   activeSection: 'title' | 'price' | 'banner';
   titleFont?: string;
   titleColor?: string;
   titleItalic?: boolean;
+  titleBg?: string;
+  titleBgPad?: number;
+  titleEffect?: TextEffect;
   priceFont?: string;
   priceColor?: string;
   priceShowDollar?: boolean;
+  priceBg?: string;
+  priceBgPad?: number;
+  priceEffect?: TextEffect;
   onTitleFontChange: (v: string) => void;
   onTitleColorChange: (v: string) => void;
   onTitleItalicToggle: () => void;
+  onTitleBgChange: (v: string | undefined) => void;
+  onTitleBgPadChange: (v: number) => void;
+  onTitleEffectChange: (v: TextEffect | undefined) => void;
   onPriceFontChange: (v: string) => void;
   onPriceColorChange: (v: string) => void;
   onShowDollarToggle: () => void;
+  onPriceBgChange: (v: string | undefined) => void;
+  onPriceBgPadChange: (v: number) => void;
+  onPriceEffectChange: (v: TextEffect | undefined) => void;
   onClose: () => void;
 }
+
+const EFFECT_OPTIONS: { value: TextEffect | ''; label: string }[] = [
+  { value: '', label: 'No Effect' },
+  { value: 'stroke', label: 'Stroke' },
+  { value: 'glow', label: 'Glow' },
+  { value: 'shadow', label: 'Drop Shadow' },
+];
+
+const EFFECT_DEFAULT_COLOR: Record<TextEffect, string> = {
+  stroke: '#000000',
+  glow: '#ffffff',
+  shadow: '#000000',
+};
 
 export default function GlobalFontToolbar({
   activeSection,
   titleFont,
   titleColor = "#000000",
   titleItalic,
+  titleBg,
+  titleBgPad = 2,
+  titleEffect,
   priceFont,
   priceColor = "#000000",
   priceShowDollar,
+  priceBg,
+  priceBgPad = 2,
+  priceEffect,
   onTitleFontChange,
   onTitleColorChange,
   onTitleItalicToggle,
+  onTitleBgChange,
+  onTitleBgPadChange,
+  onTitleEffectChange,
   onPriceFontChange,
   onPriceColorChange,
   onShowDollarToggle,
+  onPriceBgChange,
+  onPriceBgPadChange,
+  onPriceEffectChange,
   onClose,
 }: GlobalFontToolbarProps) {
   const sectionLabel = activeSection === 'title' ? 'TITLE' : activeSection === 'price' ? 'PRICE' : 'BANNER';
@@ -192,6 +231,69 @@ export default function GlobalFontToolbar({
           >
             I
           </button>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", whiteSpace: "nowrap" }}>Effect:</span>
+            <select
+              value={titleEffect ?? ''}
+              onChange={(e) => {
+                const val = e.target.value as TextEffect | '';
+                onTitleEffectChange(val || undefined);
+                if (val && !titleBg) onTitleBgChange(EFFECT_DEFAULT_COLOR[val as TextEffect]);
+              }}
+              style={{
+                height: 26, padding: "0 6px",
+                border: "1px solid #d1d5db", borderRadius: 6,
+                background: titleEffect ? "#eff6ff" : "#f9fafb",
+                color: titleEffect ? "#1d4ed8" : "#374151",
+                fontSize: 12, cursor: "pointer",
+              }}
+            >
+              {EFFECT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+
+          {titleEffect && (
+            <>
+              <div style={{ width: 1, height: 20, background: "#e5e7eb", flexShrink: 0 }} />
+              <label
+                title="Effect color"
+                style={{
+                  width: 26, height: 26, borderRadius: 6,
+                  border: "1px solid #d1d5db", background: titleBg ?? '#000000',
+                  cursor: "pointer", display: "flex", alignItems: "center",
+                  justifyContent: "center", overflow: "hidden", position: "relative",
+                }}
+              >
+                <input
+                  type="color"
+                  value={titleBg ?? '#000000'}
+                  onChange={(e) => onTitleBgChange(e.target.value)}
+                  style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%", cursor: "pointer", padding: 0, border: "none" }}
+                />
+              </label>
+              <input
+                type="number"
+                min={1} max={20} step={1}
+                value={titleBgPad}
+                onChange={(e) => onTitleBgPadChange(Math.max(1, Number(e.target.value)))}
+                title="Effect size (px)"
+                style={{ width: 44, height: 26, border: "1px solid #d1d5db", borderRadius: 6, fontSize: 12, textAlign: "center", padding: "0 4px" }}
+              />
+              <button
+                onClick={() => onTitleEffectChange(undefined)}
+                title="Remove effect"
+                style={{
+                  height: 26, padding: "0 7px", borderRadius: 6,
+                  border: "1px solid #fca5a5", background: "#fff1f2",
+                  color: "#ef4444", fontSize: 13, lineHeight: 1,
+                  cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                }}
+              >
+                ✕
+              </button>
+            </>
+          )}
         </>
       )}
 
@@ -231,6 +333,69 @@ export default function GlobalFontToolbar({
           >
             $
           </button>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", whiteSpace: "nowrap" }}>Effect:</span>
+            <select
+              value={priceEffect ?? ''}
+              onChange={(e) => {
+                const val = e.target.value as TextEffect | '';
+                onPriceEffectChange(val || undefined);
+                if (val && !priceBg) onPriceBgChange(EFFECT_DEFAULT_COLOR[val as TextEffect]);
+              }}
+              style={{
+                height: 26, padding: "0 6px",
+                border: "1px solid #d1d5db", borderRadius: 6,
+                background: priceEffect ? "#eff6ff" : "#f9fafb",
+                color: priceEffect ? "#1d4ed8" : "#374151",
+                fontSize: 12, cursor: "pointer",
+              }}
+            >
+              {EFFECT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+
+          {priceEffect && (
+            <>
+              <div style={{ width: 1, height: 20, background: "#e5e7eb", flexShrink: 0 }} />
+              <label
+                title="Effect color"
+                style={{
+                  width: 26, height: 26, borderRadius: 6,
+                  border: "1px solid #d1d5db", background: priceBg ?? '#000000',
+                  cursor: "pointer", display: "flex", alignItems: "center",
+                  justifyContent: "center", overflow: "hidden", position: "relative",
+                }}
+              >
+                <input
+                  type="color"
+                  value={priceBg ?? '#000000'}
+                  onChange={(e) => onPriceBgChange(e.target.value)}
+                  style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%", cursor: "pointer", padding: 0, border: "none" }}
+                />
+              </label>
+              <input
+                type="number"
+                min={1} max={20} step={1}
+                value={priceBgPad}
+                onChange={(e) => onPriceBgPadChange(Math.max(1, Number(e.target.value)))}
+                title="Effect size (px)"
+                style={{ width: 44, height: 26, border: "1px solid #d1d5db", borderRadius: 6, fontSize: 12, textAlign: "center", padding: "0 4px" }}
+              />
+              <button
+                onClick={() => onPriceEffectChange(undefined)}
+                title="Remove effect"
+                style={{
+                  height: 26, padding: "0 7px", borderRadius: 6,
+                  border: "1px solid #fca5a5", background: "#fff1f2",
+                  color: "#ef4444", fontSize: 13, lineHeight: 1,
+                  cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                }}
+              >
+                ✕
+              </button>
+            </>
+          )}
         </>
       )}
 

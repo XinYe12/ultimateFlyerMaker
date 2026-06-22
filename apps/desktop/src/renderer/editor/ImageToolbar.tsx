@@ -265,6 +265,7 @@ export default function ImageToolbar({ card, itemId, onUpdateCard, onEditCutout,
       {activeDef && (
         <div
           ref={popoutRef}
+          data-keep-selection="true"
           style={{
             position: 'fixed',
             right: TOOLBAR_RIGHT + TOOLBAR_W + POPOUT_GAP,
@@ -315,6 +316,7 @@ export default function ImageToolbar({ card, itemId, onUpdateCard, onEditCutout,
       {/* ── Icon toolbar strip ── */}
       <div
         ref={toolbarRef}
+        data-keep-selection="true"
         style={{
           position: 'fixed',
           right: TOOLBAR_RIGHT,
@@ -369,6 +371,18 @@ export default function ImageToolbar({ card, itemId, onUpdateCard, onEditCutout,
           icon={<BiRefNetIcon />}
           active={rerunningCutout}
           onClick={() => { if (!rerunningCutout) onRerunCutout?.('birefnet-general'); }}
+        />
+        <Btn
+          title={rerunningCutout ? 'Processing…' : 'Border Trim (Fast) — edge flood-fill, no AI model'}
+          icon={<BorderTrimIcon />}
+          active={rerunningCutout}
+          onClick={() => { if (!rerunningCutout) onRerunCutout?.('border-trim'); }}
+        />
+        <Btn
+          title={rerunningCutout ? 'Processing…' : 'Contour Cut — largest enclosed shape, works on transparent/same-color products'}
+          icon={<ContourCutIcon />}
+          active={rerunningCutout}
+          onClick={() => { if (!rerunningCutout) onRerunCutout?.('contour-bg'); }}
         />
 
         <Divider />
@@ -495,6 +509,38 @@ function BiRefNetIcon() {
       <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83"/>
       <circle cx="18" cy="6" r="3" fill="currentColor" stroke="none" opacity="0.7"/>
       <path d="M18 3v6M15 6h6" stroke="white" strokeWidth="1.5"/>
+    </svg>
+  );
+}
+
+function ContourCutIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {/* Outer dashed border */}
+      <rect x="2" y="2" width="20" height="20" rx="1" strokeDasharray="3 2"/>
+      {/* Contour shape — irregular closed outline representing product edge */}
+      <path d="M12 5 C16 5 19 8 19 12 C19 16 16 19 12 19 C8 19 5 16 5 12 C5 8 8 5 12 5Z" strokeWidth="1.5"/>
+      {/* Node dots on the contour representing graph theory nodes */}
+      <circle cx="12" cy="5" r="1.3" fill="currentColor" stroke="none"/>
+      <circle cx="19" cy="12" r="1.3" fill="currentColor" stroke="none"/>
+      <circle cx="12" cy="19" r="1.3" fill="currentColor" stroke="none"/>
+      <circle cx="5" cy="12" r="1.3" fill="currentColor" stroke="none"/>
+    </svg>
+  );
+}
+
+function BorderTrimIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {/* Outer dashed border representing the image edge */}
+      <rect x="2" y="2" width="20" height="20" rx="1" strokeDasharray="3 2"/>
+      {/* Inner solid shape representing the kept product */}
+      <path d="M7 12 Q8 7 12 7 Q16 7 17 12 Q16 17 12 17 Q8 17 7 12Z" strokeWidth="1.5" fill="none"/>
+      {/* Corner flood-fill dots */}
+      <circle cx="3.5" cy="3.5" r="1.2" fill="currentColor" stroke="none" opacity="0.5"/>
+      <circle cx="20.5" cy="3.5" r="1.2" fill="currentColor" stroke="none" opacity="0.5"/>
+      <circle cx="3.5" cy="20.5" r="1.2" fill="currentColor" stroke="none" opacity="0.5"/>
+      <circle cx="20.5" cy="20.5" r="1.2" fill="currentColor" stroke="none" opacity="0.5"/>
     </svg>
   );
 }

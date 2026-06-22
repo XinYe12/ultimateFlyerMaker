@@ -28,8 +28,7 @@ export default function SettingsView({ onBack }: Props) {
   const [keySaving, setKeySaving] = useState(false);
   const [keySaved, setKeySaved] = useState(false);
 
-  const [rembgModel, setRembgModel] = useState<string>("birefnet-general");
-  const [rembgSaving, setRembgSaving] = useState(false);
+  const [rembgModel, setRembgModel] = useState<string>("border-trim");
   const [rembgSaved, setRembgSaved] = useState(false);
 
   const [appPaths, setAppPaths] = useState<{ userData: string; firebaseCredential: string; firebaseCredentialExists: boolean } | null>(null);
@@ -84,15 +83,11 @@ export default function SettingsView({ onBack }: Props) {
     }
   };
 
-  const handleSaveRembgModel = async () => {
-    setRembgSaving(true);
-    try {
-      await window.ufm.setRembgModel(rembgModel);
-      setRembgSaved(true);
-      setTimeout(() => setRembgSaved(false), 3000);
-    } finally {
-      setRembgSaving(false);
-    }
+  const handleRembgModelChange = async (model: string) => {
+    setRembgModel(model);
+    await window.ufm.setRembgModel(model);
+    setRembgSaved(true);
+    setTimeout(() => setRembgSaved(false), 3000);
   };
 
   const inputStyle: React.CSSProperties = {
@@ -180,10 +175,16 @@ export default function SettingsView({ onBack }: Props) {
             desc: "BRIA RMBG-1.4 — light commercial-image model. Fast, but currently less stable on grocery packaging and pale/transparent products.",
           },
           {
+            id: "border-trim",
+            label: "border-trim",
+            badge: "Recommended",
+            desc: "Edge flood-fill — removes the image-border-connected background without any ML model. Fast, deterministic, works perfectly on commercial product photos (including white-on-white). Falls back to ML automatically when needed.",
+          },
+          {
             id: "birefnet-general",
             label: "birefnet-general",
             badge: "Maximum Quality",
-            desc: "Highest quality — handles complex and transparent backgrounds. Downloads ~973 MB on first use. Uses ~7 GB RAM during inference.",
+            desc: "Highest quality ML model — handles complex and transparent backgrounds. Downloads ~973 MB on first use. Uses ~7 GB RAM during inference.",
           },
           {
             id: "birefnet-general-lite",
@@ -216,7 +217,7 @@ export default function SettingsView({ onBack }: Props) {
               name="rembgModel"
               value={m.id}
               checked={rembgModel === m.id}
-              onChange={() => setRembgModel(m.id)}
+              onChange={() => handleRembgModelChange(m.id)}
               style={{ marginTop: 2, cursor: "pointer" }}
             />
             <div>
@@ -231,16 +232,11 @@ export default function SettingsView({ onBack }: Props) {
           </label>
         ))}
 
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
-          <Button variant="primary" size="sm" onClick={handleSaveRembgModel} disabled={rembgSaving}>
-            {rembgSaving ? "Saving…" : "Save"}
-          </Button>
-          {rembgSaved && (
-            <span style={{ fontSize: 13, color: "#f59e0b" }}>
-              ✓ Saved — restart the app to apply
-            </span>
-          )}
-        </div>
+        {rembgSaved && (
+          <div style={{ fontSize: 13, color: "#f59e0b", marginTop: 4 }}>
+            ✓ Saved — restart the app to apply
+          </div>
+        )}
       </Card>
 
       {/* Firebase credentials section */}

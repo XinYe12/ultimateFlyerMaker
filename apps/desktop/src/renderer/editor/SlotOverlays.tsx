@@ -3,6 +3,11 @@
 
 import React, { useState, useEffect } from "react";
 import { CardDef, CardLayout } from "../types";
+import {
+  acceptPanelImageDrag,
+  handlePanelImageDropEvent,
+  type PanelImageDropHandler,
+} from "./panelImageDrag";
 
 type Slot = {
   x: number;
@@ -45,6 +50,7 @@ type SlotOverlaysProps = {
   cardLayout?: CardLayout;
   isLocked?: boolean;
   editMode?: boolean;
+  onPanelImageDrop?: PanelImageDropHandler;
 };
 
 export default function SlotOverlays({
@@ -63,10 +69,25 @@ export default function SlotOverlays({
   cardLayout,
   isLocked = false,
   editMode = false,
+  onPanelImageDrop,
 }: SlotOverlaysProps) {
   const [hoveredSlot, setHoveredSlot] = useState<number | null>(null);
   const [confirmDeleteSlot, setConfirmDeleteSlot] = useState<number | null>(null);
   const [hoveredFullSlot, setHoveredFullSlot] = useState<number | null>(null);
+  const [panelDragOverSlot, setPanelDragOverSlot] = useState<number | null>(null);
+
+  const dropTargetForIndex = (index: number) => {
+    const cardRect = cardMode && cardRects ? cardRects[index] : undefined;
+    return {
+      itemId: cardRect?.itemId ?? placements.find(p => {
+        const slot = slots[index];
+        const cx = slot.x + slot.width / 2;
+        const cy = slot.y + slot.height / 2;
+        return cx >= p.x && cx <= p.x + p.width && cy >= p.y && cy <= p.y + p.height;
+      })?.itemId ?? null,
+      cardId: cardRect?.cardId,
+    };
+  };
 
   // Close delete confirm on Escape
   useEffect(() => {
@@ -125,11 +146,22 @@ export default function SlotOverlays({
         const isHovered = hoveredSlot === index;
 
         if (isEmpty) {
-          if (isLocked || editMode) return null;
-          // Empty slot/card: centered overlay with "Add Image" button
+          if (isLocked) return null;
+          const dropTarget = dropTargetForIndex(index);
+          const showDropHint = panelDragOverSlot === index;
+          // Empty slot/card: drop target + optional "Add Product" button (verify mode)
           return (
             <div
               key={`slot-overlay-${index}`}
+              onDragOver={(e) => {
+                if (!onPanelImageDrop || !acceptPanelImageDrag(e)) return;
+                setPanelDragOverSlot(index);
+              }}
+              onDragLeave={() => setPanelDragOverSlot(prev => prev === index ? null : prev)}
+              onDrop={(e) => {
+                setPanelDragOverSlot(null);
+                handlePanelImageDropEvent(e, onPanelImageDrop, dropTarget);
+              }}
               style={{
                 position: "absolute",
                 left: slot.x,
@@ -140,41 +172,53 @@ export default function SlotOverlays({
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                backgroundColor: cardMode ? "transparent" : "rgba(200, 200, 200, 0.1)",
+                backgroundColor: showDropHint
+                  ? "rgba(59,130,246,0.18)"
+                  : cardMode ? "transparent" : "rgba(200, 200, 200, 0.1)",
+                outline: showDropHint ? "2px dashed #3b82f6" : undefined,
                 zIndex: 9000,
               }}
             >
-              <button
-                onClick={() => onAddImage(index)}
-                style={{
-                  width: "160px",
-                  height: "160px",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: "var(--text-lg)",
-                  fontWeight: "var(--font-bold)",
-                  color: "#fff",
-                  backgroundColor: "var(--color-success)",
-                  border: "none",
-                  borderRadius: "var(--radius-lg)",
-                  cursor: "pointer",
-                  boxShadow: "var(--shadow-md)",
-                  transition: "transform 0.2s, box-shadow 0.2s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = "scale(1.08)";
-                  e.currentTarget.style.boxShadow = "0 6px 20px rgba(0,0,0,0.35)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = "scale(1)";
-                  e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.25)";
-                }}
-              >
-                <div style={{ fontSize: "40px", marginBottom: "8px", lineHeight: 1 }}>+</div>
-                <div style={{ fontSize: "25px", fontWeight: "700" }}>Add Product</div>
-              </button>
+              {editMode ? (
+                showDropHint ? (
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", pointerEvents: "none" }}>
+                    Drop to add image
+                  </span>
+                ) : null
+              ) : (
+                <button
+                  onClick={() => onAddImage(index)}
+                  style={{
+                    width: "160px",
+                    height: "160px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: "var(--text-lg)",
+                    fontWeight: "var(--font-bold)",
+                    color: "#fff",
+                    backgroundColor: "var(--color-success)",
+                    border: "none",
+                    borderRadius: "var(--radius-lg)",
+                    cursor: "pointer",
+                    boxShadow: "var(--shadow-md)",
+                    transition: "transform 0.2s, box-shadow 0.2s",
+                    pointerEvents: showDropHint ? "none" : "auto",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = "scale(1.08)";
+                    e.currentTarget.style.boxShadow = "0 6px 20px rgba(0,0,0,0.35)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = "scale(1)";
+                    e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.25)";
+                  }}
+                >
+                  <div style={{ fontSize: "40px", marginBottom: "8px", lineHeight: 1 }}>+</div>
+                  <div style={{ fontSize: "25px", fontWeight: "700" }}>Add Product</div>
+                </button>
+              )}
             </div>
           );
         }
@@ -188,9 +232,22 @@ export default function SlotOverlays({
         // Use allFlavorPaths so count is accurate even after user narrows to 1
         const flavorCount = itemForSlot?.result?.allFlavorPaths?.length ?? 0;
 
+        const dropTarget = dropTargetForIndex(index);
+        const showDropHint = panelDragOverSlot === index;
+
         return (
           <div
             key={`slot-overlay-${index}`}
+            onDragOver={(e) => {
+              if (onPanelImageDrop && acceptPanelImageDrag(e)) {
+                setPanelDragOverSlot(index);
+              }
+            }}
+            onDragLeave={() => setPanelDragOverSlot(prev => prev === index ? null : prev)}
+            onDrop={(e) => {
+              setPanelDragOverSlot(null);
+              handlePanelImageDropEvent(e, onPanelImageDrop, dropTarget);
+            }}
             style={{
               position: "absolute",
               left: overlayRect.x,
@@ -199,6 +256,8 @@ export default function SlotOverlays({
               height: overlayRect.height,
               pointerEvents: (isLocked || editMode) ? "none" : "auto",
               zIndex: confirmDeleteSlot === index ? 9500 : 9000,
+              outline: showDropHint ? "2px dashed #3b82f6" : undefined,
+              background: showDropHint ? "rgba(59,130,246,0.12)" : undefined,
             }}
             onMouseEnter={() => !isLocked && setHoveredFullSlot(index)}
             onMouseLeave={() => {

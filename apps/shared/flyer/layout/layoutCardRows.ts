@@ -25,9 +25,24 @@ export type CardDef = {
   titleFontFamily?: string;
   titleColor?: string;
   titleItalic?: boolean;
+  titleBg?: string;
+  titleBgPad?: number;
+  titleEffect?: 'stroke' | 'glow' | 'shadow';
   priceFontFamily?: string;
   priceColor?: string;
   priceShowDollar?: boolean;
+  priceBg?: string;
+  priceBgPad?: number;
+  priceEffect?: 'stroke' | 'glow' | 'shadow';
+  priceCompDollarRatio?: number;
+  priceCompDollarOffsetY?: number;
+  priceCompQtyRatio?: number;
+  priceCompDecRatio?: number;
+  priceCompDecOffsetY?: number;
+  priceCompUnitRatio?: number;
+  priceCompUnitOffsetY?: number;
+  titleCompMetaScale?: number;
+  titleCompMetaOffsetY?: number;
   imageRadius?: number;
   imageBrightness?: number;
   imageContrast?: number;
@@ -35,6 +50,10 @@ export type CardDef = {
   imageOpacity?: number;
   imageFlipH?: boolean;
   imageFlipV?: boolean;
+  titleOffsetX?: number;
+  titleOffsetY?: number;
+  priceOffsetX?: number;
+  priceOffsetY?: number;
 };
 
 /**
@@ -43,6 +62,14 @@ export type CardDef = {
 export function deriveRowCount(cards: CardDef[]): number {
   if (cards.length === 0) return 1;
   return Math.max(...cards.map(c => c.row)) + 1;
+}
+
+/** Use template row budget when set; otherwise derive from card layout. */
+export function resolveLayoutRows(cards: CardDef[], templateRows?: number): number {
+  if (templateRows != null && templateRows >= 1) {
+    return Math.max(1, Math.round(templateRows));
+  }
+  return deriveRowCount(cards);
 }
 
 /**
@@ -123,7 +150,7 @@ export function layoutCardRows({
   pageId: string;
   regionId: string;
 }): FlyerPlacement[] {
-  const effectiveRows = rows ?? deriveRowCount(cards);
+  const effectiveRows = rows != null ? resolveLayoutRows(cards, rows) : deriveRowCount(cards);
   const rowHeight = (region.height - (effectiveRows - 1) * CARD_GAP) / effectiveRows;
   const placements: FlyerPlacement[] = [];
   const xPositions = computeCardXPositions(cards);
@@ -159,9 +186,24 @@ export function layoutCardRows({
       titleFontFamily: card.titleFontFamily,
       titleColor: card.titleColor,
       titleItalic: card.titleItalic,
+      titleBg: card.titleBg,
+      titleBgPad: card.titleBgPad,
+      titleEffect: card.titleEffect,
       priceFontFamily: card.priceFontFamily,
       priceColor: card.priceColor,
       priceShowDollar: card.priceShowDollar,
+      priceBg: card.priceBg,
+      priceBgPad: card.priceBgPad,
+      priceEffect: card.priceEffect,
+      priceCompDollarRatio: card.priceCompDollarRatio,
+      priceCompDollarOffsetY: card.priceCompDollarOffsetY,
+      priceCompQtyRatio: card.priceCompQtyRatio,
+      priceCompDecRatio: card.priceCompDecRatio,
+      priceCompDecOffsetY: card.priceCompDecOffsetY,
+      priceCompUnitRatio: card.priceCompUnitRatio,
+      priceCompUnitOffsetY: card.priceCompUnitOffsetY,
+      titleCompMetaScale: card.titleCompMetaScale,
+      titleCompMetaOffsetY: card.titleCompMetaOffsetY,
       imageRadius: card.imageRadius,
       imageBrightness: card.imageBrightness,
       imageContrast: card.imageContrast,
@@ -169,6 +211,10 @@ export function layoutCardRows({
       imageOpacity: card.imageOpacity,
       imageFlipH: card.imageFlipH,
       imageFlipV: card.imageFlipV,
+      titleOffsetX: card.titleOffsetX,
+      titleOffsetY: card.titleOffsetY,
+      priceOffsetX: card.priceOffsetX,
+      priceOffsetY: card.priceOffsetY,
     });
   }
 
@@ -188,7 +234,7 @@ export function computeCardRects({
   region: { x: number; y: number; width: number; height: number };
   rows?: number;
 }): Array<{ cardId: string; x: number; y: number; width: number; height: number; itemId?: string }> {
-  const effectiveRows = rows ?? deriveRowCount(cards);
+  const effectiveRows = rows != null ? resolveLayoutRows(cards, rows) : deriveRowCount(cards);
   const rowHeight = (region.height - (effectiveRows - 1) * CARD_GAP) / effectiveRows;
   const rects: Array<{ cardId: string; x: number; y: number; width: number; height: number; itemId?: string }> = [];
   const xPositions = computeCardXPositions(cards);

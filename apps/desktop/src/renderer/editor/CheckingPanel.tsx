@@ -28,8 +28,9 @@ type CheckingPanelProps = {
   onClose: () => void;
   onComplete: (flaggedIndices: number[]) => void;
   onProgressChange: (progress: VerificationProgress) => void;
-  onReplaceImage?: (itemId: string) => void;
+  onReplaceImage?: (itemId: string, targetFlavorIndex?: number) => void;
   onSearchReplace?: (itemId: string, data: { path: string; result: any }) => void;
+  onDbSelectProduct?: (itemId: string, publicUrl: string, targetFlavorIndex?: number) => void;
   onSaveDiscountDetails?: (itemId: string, en: string, regularPrice: string, salePrice: string) => void;
 };
 
@@ -98,6 +99,7 @@ export default function CheckingPanel({
   onProgressChange,
   onReplaceImage,
   onSearchReplace,
+  onDbSelectProduct,
   onSaveDiscountDetails,
 }: CheckingPanelProps) {
   const [currentIdx, setCurrentIdx] = useState<number>(() => initialProgress?.currentIdx ?? 0);
@@ -118,17 +120,21 @@ export default function CheckingPanel({
   const [editTitle, setEditTitle] = useState<{ en: string; zh: string; size: string; regularPrice: string } | null>(null);
   const [editSalePrice, setEditSalePrice] = useState<string>("");
   const [editRegularPrice, setEditRegularPrice] = useState<string>("");
+  const [checkFlavorIdx, setCheckFlavorIdx] = useState<number>(0);
 
-  // Scroll active item into view in both panels
-  const leftListRef = useRef<HTMLDivElement>(null);
-  const rightListRef = useRef<HTMLDivElement>(null);
+  // Reset flavor index when navigating to a different item
+  useEffect(() => {
+    setCheckFlavorIdx(0);
+  }, [currentIdx]);
+
+  // Scroll active chip into view
+  const chipStripRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    [leftListRef, rightListRef].forEach(ref => {
-      if (!ref.current) return;
-      const el = ref.current.querySelector(`[data-active="true"]`) as HTMLElement | null;
-      if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    });
+    const strip = chipStripRef.current;
+    if (!strip) return;
+    const activeChip = strip.querySelector('[data-active="true"]') as HTMLElement | null;
+    activeChip?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
   }, [currentIdx]);
 
   // Re-initialize edit state when item or step changes
@@ -331,101 +337,54 @@ export default function CheckingPanel({
           </span>
         </div>
 
-        {/* ── Two-panel lists ── */}
-        <div style={{ display: "flex", gap: 0, flex: 1, minHeight: 0, borderBottom: "1px solid #e2e8f0" }}>
-          {/* Left: editor thumbnails */}
-          <div ref={leftListRef} style={listPanelStyle}>
-            <div style={listHeaderStyle}>Editor View</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "8px 12px" }}>
-              {items.map((it, i) => {
-                const lbl = discountLabels[i];
-                const cp = it?.result?.cutoutPath ?? it?.result?.inputPath ?? "";
-                const ttl = lbl?.title?.en ?? it?.result?.title?.en ?? "";
-                const prc = lbl?.price?.display ?? "";
-                const isFlagged = flags.has(i);
-                const stepsDone = approved.get(i) ?? new Set<Step>();
-                const isActive = i === currentIdx;
-                return (
-                  <div
-                    key={i}
-                    data-active={isActive ? "true" : undefined}
-                    onClick={() => { setCurrentIdx(i); setStep("title"); }}
-                    style={thumbCardStyle(isActive, isFlagged)}
-                  >
-                    {isFlagged && (
-                      <div style={flagBadgeStyle}>⚠</div>
-                    )}
-                    {cp ? (
-                      <img
-                        src={cp.startsWith("http") ? cp : `file://${cp}`}
-                        style={{ width: "100%", height: 80, objectFit: "contain", background: "#f1f5f9" }}
-                        alt=""
-                      />
-                    ) : (
-                      <div style={{ height: 80, display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 12, background: "#f1f5f9" }}>No image</div>
-                    )}
-                    <div style={{ padding: "4px 6px" }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "#0f172a", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{ttl || "—"}</div>
-                      <div style={{ fontSize: 11, color: "#64748b" }}>{prc}</div>
-                    </div>
-                    {/* Step dots + system check badge */}
-                    <div style={{ display: "flex", gap: 4, padding: "2px 6px 4px", alignItems: "center" }}>
-                      {STEPS.map(s => (
-                        <div key={s} title={s} style={{
-                          width: 8, height: 8, borderRadius: "50%",
-                          background: stepsDone.has(s) ? "#16a34a" : flags.has(i) ? "#d97706" : "#cbd5e1",
-                        }} />
-                      ))}
-                      {systemChecks.get(i)?.overall === "pass" && (
-                        <div style={sysBadgeStyle}>Sys ✓</div>
-                      )}
-                      {systemChecks.get(i)?.overall === "review" && (
-                        <div style={sysFailBadgeStyle}>Sys ✗</div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Right: input item rows */}
-          <div ref={rightListRef} style={{ ...listPanelStyle, borderLeft: "1px solid #e2e8f0" }}>
-            <div style={listHeaderStyle}>Input (Upload)</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "8px 12px" }}>
-              {items.map((_, i) => {
-                const o = originalDiscounts[i];
-                const isActive = i === currentIdx;
-                const isFlagged = flags.has(i);
-                if (!o) {
-                  return (
-                    <div
-                      key={i}
-                      data-active={isActive ? "true" : undefined}
-                      onClick={() => { setCurrentIdx(i); setStep("title"); }}
-                      style={inputRowStyle(isActive, isFlagged)}
-                    >
-                      <span style={{ color: "#94a3b8", fontSize: 11, fontStyle: "italic" }}>Added manually</span>
-                    </div>
-                  );
-                }
-                return (
-                  <div
-                    key={i}
-                    data-active={isActive ? "true" : undefined}
-                    onClick={() => { setCurrentIdx(i); setStep("title"); }}
-                    style={inputRowStyle(isActive, isFlagged)}
-                  >
-                    <div style={{ fontWeight: 700, fontSize: 12, color: "#0f172a", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{o.en || "—"}</div>
-                    {o.zh && <div style={{ fontSize: 11, color: "#475569", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{o.zh}</div>}
-                    <div style={{ fontSize: 11, color: "#64748b" }}>
-                      {[o.size, o.price?.display ?? o.salePrice].filter(Boolean).join(" · ")}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+        {/* ── Item queue chip strip ── */}
+        <div
+          ref={chipStripRef}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "8px 14px",
+            overflowX: "auto",
+            flexShrink: 0,
+            borderBottom: "1px solid #e2e8f0",
+            background: "#f8fafc",
+            scrollbarWidth: "none",
+          } as CSSProperties}
+        >
+          {items.map((it, i) => {
+            const lbl = discountLabels[i];
+            const isActive = i === currentIdx;
+            const isFlagged = flags.has(i);
+            const isDone = (approved.get(i) ?? new Set()).size === STEPS.length;
+            const name = (lbl?.title?.en ?? it?.result?.title?.en ?? originalDiscounts[i]?.en ?? "—").slice(0, 14);
+            return (
+              <button
+                key={i}
+                data-active={isActive ? "true" : undefined}
+                onClick={() => { setCurrentIdx(i); setStep("title"); }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 5,
+                  padding: "4px 10px",
+                  borderRadius: 20,
+                  border: isActive ? "1.5px solid #6d28d9" : "1.5px solid #e2e8f0",
+                  background: isActive ? "#ede9fe" : "#fff",
+                  cursor: "pointer", flexShrink: 0,
+                  fontSize: 11, fontWeight: isActive ? 700 : 500,
+                  color: isActive ? "#5b21b6" : "#334155",
+                  whiteSpace: "nowrap",
+                  boxShadow: isActive ? "0 0 0 2px #c4b5fd55" : "none",
+                }}
+              >
+                <span style={{
+                  width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
+                  background: isFlagged ? "#d97706" : isDone ? "#16a34a" : isActive ? "#7c3aed" : "#cbd5e1",
+                }} />
+                <span style={{ fontWeight: 700, color: "#7c3aed", marginRight: 2 }}>#{i + 1}</span>
+                {name}
+              </button>
+            );
+          })}
         </div>
 
         {/* ── Comparison bucket ── */}
@@ -480,22 +439,64 @@ export default function CheckingPanel({
                 </div>
               )}
               {step === "image" && (
-                <div style={{ textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
-                  {cutoutPath ? (
-                    <img
-                      src={cutoutPath.startsWith("http") ? cutoutPath : `file://${cutoutPath}`}
-                      style={{ maxWidth: 300, maxHeight: 220, objectFit: "contain" }}
-                      alt="Product"
-                    />
-                  ) : (
-                    <div style={{ color: "#94a3b8", fontStyle: "italic" }}>No image available</div>
+                <div style={{ textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 12, width: "100%" }}>
+                  {/* Flavor picker — only for multi-flavor products */}
+                  {Array.isArray(item?.result?.cutoutPaths) && item.result.cutoutPaths.length > 1 && (
+                    <div style={{ width: "100%" }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6, textAlign: "left" }}>
+                        Replacing flavor:
+                      </div>
+                      <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2 }}>
+                        {item.result.cutoutPaths.map((p: string, idx: number) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setCheckFlavorIdx(idx)}
+                            title={`Flavor ${idx + 1}`}
+                            style={{
+                              padding: 0, flexShrink: 0,
+                              width: 52, height: 52,
+                              border: checkFlavorIdx === idx ? "2.5px solid #7c3aed" : "2px solid #e2e8f0",
+                              borderRadius: 8,
+                              background: checkFlavorIdx === idx ? "#ede9fe" : "#f8fafc",
+                              cursor: "pointer",
+                              overflow: "hidden",
+                            }}
+                          >
+                            <img
+                              src={p.startsWith("http") ? p : `file://${p}`}
+                              alt={`Flavor ${idx + 1}`}
+                              style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   )}
+                  {/* Product image — show selected flavor when multi-flavor */}
+                  {(() => {
+                    const paths = item?.result?.cutoutPaths;
+                    const isMulti = Array.isArray(paths) && paths.length > 1;
+                    const displayPath = isMulti ? paths[checkFlavorIdx] : cutoutPath;
+                    if (!displayPath) return <div style={{ color: "#94a3b8", fontStyle: "italic" }}>No image available</div>;
+                    const src = displayPath.startsWith("http") ? displayPath : `file://${displayPath}`;
+                    return (
+                      <img
+                        src={src}
+                        style={{ maxWidth: isMulti ? 220 : 300, maxHeight: isMulti ? 180 : 220, objectFit: "contain" }}
+                        alt="Product"
+                      />
+                    );
+                  })()}
                   {/* Image replacement buttons */}
                   {(onReplaceImage || onSearchReplace) && (
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
                       {onReplaceImage && (
                         <button
-                          onClick={() => onReplaceImage(item.id)}
+                          onClick={() => {
+                            const isMulti = Array.isArray(item?.result?.cutoutPaths) && item.result.cutoutPaths.length > 1;
+                            onReplaceImage(item.id, isMulti ? checkFlavorIdx : undefined);
+                          }}
                           style={imgReplaceBtnStyle}
                           title="Upload local file"
                         >
@@ -649,11 +650,15 @@ export default function CheckingPanel({
       </div>
 
       {/* ── Modals rendered above the panel (z-index: 21000) ── */}
-      {dbSearchItemId && onSearchReplace && (
+      {dbSearchItemId && onDbSelectProduct && (
         <DbSearchModal
           itemId={dbSearchItemId}
           initialQuery={getQueryForItem(dbSearchItemId)}
-          onReplace={(id, data) => { onSearchReplace(id, data); setDbSearchItemId(null); }}
+          cutoutPaths={items.find((x: any) => x.id === dbSearchItemId)?.result?.cutoutPaths}
+          onSelectProduct={(id, url, targetFlavorIndex) => {
+            onDbSelectProduct(id, url, targetFlavorIndex);
+            setDbSearchItemId(null);
+          }}
           onClose={() => setDbSearchItemId(null)}
           zIndex={21000}
         />
@@ -721,99 +726,11 @@ const closeBtnStyle: CSSProperties = {
   borderRadius: 4,
 };
 
-const listPanelStyle: CSSProperties = {
-  flex: 1,
-  overflowY: "auto",
-  minWidth: 0,
-  background: "#f8fafc",
-};
-
-const listHeaderStyle: CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
-  color: "#94a3b8",
-  textTransform: "uppercase",
-  letterSpacing: "0.08em",
-  padding: "8px 12px 4px",
-  borderBottom: "1px solid #e2e8f0",
-  background: "#fff",
-};
-
-const thumbCardStyle = (isActive: boolean, isFlagged: boolean): CSSProperties => ({
-  background: isActive ? "#ede9fe" : "#fff",
-  border: `2px solid ${isActive ? "#7c3aed" : isFlagged ? "#d97706" : "#e2e8f0"}`,
-  borderRadius: 8,
-  cursor: "pointer",
-  overflow: "hidden",
-  position: "relative",
-  transition: "border-color 0.15s",
-  flexShrink: 0,
-  boxShadow: isActive ? "0 0 0 3px #ede9fe" : "0 1px 3px rgba(0,0,0,0.06)",
-});
-
-const flagBadgeStyle: CSSProperties = {
-  position: "absolute",
-  top: 4,
-  right: 4,
-  background: "#d97706",
-  color: "#fff",
-  borderRadius: "50%",
-  width: 20,
-  height: 20,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontSize: 11,
-  fontWeight: 700,
-  zIndex: 2,
-};
-
-const sysBadgeStyle: CSSProperties = {
-  background: "#16a34a",
-  color: "#fff",
-  borderRadius: 4,
-  padding: "1px 5px",
-  fontSize: 9,
-  fontWeight: 700,
-  lineHeight: "14px",
-  letterSpacing: "0.04em",
-  flexShrink: 0,
-};
-
-const sysFailBadgeStyle: CSSProperties = {
-  background: "#dc2626",
-  color: "#fff",
-  borderRadius: 4,
-  padding: "1px 5px",
-  fontSize: 9,
-  fontWeight: 700,
-  lineHeight: "14px",
-  letterSpacing: "0.04em",
-  flexShrink: 0,
-};
-
-const inputRowStyle = (isActive: boolean, isFlagged: boolean): CSSProperties => ({
-  background: isActive ? "#ede9fe" : "#fff",
-  border: `2px solid ${isActive ? "#7c3aed" : isFlagged ? "#d97706" : "#e2e8f0"}`,
-  borderRadius: 8,
-  padding: "8px 10px",
-  cursor: "pointer",
-  minHeight: 56,
-  display: "flex",
-  flexDirection: "column",
-  justifyContent: "center",
-  gap: 2,
-  transition: "border-color 0.15s",
-  flexShrink: 0,
-  overflow: "hidden",
-  boxShadow: isActive ? "0 0 0 3px #ede9fe" : "0 1px 3px rgba(0,0,0,0.06)",
-});
-
 const bucketStyle: CSSProperties = {
   background: "#fff",
   borderRadius: 12,
   padding: "20px 24px",
-  margin: 16,
+  margin: "12px 16px 16px",
   flexShrink: 0,
   border: "1px solid #e2e8f0",
   boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
@@ -828,7 +745,7 @@ const compareCardStyle: CSSProperties = {
   flexDirection: "column",
   alignItems: "center",
   justifyContent: "center",
-  minHeight: 160,
+  minHeight: 200,
   gap: 8,
   border: "1px solid #e2e8f0",
 };

@@ -19,16 +19,37 @@ const FONT_OPTIONS = [
   { label: "Nunito", value: '"Nunito", sans-serif' },
 ];
 
+type TextEffect = 'stroke' | 'glow' | 'shadow';
+
+const EFFECT_OPTIONS: { value: TextEffect | ''; label: string }[] = [
+  { value: '', label: 'No Effect' },
+  { value: 'stroke', label: 'Stroke' },
+  { value: 'glow', label: 'Glow' },
+  { value: 'shadow', label: 'Drop Shadow' },
+];
+
+const EFFECT_DEFAULT_COLOR: Record<TextEffect, string> = {
+  stroke: '#000000',
+  glow: '#ffffff',
+  shadow: '#000000',
+};
+
 interface FontToolbarProps {
   target: { itemId: string; element: "title" | "price" };
   currentFont?: string;
   currentColor?: string;
   currentItalic?: boolean;
   currentShowDollar?: boolean;
+  currentBg?: string;
+  currentBgPad?: number;
+  currentEffect?: TextEffect;
   onFontChange: (family: string) => void;
   onColorChange: (color: string) => void;
   onItalicToggle: () => void;
   onShowDollarToggle?: () => void;
+  onBgChange: (color: string | undefined) => void;
+  onBgPadChange: (pad: number) => void;
+  onEffectChange: (effect: TextEffect | undefined) => void;
   onClose: () => void;
 }
 
@@ -38,10 +59,16 @@ export default function FontToolbar({
   currentColor = "#000000",
   currentItalic,
   currentShowDollar,
+  currentBg,
+  currentBgPad = 2,
+  currentEffect,
   onFontChange,
   onColorChange,
   onItalicToggle,
   onShowDollarToggle,
+  onBgChange,
+  onBgPadChange,
+  onEffectChange,
   onClose,
 }: FontToolbarProps) {
   const label = target.element === "title" ? "Title Font:" : "Price Font:";
@@ -245,6 +272,74 @@ export default function FontToolbar({
           }}
         />
       </label>
+
+      {/* Text effect */}
+      <div style={{ width: 1, height: 20, background: "#e5e7eb", margin: "0 2px", flexShrink: 0 }} />
+      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", whiteSpace: "nowrap" }}>Effect:</span>
+        <select
+          value={currentEffect ?? ''}
+          onChange={(e) => {
+            const val = e.target.value as TextEffect | '';
+            onEffectChange(val || undefined);
+            if (val && !currentBg) onBgChange(EFFECT_DEFAULT_COLOR[val as TextEffect]);
+          }}
+          style={{
+            height: 28, padding: "0 6px",
+            border: "1px solid #d1d5db", borderRadius: 6,
+            background: currentEffect ? "#eff6ff" : "#f9fafb",
+            color: currentEffect ? "#1d4ed8" : "#374151",
+            fontSize: 12, cursor: "pointer",
+          }}
+        >
+          {EFFECT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </div>
+
+      {currentEffect && (
+        <>
+          <div style={{ width: 1, height: 20, background: "#e5e7eb", flexShrink: 0 }} />
+          <label
+            title="Effect color"
+            style={{
+              width: 28, height: 28, borderRadius: 6,
+              border: "1px solid #d1d5db", background: currentBg ?? '#000000',
+              cursor: "pointer", display: "flex", alignItems: "center",
+              justifyContent: "center", overflow: "hidden", position: "relative",
+            }}
+          >
+            <input
+              type="color"
+              value={currentBg ?? '#000000'}
+              onChange={(e) => onBgChange(e.target.value)}
+              style={{
+                position: "absolute", inset: 0, opacity: 0,
+                width: "100%", height: "100%", cursor: "pointer", padding: 0, border: "none",
+              }}
+            />
+          </label>
+          <input
+            type="number"
+            min={1} max={20} step={1}
+            value={currentBgPad}
+            onChange={(e) => onBgPadChange(Math.max(1, Number(e.target.value)))}
+            title="Effect size (px)"
+            style={{ width: 44, height: 28, border: "1px solid #d1d5db", borderRadius: 6, fontSize: 12, textAlign: "center", padding: "0 4px" }}
+          />
+          <button
+            onClick={() => onEffectChange(undefined)}
+            title="Remove effect"
+            style={{
+              height: 28, padding: "0 7px", borderRadius: 6,
+              border: "1px solid #fca5a5", background: "#fff1f2",
+              color: "#ef4444", fontSize: 13, lineHeight: 1,
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+          >
+            ✕
+          </button>
+        </>
+      )}
 
       {/* Close */}
       <button

@@ -32,16 +32,16 @@ export default function WorkflowProgressBar({ currentStep, onNavigate, onExportC
   return (
     <div style={{
       borderBottom: "1px solid #e5e7eb",
-      padding: "14px 48px 16px",
-      marginBottom: 8,
+      padding: "7px 32px 8px",
+      marginBottom: 6,
     }}>
       <div style={{ position: "relative", display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         {/* Grey track (full width) */}
         <div style={{
           position: "absolute",
-          top: 18,
-          left: 18,
-          right: 18,
+          top: 13,
+          left: 13,
+          right: 13,
           height: 2,
           background: "#e5e7eb",
           zIndex: 0,
@@ -51,9 +51,9 @@ export default function WorkflowProgressBar({ currentStep, onNavigate, onExportC
         {currentStep > 0 && (
           <div style={{
             position: "absolute",
-            top: 18,
-            left: 18,
-            width: `calc(${(currentStep / (STEPS.length - 1)) * 100}% - ${(currentStep / (STEPS.length - 1)) * 36}px)`,
+            top: 13,
+            left: 13,
+            width: `calc(${(currentStep / (STEPS.length - 1)) * 100}% - ${(currentStep / (STEPS.length - 1)) * 26}px)`,
             height: 2,
             background: COLOR_DONE,
             zIndex: 1,
@@ -93,14 +93,14 @@ export default function WorkflowProgressBar({ currentStep, onNavigate, onExportC
             >
               {/* Dot */}
               <div style={{
-                width: 36,
-                height: 36,
+                width: 26,
+                height: 26,
                 borderRadius: "50%",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 fontWeight: 700,
-                fontSize: isCompleted ? 15 : 13,
+                fontSize: isCompleted ? 12 : 11,
                 background: dotBg,
                 border: dotBorder,
                 color: dotColor,
@@ -112,7 +112,7 @@ export default function WorkflowProgressBar({ currentStep, onNavigate, onExportC
 
               {/* Label */}
               <span style={{
-                fontSize: 11,
+                fontSize: 10,
                 fontWeight: isActive ? 600 : 400,
                 color: isCompleted ? COLOR_DONE : isActive ? "#92400e" : "#9ca3af",
                 textAlign: "center",

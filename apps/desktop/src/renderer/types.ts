@@ -204,9 +204,24 @@ export type CardDef = {
   titleFontFamily?: string;
   titleColor?: string;
   titleItalic?: boolean;
+  titleBg?: string;
+  titleBgPad?: number;
+  titleEffect?: 'stroke' | 'glow' | 'shadow';
   priceFontFamily?: string;
   priceColor?: string;
   priceShowDollar?: boolean;
+  priceBg?: string;
+  priceBgPad?: number;
+  priceEffect?: 'stroke' | 'glow' | 'shadow';
+  priceCompDollarRatio?: number;
+  priceCompDollarOffsetY?: number;
+  priceCompQtyRatio?: number;
+  priceCompDecRatio?: number;
+  priceCompDecOffsetY?: number;
+  priceCompUnitRatio?: number;
+  priceCompUnitOffsetY?: number;
+  titleCompMetaScale?: number;
+  titleCompMetaOffsetY?: number;
   bannerOffsetX?: number;
   bannerOffsetY?: number;
   imageRadius?: number;
@@ -216,6 +231,10 @@ export type CardDef = {
   imageOpacity?: number;
   imageFlipH?: boolean;
   imageFlipV?: boolean;
+  titleOffsetX?: number;
+  titleOffsetY?: number;
+  priceOffsetX?: number;
+  priceOffsetY?: number;
 };
 
 export type CardLayout = CardDef[];

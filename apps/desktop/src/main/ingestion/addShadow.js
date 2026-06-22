@@ -32,7 +32,7 @@ function getNonTransparentBbox(data, width, height) {
  * @param {string} cutoutPath - Path to the cutout PNG with transparent background
  * @returns {Promise<string>} - Path to the new image with shadow
  */
-export async function addShadowToCutout(cutoutPath) {
+export async function addShadowToCutout(cutoutPath, options = {}) {
   console.log("🎨 [addShadow] Starting shadow overlay for:", cutoutPath);
 
   const img = await loadImage(cutoutPath);
@@ -74,6 +74,22 @@ export async function addShadowToCutout(cutoutPath) {
   const srcH = bbox ? bbox.h : img.height;
   console.log(`🎨 [addShadow] Trimmed to ${srcW}x${srcH} (from ${img.width}x${img.height})`);
 
+  const bboxAreaRatio = (srcW * srcH) / (img.width * img.height);
+  if (options.lowConfidence) {
+    console.log(
+      `🎨 [addShadow] Skipping shadow for low-confidence cutout ` +
+      `(${options.qualityReason || "unknown"})`
+    );
+    return cutoutPath;
+  }
+  if (bboxAreaRatio > 0.92 && transparentRatio < 0.08) {
+    console.log(
+      `🎨 [addShadow] Skipping shadow for near-full-rectangle cutout ` +
+      `(bbox=${bboxAreaRatio.toFixed(2)}, transparent=${transparentRatio.toFixed(2)})`
+    );
+    return cutoutPath;
+  }
+
   // ── Step 2: create shadow canvas sized to trimmed content ──
   const SHADOW_BLUR = 50;
   const SHADOW_OFFSET_X = 0;
@@ -93,11 +109,14 @@ export async function addShadowToCutout(cutoutPath) {
   ctx.drawImage(drawSource, srcX, srcY, srcW, srcH, PADDING, PADDING, srcW, srcH);
 
   // ── Step 3: save ──
-  const outputPath = cutoutPath.replace(".cutout.png", ".cutout.shadow.png");
+  // Temp files from the Python backend use names like "tmpXXXXXX.png" (no ".cutout.png"),
+  // so the simple string replace would leave outputPath === cutoutPath and corrupt the file.
+  const outputPath = cutoutPath.includes(".cutout.png")
+    ? cutoutPath.replace(".cutout.png", ".cutout.shadow.png")
+    : cutoutPath.replace(/\.png$/i, ".shadow.png");
+  if (outputPath === cutoutPath) throw new Error("[addShadow] output path must differ from input");
   const buffer = canvas.toBuffer("image/png");
   await fs.writeFile(outputPath, buffer);
-
-  if (outputPath === cutoutPath) throw new Error("[addShadow] output path must differ from input");
   const stat = await fs.stat(outputPath);
   if (!stat.isFile() || stat.size === 0) throw new Error("[addShadow] shadow file missing or empty: " + outputPath);
 

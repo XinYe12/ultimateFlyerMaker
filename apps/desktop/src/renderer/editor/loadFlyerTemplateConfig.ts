@@ -3,6 +3,7 @@ export type SlotDef = { x: number; y: number; width: number; height: number };
 export type CardDepartmentDef = {
   region: { x: number; y: number; width: number; height: number };
   rows: number;
+  cols?: number;
   cropLeft?: number;
   cropRight?: number;
   cropTop?: number;
@@ -23,6 +24,8 @@ export interface FlyerTemplateConfig {
     canvasHeight?: number;
     boxes?: CustomBoxDef[];
     departments: Record<string, DepartmentDef>;
+    /** Full wizard department metadata (grid style, padding, card appearance). */
+    departmentAreas?: DepartmentAreaDef[];
     backgroundColor?: string;
     backgroundImage?: string;
   }[];
@@ -75,6 +78,16 @@ export type CustomBoxDef = {
   textOffsetX?: number;
   /** Free text position: px from top edge of box */
   textOffsetY?: number;
+  /** Whether the user updates this field each week (e.g. valid dates) */
+  isEditable?: boolean;
+  /** Semantic kind for editable fields */
+  fieldKind?: 'date_range' | 'store_name' | 'address' | 'footer' | 'decorative' | 'custom';
+};
+
+/** Visual style of the department region background (step 1). */
+export type RegionStyleDef = {
+  backgroundColor?: string;
+  borderRadius?: number;
 };
 
 /** Visual appearance of each product card within a department grid. */
@@ -105,6 +118,24 @@ export type CardStyleDef = {
   imagePercent?: number;
 };
 
+/** Fine-grained control of product grid placement inside productRegion. */
+export type GridLayoutDef = {
+  /** px gap between adjacent cells */
+  cellGap?: number;
+  insetTop?: number;
+  insetLeft?: number;
+  insetRight?: number;
+  insetBottom?: number;
+  /** Relative row height weights (length = rows) */
+  rowWeights?: number[];
+  /** Relative column width weights (length = cols) */
+  colWeights?: number[];
+  /** Target cell width used to derive rows/cols in the import wizard */
+  targetCellWidth?: number;
+  /** Target cell height used to derive rows/cols in the import wizard */
+  targetCellHeight?: number;
+};
+
 /** Defines where product cards are laid out. Separate from visual department boxes. */
 export type DepartmentAreaDef = {
   id?: string; // optional for backward compat; added when missing
@@ -114,8 +145,12 @@ export type DepartmentAreaDef = {
   /** Number of product columns per row */
   cols?: number;
   productRegion: { x: number; y: number; width: number; height: number };
+  /** Department background fill behind the product grid */
+  regionStyle?: RegionStyleDef;
   /** Detected or configured style for each product card in this area */
   cardStyle?: CardStyleDef;
+  /** Padding/gap/weights to align grid cells with the source flyer */
+  gridLayout?: GridLayoutDef;
 };
 
 export type CustomTemplatePage = {
@@ -127,6 +162,8 @@ export type CustomTemplatePage = {
   departmentAreas?: DepartmentAreaDef[];
   /** Background image URL (data URL or asset path) for banner-style templates */
   backgroundImage?: string;
+  /** Original source flyer image path (for reference overlay in builder) */
+  sourceImagePath?: string;
   /** Fallback background color when no image */
   backgroundColor?: string;
 };
@@ -173,13 +210,28 @@ function boxesToDepartments(
   );
 }
 
+const DEPT_REGION_GAP = 6;
+
 /** Expand department area to fill canvas if it was saved with the old small default (400px). */
 function expandSqueezedRegion(
   productRegion: { x: number; y: number; width: number; height: number },
   canvasWidth: number,
-  canvasHeight: number
+  canvasHeight: number,
+  siblingAreas?: DepartmentAreaDef[]
 ): { x: number; y: number; width: number; height: number } {
-  const availableHeight = canvasHeight - productRegion.y - 40;
+  let availableHeight = canvasHeight - productRegion.y - 40;
+
+  if (siblingAreas?.length) {
+    const nextBelow = siblingAreas
+      .map(a => a.productRegion.y)
+      .filter(y => y > productRegion.y + 1)
+      .sort((a, b) => a - b)[0];
+    if (nextBelow != null) {
+      availableHeight = Math.min(availableHeight, nextBelow - productRegion.y - DEPT_REGION_GAP);
+    }
+  }
+
+  availableHeight = Math.max(0, availableHeight);
   if (productRegion.height >= availableHeight * 0.5) return productRegion;
   return {
     ...productRegion,
@@ -194,12 +246,13 @@ function buildDepartments(page: CustomTemplatePage): Record<string, DepartmentDe
     const ch = page.canvasHeight;
     return Object.fromEntries(
       page.departmentAreas.map(d => {
-        const region = expandSqueezedRegion(d.productRegion, cw, ch);
+        const region = expandSqueezedRegion(d.productRegion, cw, ch, page.departmentAreas);
         return [
           d.departmentKey,
           {
             region,
             rows: d.rows,
+            ...(d.cols != null ? { cols: d.cols } : {}),
           } as CardDepartmentDef,
         ];
       })
@@ -218,6 +271,7 @@ function hydrateCustomTemplate(c: CustomFlyerTemplateConfig): FlyerTemplateConfi
       canvasHeight: p.canvasHeight,
       boxes: p.boxes,
       departments: buildDepartments(p),
+      departmentAreas: p.departmentAreas,
       backgroundColor: p.backgroundColor,
       backgroundImage: p.backgroundImage,
     })),
@@ -274,4 +328,16 @@ export function findPageForDepartment(
   return config.pages.find(
     page => page.departments && page.departments[department]
   );
+}
+
+/** Wizard department area for a department key (grid style, padding, card appearance). */
+export function findDepartmentArea(
+  config: FlyerTemplateConfig,
+  department: string
+): DepartmentAreaDef | null {
+  for (const page of config.pages) {
+    const area = page.departmentAreas?.find(a => a.departmentKey === department);
+    if (area) return area;
+  }
+  return null;
 }

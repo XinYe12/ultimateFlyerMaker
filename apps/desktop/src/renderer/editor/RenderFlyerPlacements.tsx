@@ -5,6 +5,8 @@
 
 import React, { useState, useCallback, useRef, useLayoutEffect, useEffect } from "react";
 import { formatDaysOnlyBanner, getCycleStartFriday } from "../utils/flyerCycle";
+import { acceptPanelImageDrag, handlePanelImageDropEvent, type PanelImageDropHandler } from "./panelImageDrag";
+import { titleNudgeStyle, priceNudgeStyle, type CardOrientation } from "./textElementNudge";
 
 // Helper to parse price display into parts for rendering
 function parsePriceDisplay(display: string) {
@@ -50,6 +52,8 @@ function DaysOnlyBanner({
   cardWidth,
   offsetX = 0,
   offsetY = 0,
+  side = 'right',
+  topPct = 8,
   editMode,
   onPanStart,
   onSelect,
@@ -60,6 +64,8 @@ function DaysOnlyBanner({
   cardWidth: number;
   offsetX?: number;
   offsetY?: number;
+  side?: 'left' | 'right';
+  topPct?: number;
   editMode?: boolean;
   onPanStart?: (startOffsetX: number, startOffsetY: number, e: React.MouseEvent) => void;
   onSelect?: () => void;
@@ -85,10 +91,10 @@ function DaysOnlyBanner({
       onDoubleClick={editMode && onEdit ? (e) => { e.stopPropagation(); onEdit(); } : undefined}
       style={{
         position: "absolute",
-        top: `calc(8% + ${offsetY}px)`,
-        right: `calc(6% - ${offsetX}px)`,
-        left: "auto",
-        transform: `rotate(6deg)`,
+        top: `calc(${topPct}% + ${offsetY}px)`,
+        right: side === 'left' ? "auto" : `calc(6% - ${offsetX}px)`,
+        left: side === 'left' ? `calc(6% + ${offsetX}px)` : "auto",
+        transform: `rotate(${side === 'left' ? -6 : 6}deg)`,
         zIndex: 20,
         background: "#fff",
         border: "2px solid #f97316",
@@ -155,8 +161,8 @@ const FRAME_CORNERS: Array<['tl' | 'tr' | 'bl' | 'br', React.CSSProperties]> = [
   ['br', { bottom: 2, right: 2, cursor: 'se-resize' }],
 ];
 
-// Apple-style rotation dial — frosted glass circle, progress arc, system blue knob.
-// visible=true springs in; visible=false fades/shrinks out.
+// Corner rotation handle — sits just outside the top-right of the image bounding box.
+// No overlay on the image itself. Drag anywhere from the handle to rotate.
 function RotationDial({
   bL, bT, bW, bH, rotation, visible, isDragging, onRotateDragStart,
 }: {
@@ -166,124 +172,76 @@ function RotationDial({
   isDragging?: boolean;
   onRotateDragStart: (startRotation: number, centerX: number, centerY: number, e: React.MouseEvent) => void;
 }) {
-  const R = 52;           // dial radius
-  const TRACK = R - 14;   // arc / track radius
-  const TIP_R = 10;       // knob radius
-  const PAD = TIP_R + 4;  // space around dial so knob isn't clipped
-  const SIZE = (R + PAD) * 2;
-  const O = SIZE / 2;     // SVG / container center
-
-  // 0° = 12 o'clock; clockwise positive — matches CSS rotate()
-  const rad = (rotation - 90) * Math.PI / 180;
-  const tx = TRACK * Math.cos(rad);
-  const ty = TRACK * Math.sin(rad);
-
-  // Progress arc: sweep from 12 o'clock to current angle
-  const norm = ((rotation % 360) + 360) % 360;
-  const arcEndX = TRACK * Math.cos((norm - 90) * Math.PI / 180);
-  const arcEndY = TRACK * Math.sin((norm - 90) * Math.PI / 180);
-  const largeArc = norm > 180 ? 1 : 0;
-  const showArc = norm > 0.5 && norm < 359.5;
-  const showFullCircle = norm >= 359.5;
-
-  // Image center in card-local coordinates
-  const cx = bL + bW / 2;
-  const cy = bT + bH / 2;
-  const angleDisplay = Math.round(norm);
+  const centerRef = useRef<HTMLDivElement>(null);
+  const HANDLE = 22;
+  const OFFSET = 16;
+  const norm = Math.round(((rotation % 360) + 360) % 360);
 
   return (
-    <div style={{
-      position: 'absolute',
-      left: cx - O,
-      top: cy - O,
-      width: SIZE,
-      height: SIZE,
-      zIndex: 100,
-      pointerEvents: 'none',
-      opacity: visible ? 1 : 0,
-      transform: visible ? 'scale(1)' : 'scale(0.75)',
-      transformOrigin: 'center center',
-      // Spring curve on enter, plain ease on exit
-      transition: visible
-        ? 'opacity 0.18s ease, transform 0.26s cubic-bezier(0.34, 1.56, 0.64, 1)'
-        : 'opacity 0.16s ease, transform 0.16s ease',
-    }}>
-      {/* Frosted glass background — must be HTML div for backdrop-filter to work */}
+    <>
+      {/* 0×0 anchor at image center — used to get screen coords for the rotate pivot */}
+      <div
+        ref={centerRef}
+        style={{ position: 'absolute', left: bL + bW / 2, top: bT + bH / 2, pointerEvents: 'none' }}
+      />
+
+      {/* Handle: just outside the top-right corner */}
+      <div
+        onMouseDown={(e: React.MouseEvent) => {
+          e.stopPropagation();
+          e.preventDefault();
+          const c = centerRef.current!.getBoundingClientRect();
+          onRotateDragStart(rotation, c.left, c.top, e);
+        }}
+        style={{
+          position: 'absolute',
+          left: bL + bW + OFFSET - HANDLE / 2,
+          top: bT - OFFSET - HANDLE / 2,
+          width: HANDLE,
+          height: HANDLE,
+          borderRadius: '50%',
+          background: '#007AFF',
+          border: '2.5px solid #fff',
+          boxShadow: '0 2px 8px rgba(0,122,255,0.45)',
+          zIndex: 100,
+          cursor: isDragging ? 'grabbing' : 'crosshair',
+          pointerEvents: visible ? 'all' : 'none',
+          opacity: visible ? 1 : 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          userSelect: 'none',
+          transition: 'opacity 0.15s',
+        }}
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21.5 2v6h-6" />
+          <path d="M21.34 15.57a10 10 0 1 1-.57-8.38" />
+        </svg>
+      </div>
+
+      {/* Angle badge below the handle */}
       <div style={{
         position: 'absolute',
-        left: PAD, top: PAD,
-        width: R * 2, height: R * 2,
-        borderRadius: '50%',
-        backdropFilter: 'blur(20px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-        background: 'rgba(255,255,255,0.78)',
-        boxShadow: '0 4px 24px rgba(0,0,0,0.13), 0 1px 3px rgba(0,0,0,0.08), inset 0 0.5px 0 rgba(255,255,255,0.95)',
-        border: '0.5px solid rgba(200,200,200,0.35)',
-      }} />
-      {/* SVG: track ring, progress arc, pivot, knob, label */}
-      <svg width={SIZE} height={SIZE} style={{ position: 'absolute', inset: 0, overflow: 'visible' }}>
-        {/* Subtle track ring */}
-        <circle cx={O} cy={O} r={TRACK}
-          fill="none" stroke="rgba(0,0,0,0.09)" strokeWidth="2"
-          style={{ pointerEvents: 'none' }}
-        />
-        {/* North marker — always visible as 0° reference */}
-        <line x1={O} y1={O - TRACK - 5} x2={O} y2={O - TRACK + 5}
-          stroke="rgba(0,0,0,0.15)" strokeWidth="1.5" strokeLinecap="round"
-          style={{ pointerEvents: 'none' }}
-        />
-        {/* Progress arc — Apple blue sweep */}
-        {showFullCircle && (
-          <circle cx={O} cy={O} r={TRACK}
-            fill="none" stroke="#007AFF" strokeWidth="2.5"
-            style={{ pointerEvents: 'none' }}
-          />
-        )}
-        {showArc && (
-          <path
-            d={`M ${O} ${O - TRACK} A ${TRACK} ${TRACK} 0 ${largeArc} 1 ${O + arcEndX} ${O + arcEndY}`}
-            fill="none" stroke="#007AFF" strokeWidth="2.5" strokeLinecap="round"
-            style={{ pointerEvents: 'none' }}
-          />
-        )}
-        {/* Center pivot dot */}
-        <circle cx={O} cy={O} r={2.5}
-          fill="rgba(0,0,0,0.18)" style={{ pointerEvents: 'none' }}
-        />
-        {/* Draggable knob — THE only interactive element */}
-        <circle
-          cx={O + tx} cy={O + ty} r={TIP_R}
-          fill="#007AFF"
-          style={{
-            pointerEvents: visible ? 'all' : 'none',
-            cursor: isDragging ? 'grabbing' : 'grab',
-            filter: 'drop-shadow(0 2px 6px rgba(0,122,255,0.5))',
-          }}
-          onMouseDown={(e: React.MouseEvent) => {
-            e.stopPropagation();
-            e.preventDefault();
-            const svgEl = (e.currentTarget as SVGElement).closest('svg')!;
-            const rect = svgEl.getBoundingClientRect();
-            onRotateDragStart(rotation, rect.left + rect.width / 2, rect.top + rect.height / 2, e);
-          }}
-        />
-        {/* White center dot on knob */}
-        <circle cx={O + tx} cy={O + ty} r={3.5}
-          fill="white" style={{ pointerEvents: 'none' }}
-        />
-        {/* Angle readout — SF Pro style, centered in dial */}
-        <text
-          x={O} y={O}
-          textAnchor="middle" dominantBaseline="middle"
-          fontSize="13" fontWeight="500"
-          fontFamily="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif"
-          fill="rgba(0,0,0,0.5)"
-          style={{ userSelect: 'none', pointerEvents: 'none' } as React.CSSProperties}
-        >
-          {angleDisplay}°
-        </text>
-      </svg>
-    </div>
+        left: bL + bW + OFFSET - 16,
+        top: bT - OFFSET + HANDLE / 2 + 5,
+        background: 'rgba(0,0,0,0.6)',
+        color: '#fff',
+        fontSize: 10,
+        fontWeight: 600,
+        padding: '1px 5px',
+        borderRadius: 4,
+        pointerEvents: 'none',
+        userSelect: 'none',
+        whiteSpace: 'nowrap',
+        zIndex: 101,
+        opacity: visible ? 1 : 0,
+        transition: 'opacity 0.15s',
+        fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+      }}>
+        {norm}°
+      </div>
+    </>
   );
 }
 
@@ -292,6 +250,7 @@ function PlacementCard({
   onSubImageScaleDragStart, onSubImageRotateDragStart, onDeleteSubImage,
   onImagePanStart, onSubImagePanStart, onOrientationChange, onCropDragStart, onSubImageCropDragStart,
   onBannerPanStart, onEditBanner,
+  onPricePanStart,
   onElementSelect,
   onContextMenu,
   selectedEl = null,
@@ -300,6 +259,8 @@ function PlacementCard({
   onSelectSubIdx,
   rerunningCutoutPath = null,
   activeReplacementJobs,
+  onCancelReplacementJob,
+  onPanelImageDrop,
 }: {
   p: any;
   item: any;
@@ -321,6 +282,7 @@ function PlacementCard({
   onSubImageCropDragStart?: (subIdx: number, side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds: { width: number; height: number }) => void;
   onBannerPanStart?: (startOffsetX: number, startOffsetY: number, e: React.MouseEvent) => void;
   onEditBanner?: () => void;
+  onPricePanStart?: (startOffsetY: number, e: React.MouseEvent) => void;
   onElementSelect?: (element: 'title' | 'price' | 'banner' | null) => void;
   onContextMenu?: () => void;
   selectedEl?: 'image' | 'title' | 'price' | null;
@@ -329,6 +291,8 @@ function PlacementCard({
   onSelectSubIdx?: (idx: number | null) => void;
   rerunningCutoutPath?: string | null;
   activeReplacementJobs?: Array<{ id: string; status: "processing" | "done" | "error" }>;
+  onCancelReplacementJob?: (jobId: string) => void;
+  onPanelImageDrop?: PanelImageDropHandler;
 }) {
   const [imgInfo, setImgInfo] = useState<{
     natW: number; natH: number;
@@ -339,6 +303,40 @@ function PlacementCard({
   // Suppresses spurious click-to-edit after a corner-handle drag ends inside the text div.
   const suppressClickRef = useRef(false);
   const cardRef = useRef<HTMLDivElement>(null);
+
+  const handlePanelDragOver = (e: React.DragEvent) => {
+    if (!onPanelImageDrop) return;
+    acceptPanelImageDrag(e);
+  };
+
+  const handlePanelDrop = (e: React.DragEvent) => {
+    if (!onPanelImageDrop) return;
+    handlePanelImageDropEvent(e, onPanelImageDrop, { itemId: p.itemId ?? null });
+  };
+
+  const blankDropZoneStyle: React.CSSProperties = {
+    flex: 1,
+    minHeight: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    border: "1.5px dashed #ADB5BD",
+    borderRadius: 4,
+    background: "#F1F3F5",
+    color: "#868e96",
+    fontSize: 11,
+    fontWeight: 600,
+    textAlign: "center",
+    padding: 8,
+  };
+
+  const renderBlankImageDrop = () =>
+    editMode && onPanelImageDrop ? (
+      <div style={{ ...blankDropZoneStyle, width: "100%", height: "100%" }}>
+        Drop image from library
+      </div>
+    ) : null;
+
   const onElementSelectRef = useRef(onElementSelect);
   onElementSelectRef.current = onElementSelect;
   const [titleDrag, setTitleDrag] = useState<{
@@ -361,6 +359,15 @@ function PlacementCard({
 
   // For n=3 multi-image: randomly choose diagonal vs 2+1 grid (decided once per mount)
   const diagonalRef = useRef<boolean>(Math.random() < 0.5);
+
+  // Reset imgInfo whenever the displayed image changes (e.g. after a cutout rerun).
+  // Without this, the old bbox/ratio stays cached and the new image renders at the wrong size.
+  const imgSrcForInfo = (item?.result?.cutoutPaths?.[0] ?? item?.result?.cutoutPath ?? item?.result?.inputPath) || null;
+  const prevImgSrcForInfoRef = useRef(imgSrcForInfo);
+  if (prevImgSrcForInfoRef.current !== imgSrcForInfo) {
+    prevImgSrcForInfoRef.current = imgSrcForInfo;
+    setImgInfo(null);
+  }
 
   const onFirstImgLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
     const el = e.currentTarget;
@@ -577,6 +584,11 @@ function PlacementCard({
   const imgRotation = (p.imageRotation ?? 0) as number;
   const imgOffsetX  = (p.imageOffsetX  ?? 0) as number;
   const imgOffsetY  = (p.imageOffsetY  ?? 0) as number;
+  const titleOffsetX = (p.titleOffsetX ?? 0) as number;
+  const titleOffsetY = (p.titleOffsetY ?? 0) as number;
+  const priceOffsetX = (p.priceOffsetX ?? 0) as number;
+  const priceOffsetY = (p.priceOffsetY ?? 0) as number;
+  const cardOrientation = (p.orientation ?? "vertical") as CardOrientation;
   const cropL = (p.cropLeft  ?? 0) as number;
   const cropR = (p.cropRight ?? 0) as number;
   const cropT = (p.cropTop   ?? 0) as number;
@@ -599,17 +611,39 @@ function PlacementCard({
   const titleFontFamily = p.titleFontFamily as string | undefined;
   const titleColor = p.titleColor as string | undefined;
   const titleItalic = p.titleItalic as boolean | undefined;
+  const titleBg = p.titleBg as string | undefined;
+  const titleBgPad = (p.titleBgPad as number | undefined) ?? 2;
+  const titleEffect = p.titleEffect as 'stroke' | 'glow' | 'shadow' | undefined;
   const priceFontFamily = p.priceFontFamily as string | undefined;
   const priceColor = p.priceColor as string | undefined;
   const priceShowDollar = p.priceShowDollar as boolean | undefined;
+  const priceBg = p.priceBg as string | undefined;
+  const priceBgPad = (p.priceBgPad as number | undefined) ?? 2;
+  const priceEffect = p.priceEffect as 'stroke' | 'glow' | 'shadow' | undefined;
+
+  function buildTextEffect(effect: typeof titleEffect, color: string | undefined, size: number): React.CSSProperties {
+    if (!effect || !color) return {};
+    if (effect === 'stroke') return { WebkitTextStroke: `${size}px ${color}` };
+    if (effect === 'glow') return { textShadow: `0 0 ${size}px ${color}, 0 0 ${size * 2}px ${color}, 0 0 ${size * 3}px ${color}` };
+    // shadow
+    return { textShadow: `${size}px ${size}px ${Math.ceil(size * 0.8)}px ${color}` };
+  }
+
   const titleTextStyle: React.CSSProperties = {
     fontFamily: titleFontFamily ?? undefined,
     color: titleColor ?? undefined,
     fontStyle: titleItalic ? 'italic' : undefined,
+    ...buildTextEffect(titleEffect, titleBg, titleBgPad),
+  };
+  // Effect-free variant for supplementary text (reg price, size) that should stay plain
+  const titleBaseStyle: React.CSSProperties = {
+    fontFamily: titleFontFamily ?? undefined,
+    color: titleColor ?? undefined,
   };
   const priceTextStyle: React.CSSProperties = {
     fontFamily: priceFontFamily ?? undefined,
     color: priceColor ?? undefined,
+    ...buildTextEffect(priceEffect, priceBg, priceBgPad),
   };
 
   const topPad = Math.round(p.height * 0.05 * scale);
@@ -632,6 +666,8 @@ function PlacementCard({
   const priceMainBase = clamp(16, Math.min(p.height * 0.55, sizeByWidth), 220) * scale * prcScale;
   const titleMainSize = clamp(13, p.width * 0.034, 22) * scale * titScale;
   const titleMetaSize = clamp(11, p.width * 0.026, 17) * scale * titScale;
+  const titleMetaSizeActual = Math.round(titleMetaSize * ((p.titleCompMetaScale as number | undefined) ?? 1.0));
+  const titleMetaOffsetY = (p.titleCompMetaOffsetY as number | undefined) ?? 0;
 
   // ── overlap-based price font scaling ──
   // Starts at 1; shrunk by useLayoutEffect if price overlaps title.
@@ -663,13 +699,13 @@ function PlacementCard({
   }, [adjustKey, priceFontScale]);
 
   const priceMainSize = Math.round(priceMainBase * priceFontScale);
-  const priceDecSize  = Math.round(priceMainSize * 0.50);
-  const priceDecTop   = -Math.round(priceMainSize * 0.20);
-  const priceQtySize  = Math.round(priceMainSize * 0.55);
-  const priceUnitSize = Math.round(priceMainSize * 0.12);
-  const dollarSize    = Math.round(priceMainSize * 0.35);
-  // Raise $ so its top almost touches the top of the big integer (~0.72 cap height ratio)
-  const dollarTop     = -Math.round(priceMainSize * 0.44);
+  const priceDecSize  = Math.round(priceMainSize * ((p.priceCompDecRatio as number | undefined) ?? 0.50));
+  const priceDecTop   = -Math.round(priceMainSize * 0.20) + ((p.priceCompDecOffsetY as number | undefined) ?? 0);
+  const priceQtySize  = Math.round(priceMainSize * ((p.priceCompQtyRatio as number | undefined) ?? 0.55));
+  const priceUnitSize = Math.round(priceMainSize * ((p.priceCompUnitRatio as number | undefined) ?? 0.12));
+  const priceUnitOffsetY = (p.priceCompUnitOffsetY as number | undefined) ?? 0;
+  const dollarSize    = Math.round(priceMainSize * ((p.priceCompDollarRatio as number | undefined) ?? 0.35));
+  const dollarTop     = -Math.round(priceMainSize * 0.44) + ((p.priceCompDollarOffsetY as number | undefined) ?? 0);
 
   const availW = p.orientation === 'horizontal'
     ? Math.max(1, Math.round(p.width * 0.55) - SIDE_PAD * 2)
@@ -1007,8 +1043,24 @@ function PlacementCard({
     );
   }
 
-  // Nothing to render at all
-  if (!imgSrc && !imgSrcs?.length && !hasLabel) return null;
+  // Nothing to render at all — still allow image-library drop when we have a slot item
+  if (!imgSrc && !imgSrcs?.length && !hasLabel) {
+    if (!p.itemId || !onPanelImageDrop) return null;
+    return (
+      <div
+        style={{
+          position: "absolute", left: p.x, top: p.y,
+          width: p.width, height: p.height,
+          display: "flex", flexDirection: "column",
+          padding: 8, boxSizing: "border-box",
+        }}
+        onDragOver={handlePanelDragOver}
+        onDrop={handlePanelDrop}
+      >
+        <div style={blankDropZoneStyle}>Drop image from library</div>
+      </div>
+    );
+  }
 
   // ── Confidence badge (automation slots only) ──
   const matchSource = item?.result?.matchSource;
@@ -1029,6 +1081,15 @@ function PlacementCard({
 
 
   // ── Days-only promotional badge overlay ──
+  const bannerSide: 'left' | 'right' = p.orientation === 'horizontal' ? 'left' : 'right';
+  const bannerTopPct = (() => {
+    if (p.orientation !== 'top') return 8;
+    const hasTitleMeta = !!(label?.title?.size || label?.title?.regularPrice);
+    const estimatedTitleH = SIDE_PAD * 2 + titleMainSize * 1.2
+      + (hasTitleMeta ? titleMetaSize * 1.2 + 2 : 0);
+    return Math.min(60, Math.round((estimatedTitleH / p.height) * 100) + 5);
+  })();
+
   const daysBanner = label?.price?.days && label.price.days.length > 0 ? (
     <DaysOnlyBanner
       days={label.price.days}
@@ -1036,6 +1097,8 @@ function PlacementCard({
       cardWidth={p.width}
       offsetX={p.bannerOffsetX ?? 0}
       offsetY={p.bannerOffsetY ?? 0}
+      side={bannerSide}
+      topPct={bannerTopPct}
       editMode={editMode}
       onPanStart={onBannerPanStart}
       onSelect={onElementSelect ? () => onElementSelect('banner') : undefined}
@@ -1053,7 +1116,18 @@ function PlacementCard({
         background: "#F1F3F5",
         border: "1.5px dashed #ADB5BD",
         borderRadius: 4,
-      }} />
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "#868e96",
+        fontSize: 11,
+        fontWeight: 600,
+      }}
+        onDragOver={handlePanelDragOver}
+        onDrop={handlePanelDrop}
+      >
+        Drop image from library
+      </div>
     );
   }
 
@@ -1080,6 +1154,21 @@ function PlacementCard({
               <div style={{ height: "100%", width: "30%", background: "#4C6EF5", borderRadius: 2,
                             animation: "ufm-progress-pulse 1.4s ease-in-out infinite" }} />
             </div>
+            {onCancelReplacementJob && (
+              <button
+                onClick={e => {
+                  e.stopPropagation();
+                  activeReplacementJobs!.forEach(j => onCancelReplacementJob(j.id));
+                }}
+                style={{ marginTop: 4, padding: "5px 14px", fontSize: 11, fontWeight: 700,
+                         letterSpacing: "0.04em", textTransform: "uppercase", cursor: "pointer",
+                         border: "none", borderRadius: 5,
+                         background: "#E03131", color: "#fff",
+                         boxShadow: "0 2px 6px rgba(224,49,49,0.4)" }}
+              >
+                Cancel
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1133,6 +1222,8 @@ function PlacementCard({
           width: p.width, height: p.height, overflow: "visible",
         }}
         onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.(null); onElementSelect?.(null); if (selectedSubIdx !== null) onSelectSubIdx?.(null); } : undefined}
+        onDragOver={handlePanelDragOver}
+        onDrop={handlePanelDrop}
       >
         {/* Content wrapper — crop applied only to image div below */}
         <div style={{ position: 'absolute', inset: 0, overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden' }}>
@@ -1209,7 +1300,7 @@ function PlacementCard({
                   })()}
                 </>
               );
-            })() : undefined) : null}
+            })() : undefined) : renderBlankImageDrop()}
             {imgZoneOverlay}
           </div>
           {/* Right 45% — title (top-right; top edge 23% down from card top) + price (bottom-right) */}
@@ -1232,6 +1323,7 @@ function PlacementCard({
                     cursor: editMode ? 'pointer' : undefined,
                     pointerEvents: 'auto',
                     userSelect: editMode ? 'none' : undefined,
+                    ...titleNudgeStyle(cardOrientation, titleOffsetX, titleOffsetY, SIDE_PAD),
                   }}
                   onMouseDown={handleTitleMouseDown}
                   onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('title'); onElementSelect?.('title'); } : undefined}
@@ -1257,7 +1349,7 @@ function PlacementCard({
                     {label.title.en.toUpperCase()}
                   </div>
                   {(label.title.size || label.title.regularPrice) && (
-                    <div className="ufm-title-meta" style={{ fontSize: titleMetaSize, ...titleTextStyle }}>
+                    <div className="ufm-title-meta" style={{ fontSize: titleMetaSizeActual, marginTop: 2 + titleMetaOffsetY, ...titleBaseStyle }}>
                       {label.title.size}
                       {label.title.regularPrice && <> REG: {label.title.regularPrice}</>}
                     </div>
@@ -1268,12 +1360,16 @@ function PlacementCard({
             {hasLabel && priceParts && (
               <div
                 style={{
-                  position: 'absolute', bottom: SIDE_PAD, right: SIDE_PAD,
+                  position: 'absolute',
                   display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end',
                   zIndex: 10,
                   opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'price') ? 0.5 : 1,
-                  cursor: editMode ? 'pointer' : undefined,
+                  cursor: effectiveEditMode && onPricePanStart ? 'ns-resize' : undefined,
+                  ...priceNudgeStyle(priceOffsetX, priceOffsetY, SIDE_PAD),
                 }}
+                onMouseDown={effectiveEditMode && onPricePanStart
+                  ? (e) => { e.stopPropagation(); onPricePanStart(priceOffsetY, e); }
+                  : undefined}
                 onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('price'); onElementSelect?.('price'); } : undefined}
                 onDoubleClick={editMode && onEditPrice ? (e) => { e.stopPropagation(); onEditPrice(); } : undefined}
               >
@@ -1303,11 +1399,15 @@ function PlacementCard({
                     )}
                     <span className="ufm-price-main" style={{ fontSize: priceMainSize, ...priceTextStyle }}>{priceParts.integer}</span>
                   </span>
-                  {priceParts.decimal && (
-                    <span className="ufm-price-decimal" style={{ fontSize: priceDecSize, top: priceDecTop, ...priceTextStyle }}>{priceParts.decimal}</span>
-                  )}
-                  {priceParts.type === "SINGLE" && priceParts.unit && (
-                    <span className="ufm-price-unit" style={{ fontSize: priceUnitSize, ...priceTextStyle }}>/{priceParts.unit.toUpperCase()}</span>
+                  {(priceParts.decimal || (priceParts.type === "SINGLE" && priceParts.unit)) && (
+                    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', position: 'relative', top: priceDecTop, lineHeight: 1.1 }}>
+                      {priceParts.decimal && (
+                        <span className="ufm-price-decimal" style={{ fontSize: priceDecSize, ...priceTextStyle }}>{priceParts.decimal}</span>
+                      )}
+                      {priceParts.type === "SINGLE" && priceParts.unit && (
+                        <span className="ufm-price-unit" style={{ fontSize: priceUnitSize, marginTop: priceUnitOffsetY, ...priceTextStyle }}>/{priceParts.unit.toUpperCase()}</span>
+                      )}
+                    </span>
                   )}
                 </div>
               </div>
@@ -1359,6 +1459,7 @@ function PlacementCard({
                 opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'title') ? 0.5 : 1,
                 cursor: editMode ? 'pointer' : undefined,
                 userSelect: editMode ? 'none' : undefined,
+                ...titleNudgeStyle(cardOrientation, titleOffsetX, titleOffsetY, SIDE_PAD),
               }}
               onMouseDown={handleTitleMouseDown}
               onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('title'); onElementSelect?.('title'); } : undefined}
@@ -1384,7 +1485,7 @@ function PlacementCard({
                 {label.title.en.toUpperCase()}
               </div>
               {(label.title.size || label.title.regularPrice) && (
-                <div className="ufm-title-meta" style={{ fontSize: titleMetaSize, ...titleTextStyle }}>
+                <div className="ufm-title-meta" style={{ fontSize: titleMetaSizeActual, marginTop: 2 + titleMetaOffsetY, ...titleBaseStyle }}>
                   {label.title.size}
                   {label.title.regularPrice && <> REG: {label.title.regularPrice}</>}
                 </div>
@@ -1450,7 +1551,7 @@ function PlacementCard({
                   })()}
                 </>
               );
-            })() : undefined) : null}
+            })() : undefined) : renderBlankImageDrop()}
             {imgZoneOverlay}
           </div>
         </div>
@@ -1458,12 +1559,16 @@ function PlacementCard({
         {hasLabel && priceParts && (
           <div
             style={{
-              position: 'absolute', bottom: SIDE_PAD, right: SIDE_PAD,
+              position: 'absolute',
               display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end',
               zIndex: 10,
               opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'price') ? 0.5 : 1,
-              cursor: editMode ? 'pointer' : undefined,
+              cursor: effectiveEditMode && onPricePanStart ? 'ns-resize' : undefined,
+              ...priceNudgeStyle(priceOffsetX, priceOffsetY, SIDE_PAD),
             }}
+            onMouseDown={effectiveEditMode && onPricePanStart
+              ? (e) => { e.stopPropagation(); onPricePanStart(priceOffsetY, e); }
+              : undefined}
             onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('price'); onElementSelect?.('price'); } : undefined}
             onDoubleClick={editMode && onEditPrice ? (e) => { e.stopPropagation(); onEditPrice(); } : undefined}
           >
@@ -1493,11 +1598,15 @@ function PlacementCard({
                 )}
                 <span className="ufm-price-main" style={{ fontSize: priceMainSize, ...priceTextStyle }}>{priceParts.integer}</span>
               </span>
-              {priceParts.decimal && (
-                <span className="ufm-price-decimal" style={{ fontSize: priceDecSize, top: priceDecTop, ...priceTextStyle }}>{priceParts.decimal}</span>
-              )}
-              {priceParts.type === "SINGLE" && priceParts.unit && (
-                <span className="ufm-price-unit" style={{ fontSize: priceUnitSize, ...priceTextStyle }}>/{priceParts.unit.toUpperCase()}</span>
+              {(priceParts.decimal || (priceParts.type === "SINGLE" && priceParts.unit)) && (
+                <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', position: 'relative', top: priceDecTop, lineHeight: 1.1 }}>
+                  {priceParts.decimal && (
+                    <span className="ufm-price-decimal" style={{ fontSize: priceDecSize, ...priceTextStyle }}>{priceParts.decimal}</span>
+                  )}
+                  {priceParts.type === "SINGLE" && priceParts.unit && (
+                    <span className="ufm-price-unit" style={{ fontSize: priceUnitSize, marginTop: priceUnitOffsetY, ...priceTextStyle }}>/{priceParts.unit.toUpperCase()}</span>
+                  )}
+                </span>
               )}
             </div>
           </div>
@@ -1518,6 +1627,8 @@ function PlacementCard({
         width: p.width, height: p.height, overflow: "visible",
       }}
       onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.(null); onElementSelect?.(null); if (selectedSubIdx !== null) onSelectSubIdx?.(null); } : undefined}
+      onDragOver={handlePanelDragOver}
+      onDrop={handlePanelDrop}
     >
       {/* Content wrapper — crop is applied only to image zone below */}
       <div style={{ position: 'absolute', inset: 0, overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden' }}>
@@ -1671,7 +1782,7 @@ function PlacementCard({
                   })()}
                 </>
               );
-            })() : undefined) : null}
+            })() : undefined) : renderBlankImageDrop()}
         {imgZoneOverlay}
       </div>
 
@@ -1679,7 +1790,6 @@ function PlacementCard({
       {hasLabel && (label.title.en || label.title.zh) && (
         <div ref={titleRef} style={{
           position: "absolute",
-          bottom: SIDE_PAD, left: SIDE_PAD,
           maxWidth: "50%",
           display: "flex", flexDirection: "column",
           justifyContent: "flex-end",
@@ -1688,6 +1798,7 @@ function PlacementCard({
           opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'title') ? 0.5 : 1,
           cursor: editMode ? "pointer" : undefined,
           userSelect: editMode ? "none" : undefined,
+          ...titleNudgeStyle(cardOrientation, titleOffsetX, titleOffsetY, SIDE_PAD),
         }}
         onMouseDown={handleTitleMouseDown}
         onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('title'); onElementSelect?.('title'); } : undefined}
@@ -1713,7 +1824,7 @@ function PlacementCard({
             {label.title.en.toUpperCase()}
           </div>
           {(label.title.size || label.title.regularPrice) && (
-            <div className="ufm-title-meta" style={{ fontSize: titleMetaSize, ...titleTextStyle }}>
+            <div className="ufm-title-meta" style={{ fontSize: titleMetaSizeActual, marginTop: 2 + titleMetaOffsetY, ...titleBaseStyle }}>
               {label.title.size}
               {label.title.regularPrice && <> REG: {label.title.regularPrice}</>}
             </div>
@@ -1725,13 +1836,16 @@ function PlacementCard({
       {hasLabel && priceParts && (
         <div ref={priceRef} style={{
           position: "absolute",
-          bottom: SIDE_PAD, right: SIDE_PAD,
           display: "flex",
           alignItems: "flex-end", justifyContent: "flex-end",
           zIndex: 10,
           opacity: (activeScaleDrag?.itemId === p.itemId && activeScaleDrag?.type === 'price') ? 0.5 : 1,
-          cursor: editMode ? "pointer" : undefined,
+          cursor: effectiveEditMode && onPricePanStart ? 'ns-resize' : undefined,
+          ...priceNudgeStyle(priceOffsetX, priceOffsetY, SIDE_PAD),
         }}
+        onMouseDown={effectiveEditMode && onPricePanStart
+          ? (e) => { e.stopPropagation(); onPricePanStart(priceOffsetY, e); }
+          : undefined}
         onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.('price'); onElementSelect?.('price'); } : undefined}
         onDoubleClick={editMode && onEditPrice ? (e) => { e.stopPropagation(); onEditPrice(); } : undefined}
         >
@@ -1761,11 +1875,15 @@ function PlacementCard({
               )}
               <span className="ufm-price-main" style={{ fontSize: priceMainSize, ...priceTextStyle }}>{priceParts.integer}</span>
             </span>
-            {priceParts.decimal && (
-              <span className="ufm-price-decimal" style={{ fontSize: priceDecSize, top: priceDecTop, ...priceTextStyle }}>{priceParts.decimal}</span>
-            )}
-            {priceParts.type === "SINGLE" && priceParts.unit && (
-              <span className="ufm-price-unit" style={{ fontSize: priceUnitSize, ...priceTextStyle }}>/{priceParts.unit.toUpperCase()}</span>
+            {(priceParts.decimal || (priceParts.type === "SINGLE" && priceParts.unit)) && (
+              <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', position: 'relative', top: priceDecTop, lineHeight: 1.1 }}>
+                {priceParts.decimal && (
+                  <span className="ufm-price-decimal" style={{ fontSize: priceDecSize, ...priceTextStyle }}>{priceParts.decimal}</span>
+                )}
+                {priceParts.type === "SINGLE" && priceParts.unit && (
+                  <span className="ufm-price-unit" style={{ fontSize: priceUnitSize, marginTop: priceUnitOffsetY, ...priceTextStyle }}>/{priceParts.unit.toUpperCase()}</span>
+                )}
+              </span>
             )}
           </div>
         </div>
@@ -1813,10 +1931,13 @@ export default function RenderFlyerPlacements({
   onSubImageCropDragStart,
   onBannerPanStart,
   onEditBannerDays,
+  onPricePanStart,
   onElementSelect,
   onCardContextMenu,
   replacementJobs,
+  onCancelReplacementJob,
   rerunningCutoutMap,
+  onPanelImageDrop,
 }: {
   items: any[];
   placements: any[];
@@ -1844,10 +1965,13 @@ export default function RenderFlyerPlacements({
   onSubImageCropDragStart?: (itemId: string, subIdx: number, side: 'left' | 'right' | 'top' | 'bottom', startValue: number, e: React.MouseEvent, bounds: { width: number; height: number }) => void;
   onBannerPanStart?: (itemId: string, startOffsetX: number, startOffsetY: number, e: React.MouseEvent) => void;
   onEditBannerDays?: (itemId: string) => void;
+  onPricePanStart?: (itemId: string, startOffsetY: number, e: React.MouseEvent) => void;
   onElementSelect?: (itemId: string, element: 'title' | 'price' | 'banner' | null) => void;
   onCardContextMenu?: (itemId: string) => void;
   replacementJobs?: Array<{ id: string; itemId: string; url: string; status: "processing" | "done" | "error"; errorMessage?: string }>;
+  onCancelReplacementJob?: (jobId: string) => void;
   rerunningCutoutMap?: Map<string, string>;
+  onPanelImageDrop?: PanelImageDropHandler;
 }) {
   // Single unified selection: only one card element or sub-image can be selected at a time
   const [activeSel, setActiveSel] = useState<
@@ -1962,6 +2086,9 @@ export default function RenderFlyerPlacements({
             onBannerPanStart={onBannerPanStart
               ? (startOffsetX, startOffsetY, e) => onBannerPanStart(p.itemId, startOffsetX, startOffsetY, e)
               : undefined}
+            onPricePanStart={onPricePanStart
+              ? (startOffsetY, e) => onPricePanStart(p.itemId, startOffsetY, e)
+              : undefined}
             onEditBanner={onEditBannerDays && p.itemId
               ? () => onEditBannerDays(p.itemId)
               : undefined}
@@ -1975,6 +2102,8 @@ export default function RenderFlyerPlacements({
             onSelectSubIdx={(idx) => setActiveSel(idx != null ? { itemId: p.itemId, kind: 'sub', subIdx: idx } : null)}
             rerunningCutoutPath={rerunningCutoutMap?.get(p.itemId) ?? null}
             activeReplacementJobs={(replacementJobs ?? []).filter(j => j.itemId === p.itemId && j.status === "processing")}
+            onCancelReplacementJob={onCancelReplacementJob}
+            onPanelImageDrop={onPanelImageDrop}
           />
         );
       })}
