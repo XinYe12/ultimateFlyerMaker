@@ -325,6 +325,13 @@ contextBridge.exposeInMainWorld("ufm", {
   // ---------- CONFIRM DIALOG ----------
   showConfirmDialog: (opts) => ipcRenderer.invoke("ufm:showConfirmDialog", opts),
 
+  // ---------- CANVAS ZOOM ----------
+  onCanvasZoom: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ufm:canvasZoom", handler);
+    return () => ipcRenderer.removeListener("ufm:canvasZoom", handler);
+  },
+
   // ---------- STARTUP TIMING ----------
   getStartupTiming: () => ipcRenderer.invoke("ufm:getStartupTiming"),
 

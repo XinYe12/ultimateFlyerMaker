@@ -229,15 +229,13 @@ function createWindow() {
 
     if (zoomIn) {
       event.preventDefault();
-      const next = Math.min(3.0, Math.round((mainWindow.webContents.getZoomFactor() + 0.1) * 10) / 10);
-      mainWindow.webContents.setZoomFactor(next);
+      mainWindow.webContents.send("ufm:canvasZoom", { delta: 0.1 });
     } else if (zoomOut) {
       event.preventDefault();
-      const next = Math.max(0.3, Math.round((mainWindow.webContents.getZoomFactor() - 0.1) * 10) / 10);
-      mainWindow.webContents.setZoomFactor(next);
+      mainWindow.webContents.send("ufm:canvasZoom", { delta: -0.1 });
     } else if (zoomReset) {
       event.preventDefault();
-      mainWindow.webContents.setZoomFactor(1.0);
+      mainWindow.webContents.send("ufm:canvasZoom", { reset: true });
     }
   });
 

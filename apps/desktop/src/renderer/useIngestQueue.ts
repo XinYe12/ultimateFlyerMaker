@@ -48,7 +48,7 @@ export function useIngestQueue() {
   }
 
   // ---------- CUTOUT PATCH (called from App.tsx when ufm:cutoutComplete fires) ----------
-  function applyCutoutPatch(id: string, patch: { cutoutPath: string; layout: { size: string } }) {
+  function applyCutoutPatch(id: string, patch: { cutoutPath: string; layout?: { size: string } }) {
     setQueue(prev =>
       prev.map(item =>
         item.id === id

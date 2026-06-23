@@ -191,7 +191,7 @@ export function renderDepartmentGrid(
   const cols = Math.max(1, area.cols ?? DEFAULT_COLS);
   const { cells } = computeProductGrid(area.productRegion, rows, cols, area.gridLayout ?? {});
 
-  return cells.map(cell => {
+  return cells.map((cell: { x: number; y: number; width: number; height: number; row: number; col: number }) => {
     const rel = {
       x: cell.x - area.productRegion.x,
       y: cell.y - area.productRegion.y,

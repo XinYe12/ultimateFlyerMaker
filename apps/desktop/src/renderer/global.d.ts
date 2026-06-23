@@ -260,6 +260,8 @@ declare global {
 
       showConfirmDialog: (opts: { message: string; detail?: string; confirmLabel?: string; cancelLabel?: string }) => Promise<boolean>;
 
+      onCanvasZoom: (cb: (data: { delta?: number; reset?: boolean }) => void) => () => void;
+
       getStartupTiming: () => Promise<{
         totalMs: number;
         t0Absolute: number;

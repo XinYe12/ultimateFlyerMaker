@@ -149,6 +149,8 @@ export default function App() {
   const [verificationProgress, setVerificationProgress] = useState<any>(null);
   const [departmentLocked, setDepartmentLocked] = useState(false);
   const [flyerExported, setFlyerExported] = useState(false);
+  const [canvasZoom, setCanvasZoom] = useState(1.0);
+  const windowZoomRef = useRef(1.0);
   const [departmentSaves, setDepartmentSaves] = useState<DeptSaveEntry[]>([]);
   const [showRecoveryOverlay, setShowRecoveryOverlay] = useState(false);
 
@@ -229,6 +231,33 @@ export default function App() {
     const unsubErr = window.ufm.onCutoutError((d: { id: string; error: string }) => applyCutoutErrorRef.current(d.id, d.error));
     return () => { unsubOk(); unsubErr(); };
   }, []);
+
+  // Ctrl+/-/0 zoom: canvas-only in editor; CSS root zoom everywhere else.
+  // Switching into the editor clears CSS zoom so only the canvas scales.
+  // Switching out of the editor restores the last CSS zoom level.
+  useEffect(() => {
+    if (view === "editor") {
+      document.documentElement.style.zoom = "";
+    } else {
+      document.documentElement.style.zoom = windowZoomRef.current === 1.0 ? "" : String(windowZoomRef.current);
+    }
+  }, [view]);
+
+  useEffect(() => {
+    const unsub = window.ufm.onCanvasZoom(({ delta, reset }: { delta?: number; reset?: boolean }) => {
+      if (view === "editor") {
+        setCanvasZoom(prev => {
+          if (reset) return 1.0;
+          return Math.min(3.0, Math.max(0.3, Math.round((prev + (delta ?? 0)) * 10) / 10));
+        });
+      } else {
+        const next = reset ? 1.0 : Math.min(3.0, Math.max(0.3, Math.round((windowZoomRef.current + (delta ?? 0)) * 10) / 10));
+        windowZoomRef.current = next;
+        document.documentElement.style.zoom = next === 1.0 ? "" : String(next);
+      }
+    });
+    return unsub;
+  }, [view]);
 
   // Save-combination progress/complete listeners
   useEffect(() => {
@@ -347,7 +376,7 @@ export default function App() {
   // Fetch startup timing from the main process once the renderer is mounted.
   // rendererReadyMs = now - t0Absolute is the true user-felt startup time.
   useEffect(() => {
-    window.ufm.getStartupTiming().then((data) => {
+    window.ufm.getStartupTiming().then((data: Awaited<ReturnType<typeof window.ufm.getStartupTiming>>) => {
       if (!data) return;
       const rendererReadyMs = Date.now() - data.t0Absolute;
       setStartupTiming({
@@ -437,7 +466,8 @@ export default function App() {
       });
     });
 
-    if (liveJob.department && templateConfigRef.current) {
+    const config = templateConfigRef.current;
+    if (liveJob.department && config) {
       const mergedIds = [
         ...editorQueueRef.current.map(it => it.id),
         ...newImages.map((img: any) => img.id),
@@ -445,11 +475,11 @@ export default function App() {
       const uniqueIds = [...new Set(mergedIds)];
       setCardLayouts(prev => {
         const layout = reconcileCardLayoutForDepartment(
-          templateConfigRef.current,
+          config,
           liveJob.department,
           uniqueIds,
           prev[liveJob.department],
-          { targetRows: userRowCounts[liveJob.department] ?? defaultRowsForDepartment(templateConfigRef.current, liveJob.department) }
+          { targetRows: userRowCounts[liveJob.department] ?? defaultRowsForDepartment(config, liveJob.department) }
         );
         if (layout === prev[liveJob.department]) return prev;
         return { ...prev, [liveJob.department]: layout };
@@ -2444,7 +2474,27 @@ export default function App() {
                   onPanelImageDrop={departmentLocked ? undefined : handlePanelImageDrop}
                   onApplyTextStyleGlobally={departmentLocked ? undefined : handleApplyTextStyleGlobally}
                   departmentLabel={DEPT_LABELS[department] ?? department.replace(/_/g, " ")}
+                  zoom={canvasZoom}
                 />
+                  {canvasZoom !== 1.0 && (
+                    <div style={{ position: "sticky", bottom: 10, display: "flex", justifyContent: "flex-end", pointerEvents: "none" }}>
+                      <div
+                        style={{
+                          marginRight: 10,
+                          background: "rgba(0,0,0,0.55)",
+                          color: "#fff",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          padding: "3px 8px",
+                          borderRadius: 4,
+                          userSelect: "none",
+                          zIndex: 50,
+                        }}
+                      >
+                        {Math.round(canvasZoom * 100)}%
+                      </div>
+                    </div>
+                  )}
                   </div>{/* end canvas column */}
                 </div>{/* end canvas viewport */}
 

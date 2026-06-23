@@ -81,7 +81,7 @@ export default function SerperLearningPanel() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    window.ufm.getSerperLearningStats().then(result => {
+    window.ufm.getSerperLearningStats().then((result: Stats | null) => {
       setStats(result ?? null);
       setLoading(false);
     }).catch(() => setLoading(false));

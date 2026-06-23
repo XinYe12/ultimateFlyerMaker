@@ -623,7 +623,7 @@ function PlacementCard({
 
   function buildTextEffect(effect: typeof titleEffect, color: string | undefined, size: number): React.CSSProperties {
     if (!effect || !color) return {};
-    if (effect === 'stroke') return { WebkitTextStroke: `${size}px ${color}` };
+    if (effect === 'stroke') return { WebkitTextStroke: `${size}px ${color}`, paintOrder: 'stroke fill' as any };
     if (effect === 'glow') return { textShadow: `0 0 ${size}px ${color}, 0 0 ${size * 2}px ${color}, 0 0 ${size * 3}px ${color}` };
     // shadow
     return { textShadow: `${size}px ${size}px ${Math.ceil(size * 0.8)}px ${color}` };

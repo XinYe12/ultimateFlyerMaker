@@ -1168,8 +1168,8 @@ function CleanMessyTitlesButton({ onComplete }: { onComplete: () => void }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsubProgress = window.ufm.onCleanMessyTitlesProgress((data) => setProgress(data));
-    const unsubComplete = window.ufm.onCleanMessyTitlesComplete((data) => {
+    const unsubProgress = window.ufm.onCleanMessyTitlesProgress((data: { current: number; total: number; title: string }) => setProgress(data));
+    const unsubComplete = window.ufm.onCleanMessyTitlesComplete((data: { deleted: number; total: number; errors: number; error?: string }) => {
       setPhase("done");
       setResult(data);
       setProgress(null);
@@ -1239,8 +1239,8 @@ function ReembedButton() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsubProgress = window.ufm.onReembedProgress((data) => setProgress(data));
-    const unsubComplete = window.ufm.onReembedComplete((data) => {
+    const unsubProgress = window.ufm.onReembedProgress((data: { current: number; total: number; label: string }) => setProgress(data));
+    const unsubComplete = window.ufm.onReembedComplete((data: { updated: number; total: number; errors: number; error?: string }) => {
       setPhase("done");
       setResult(data);
       setProgress(null);

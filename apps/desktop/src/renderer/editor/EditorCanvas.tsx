@@ -25,7 +25,7 @@ import TextComponentsDialog, { PriceCompValues, TitleCompValues, PRICE_COMP_DEFA
 import CutoutEraserModal from "./CutoutEraserModal";
 import ImageToolbar, { ImageToolbarPatch } from "./ImageToolbar";
 
-const PREVIEW_SCALE = 0.5;
+const BASE_PREVIEW_SCALE = 0.5;
 const MIN_CARD_WIDTH = 150;
 
 type SlotRect = { x: number; y: number; width: number; height: number };
@@ -105,6 +105,7 @@ export default function EditorCanvas({
   onPanelImageDrop,
   onApplyTextStyleGlobally,
   departmentLabel,
+  zoom,
 }: {
   editorQueue: any[];
   templateId: string;
@@ -144,7 +145,9 @@ export default function EditorCanvas({
   onPanelImageDrop?: PanelImageDropHandler;
   onApplyTextStyleGlobally?: (section: TextFieldSection, patch: Partial<CardDef>) => void;
   departmentLabel?: string;
+  zoom?: number;
 }) {
+  const PREVIEW_SCALE = BASE_PREVIEW_SCALE * (zoom ?? 1);
   const [config, setConfig] = useState<any | null>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   const [addImageModalSlot, setAddImageModalSlot] = useState<number | null>(null);
