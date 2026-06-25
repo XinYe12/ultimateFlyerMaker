@@ -3,24 +3,10 @@
 // Mirrors the ImageToolbar icon-strip + popout panel pattern.
 
 import React, { useState, useRef, useEffect } from 'react';
+import { FONT_OPTIONS } from './fontOptions';
 
 type TextEffect = 'stroke' | 'glow' | 'shadow';
 type ActivePopout = 'font' | 'effect' | 'apply' | null;
-
-const FONT_OPTIONS = [
-  { label: "Default", value: "" },
-  { label: "Inter", value: "Inter, sans-serif" },
-  { label: "Bebas", value: '"Bebas Neue", Impact, sans-serif' },
-  { label: "Oswald", value: "Oswald, sans-serif" },
-  { label: "Anton", value: "Anton, Impact, sans-serif" },
-  { label: "Impact", value: "Impact, sans-serif" },
-  { label: "Georgia", value: "Georgia, serif" },
-  { label: "Barlow", value: '"Barlow Condensed", sans-serif' },
-  { label: "Teko", value: "Teko, sans-serif" },
-  { label: "Fjalla", value: '"Fjalla One", sans-serif' },
-  { label: "Raleway", value: '"Raleway", sans-serif' },
-  { label: "Nunito", value: '"Nunito", sans-serif' },
-];
 
 const EFFECT_OPTIONS: { value: TextEffect | ''; label: string }[] = [
   { value: '', label: 'No Effect' },

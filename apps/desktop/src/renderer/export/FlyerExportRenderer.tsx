@@ -8,6 +8,7 @@ import RenderFlyerPlacements from "../editor/RenderFlyerPlacements";
 import { layoutFlyer, layoutFlyerSlots } from "../../../../shared/flyer/layout/layoutFlyer";
 import { isSlottedDepartment, isCardDepartment } from "../editor/loadFlyerTemplateConfig";
 import { layoutCardRows, computeCardRects, CARD_BG } from "../../../../shared/flyer/layout/layoutCardRows";
+import { buildDynamicContextFromJobs, resolveEditableBoxContent } from "../editor/dynamicData";
 
 type Props = {
   templateConfig: FlyerTemplateConfig;
@@ -65,6 +66,9 @@ export default function FlyerExportRenderer({
       }}
     >
       {templateConfig.pages.map((page, pageIndex) => {
+        const pageDepartments = Object.keys(page.departments ?? {});
+        const pageDynamicCtx = buildDynamicContextFromJobs(jobs, pageDepartments);
+
         // Render each page with its departments
         return (
           <div
@@ -105,7 +109,9 @@ export default function FlyerExportRenderer({
                     const clipPath = (box.cropLeft ?? 0) || (box.cropRight ?? 0) || (box.cropTop ?? 0) || (box.cropBottom ?? 0)
                       ? `inset(${box.cropTop ?? 0}px ${box.cropRight ?? 0}px ${box.cropBottom ?? 0}px ${box.cropLeft ?? 0}px)`
                       : undefined;
-                    const textContent = box.content?.trim()
+                    const textContent = box.isEditable
+                      ? resolveEditableBoxContent(box, pageDynamicCtx) || null
+                      : box.content?.trim()
                       ? box.content
                       : (box.boxType === "product" || !box.boxType) && box.label?.trim()
                       ? box.label
@@ -259,7 +265,22 @@ export default function FlyerExportRenderer({
                       pointerEvents: "none",
                     }}
                   >
-                    {/* Grey card backgrounds */}
+                    {/* Region background — fills gap areas between cards */}
+                    {deptArea?.regionStyle?.backgroundColor && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          left: cardRegion.x,
+                          top: cardRegion.y,
+                          width: cardRegion.width,
+                          height: cardRegion.height,
+                          background: deptArea.regionStyle.backgroundColor,
+                          pointerEvents: "none",
+                        }}
+                      />
+                    )}
+
+                    {/* Card backgrounds */}
                     {cardRects.map((rect) => (
                       <div
                         key={`card-bg-${rect.cardId}`}

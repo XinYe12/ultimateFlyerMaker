@@ -2,6 +2,7 @@ import React from "react";
 import { CustomBoxDef, DepartmentAreaDef } from "./loadFlyerTemplateConfig";
 import { renderImportBoxOverlay } from "./importTemplateCanvasHelpers";
 import {
+  CELL_GHOST_PREVIEW_ALPHA,
   defaultCardStyle,
   renderAutomationGridPreview,
   renderReadonlyDepartmentFill,
@@ -76,6 +77,10 @@ export type ImportWizardCanvasProps = {
   drawRect?: { x: number; y: number; width: number; height: number } | null;
   /** Step 2 — show full automation-style product grid instead of single sample cell. */
   gridPreview?: boolean;
+  /** Step 3 — eyedropper active for sampling flyer colors */
+  colorPickerActive?: boolean;
+  onFlyerColorPick?: (canvasX: number, canvasY: number) => void;
+  dynamicDataContext?: import("./dynamicData").DynamicDataContext;
 };
 
 const HANDLE_SIZE = 14;
@@ -133,11 +138,15 @@ export default function ImportWizardCanvas({
   onRegionDrawStart,
   drawRect,
   gridPreview = false,
+  colorPickerActive = false,
+  onFlyerColorPick,
+  dynamicDataContext,
 }: ImportWizardCanvasProps) {
   const readOnly = mode === "reference";
   const overlayW = page.canvasWidth * scale;
   const overlayH = page.canvasHeight * scale;
   const bg = resolveBackgroundLayers(page, step, mode, viewMode, underprintOpacity, gridPreview);
+  const eyedropperActive = !readOnly && step === "components" && colorPickerActive;
 
   return (
     <div
@@ -147,10 +156,15 @@ export default function ImportWizardCanvas({
         height: overlayH,
         flexShrink: 0,
         margin: HANDLE_SIZE / 2,
-        cursor: !readOnly && step === "regions" ? "crosshair" : undefined,
+        cursor: eyedropperActive ? "crosshair" : !readOnly && step === "regions" ? "crosshair" : undefined,
       }}
       onMouseDown={e => {
         e.stopPropagation();
+        if (eyedropperActive && onFlyerColorPick) {
+          const rect = e.currentTarget.getBoundingClientRect();
+          onFlyerColorPick((e.clientX - rect.left) / scale, (e.clientY - rect.top) / scale);
+          return;
+        }
         if (!readOnly) {
           onCanvasMouseDown?.();
           if (step === "regions" && onRegionDrawStart) {
@@ -276,27 +290,15 @@ export default function ImportWizardCanvas({
         }
 
         if (step === "cellStyle" || step === "components") {
+          const deptName = `${deptLabel(area.departmentKey)} department`;
           return (
             <React.Fragment key={area.id}>
-              {renderReadonlyDepartmentFill(area, scale)}
+              {renderReadonlyDepartmentFill(area, scale, {
+                dimmed: step === "cellStyle",
+                label: step === "cellStyle" ? deptName : undefined,
+              })}
 
-              {step === "cellStyle" && !gridPreview && area.sampleCell && area.cardStyle && (
-                <div
-                  style={{
-                    position: "absolute",
-                    left: (r.x + area.sampleCell.x) * scale,
-                    top: (r.y + area.sampleCell.y) * scale,
-                    width: area.sampleCell.width * scale,
-                    height: area.sampleCell.height * scale,
-                    pointerEvents: "none",
-                    zIndex: 20,
-                  }}
-                >
-                  {renderStyledCell(area.cardStyle, { x: 0, y: 0, width: area.sampleCell.width, height: area.sampleCell.height }, scale, isSelected)}
-                </div>
-              )}
-
-              {step === "cellStyle" && gridPreview && area.cardStyle && (
+              {step === "cellStyle" && area.cardStyle && (
                 <div
                   style={{
                     position: "absolute",
@@ -307,10 +309,84 @@ export default function ImportWizardCanvas({
                     overflow: "hidden",
                     pointerEvents: "none",
                     borderRadius: regionRadius,
+                    zIndex: 14,
                     ...(regionRadius > 0 ? { clipPath: `inset(0 round ${regionRadius}px)` } : {}),
                   }}
                 >
-                  {renderAutomationGridPreview(area, scale, isSelected, { previewAlpha: 0.45 })}
+                  {renderAutomationGridPreview(area, scale, isSelected, {
+                    previewAlpha: gridPreview ? 0.45 : CELL_GHOST_PREVIEW_ALPHA,
+                    showMockContent: gridPreview,
+                  })}
+                </div>
+              )}
+
+              {step === "cellStyle" && area.sampleCell && area.cardStyle && (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: (r.x + area.sampleCell.x) * scale,
+                    top: (r.y + area.sampleCell.y) * scale,
+                    width: area.sampleCell.width * scale,
+                    height: area.sampleCell.height * scale,
+                    zIndex: 25,
+                    cursor: readOnly ? "default" : "move",
+                    userSelect: "none",
+                  }}
+                  onMouseDown={readOnly ? undefined : e => {
+                    e.stopPropagation();
+                    onSelectArea(area.id);
+                    onSampleCellDragStart(e, area.id, "move", undefined, area.sampleCell);
+                  }}
+                >
+                  {renderStyledCell(
+                    area.cardStyle ?? defaultCardStyle(),
+                    { x: 0, y: 0, width: area.sampleCell.width, height: area.sampleCell.height },
+                    scale,
+                    isSelected,
+                    undefined,
+                    { showMockContent: true },
+                  )}
+                  <div
+                    style={{
+                      position: "absolute",
+                      bottom: 3,
+                      left: 4,
+                      fontSize: 9,
+                      fontWeight: 700,
+                      color: "#1d4ed8",
+                      background: "rgba(255,255,255,0.92)",
+                      padding: "1px 5px",
+                      borderRadius: 3,
+                      pointerEvents: "none",
+                      boxShadow: "0 1px 3px rgba(15,23,42,0.15)",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Sample product cell
+                  </div>
+                  {isSelected && !readOnly && (["tl", "tr", "bl", "br"] as const).map(corner => (
+                    <div
+                      key={corner}
+                      style={{
+                        position: "absolute",
+                        width: HANDLE_SIZE,
+                        height: HANDLE_SIZE,
+                        background: "#3b82f6",
+                        border: "2px solid #fff",
+                        borderRadius: 2,
+                        cursor: corner === "tl" || corner === "br" ? "nwse-resize" : "nesw-resize",
+                        zIndex: 2,
+                        ...(corner === "tl" ? { top: -HANDLE_SIZE / 2, left: -HANDLE_SIZE / 2 }
+                          : corner === "tr" ? { top: -HANDLE_SIZE / 2, right: -HANDLE_SIZE / 2 }
+                          : corner === "bl" ? { bottom: -HANDLE_SIZE / 2, left: -HANDLE_SIZE / 2 }
+                          : { bottom: -HANDLE_SIZE / 2, right: -HANDLE_SIZE / 2 }),
+                      }}
+                      onMouseDown={e => {
+                        e.stopPropagation();
+                        onSampleCellDragStart(e, area.id, "resize", corner, area.sampleCell);
+                      }}
+                    />
+                  ))}
                 </div>
               )}
             </React.Fragment>
@@ -323,6 +399,7 @@ export default function ImportWizardCanvas({
       {!readOnly && step === "components" && editableBoxes.map(box => {
         const isSelected = box.id === selectedBoxId;
         const showFill = !outlineOnly || isSelected;
+        const blockDrag = eyedropperActive;
         return (
           <div
             key={box.id}
@@ -334,18 +411,20 @@ export default function ImportWizardCanvas({
               height: box.height * scale,
               border: isSelected ? "2px solid #3b82f6" : `1px dashed ${showFill ? "#64748b" : "#3b82f6"}`,
               boxSizing: "border-box",
-              cursor: "move",
+              cursor: blockDrag ? "crosshair" : "move",
               userSelect: "none",
               overflow: "hidden",
               background: showFill ? undefined : "transparent",
+              pointerEvents: blockDrag ? "none" : "auto",
             }}
             onMouseDown={e => {
+              if (blockDrag) return;
               e.stopPropagation();
               onSelectBox(box.id);
               onBoxDragStart(e, box.id, "move", undefined, box);
             }}
           >
-            {renderImportBoxOverlay(box, scale, isSelected, outlineOnly)}
+            {renderImportBoxOverlay(box, scale, isSelected, outlineOnly, undefined, dynamicDataContext)}
             {isSelected && (["tl", "tr", "bl", "br"] as const).map(corner => (
               <div
                 key={corner}

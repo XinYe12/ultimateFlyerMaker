@@ -4,6 +4,7 @@
 import React from "react";
 import { FlyerJob, DepartmentId } from "../types";
 import DepartmentCard from "./DepartmentCard";
+import { formatFlyerCycleRange, getDisplayCycleStartFriday } from "../utils/flyerCycle";
 
 type DepartmentStatus = "not started" | "uploading" | "in progress" | "done" | "done, edited";
 
@@ -35,32 +36,6 @@ const DEPARTMENT_LABELS: Record<string, string> = {
   hot_sale: "Hot Sale",
   produce: "Produce",
 };
-
-function getWeekCycle(): string {
-  const today = new Date();
-  const currentDay = today.getDay(); // 0 = Sunday, 5 = Friday
-
-  // Calculate days until next Friday
-  let daysUntilFriday = (5 - currentDay + 7) % 7;
-  if (daysUntilFriday === 0 && today.getHours() >= 12) {
-    // If it's Friday afternoon, move to next week
-    daysUntilFriday = 7;
-  }
-
-  const nextFriday = new Date(today);
-  nextFriday.setDate(today.getDate() + daysUntilFriday);
-
-  const followingThursday = new Date(nextFriday);
-  followingThursday.setDate(nextFriday.getDate() + 6);
-
-  const formatDate = (date: Date) => {
-    const month = date.toLocaleDateString("en-US", { month: "short" });
-    const day = date.getDate();
-    return `${month} ${day}`;
-  };
-
-  return `${formatDate(nextFriday)} - ${formatDate(followingThursday)}`;
-}
 
 function getDepartmentStatus(department: string, jobs: FlyerJob[], templateId: string): DepartmentInfo {
   const deptJobs = jobs.filter(j => j.department === department && j.templateId === templateId);
@@ -157,7 +132,11 @@ function getDepartmentStatus(department: string, jobs: FlyerJob[], templateId: s
 }
 
 export default function DepartmentOverview({ jobs, availableDepartments, templateId, onDepartmentClick }: Props) {
-  const weekCycle = getWeekCycle();
+  const flyerWeekStart = jobs.find(j => j.templateId === templateId && j.flyerWeekStart)?.flyerWeekStart;
+  const cycleFriday = flyerWeekStart
+    ? new Date(flyerWeekStart + "T00:00:00")
+    : getDisplayCycleStartFriday();
+  const weekCycle = formatFlyerCycleRange(cycleFriday);
 
   return (
     <div

@@ -30,6 +30,14 @@ contextBridge.exposeInMainWorld("ufm", {
     return ipcRenderer.invoke("ufm:searchDatabaseByText", query, limit);
   },
 
+  searchDatabaseByImage: (imagePath) => {
+    return ipcRenderer.invoke("ufm:searchDatabaseByImage", imagePath);
+  },
+
+  updateProductTitle: (id, englishTitle) => {
+    return ipcRenderer.invoke("ufm:updateProductTitle", id, englishTitle);
+  },
+
   downloadAndIngestFromUrl: (jobIdOrUrl, publicUrlMaybe) => {
     const looksLikeUrl = (v) =>
       typeof v === "string"
@@ -290,6 +298,7 @@ contextBridge.exposeInMainWorld("ufm", {
   recordSerperRejection: (signal) => ipcRenderer.invoke("ufm:recordSerperRejection", signal),
   recordManualGoogleAccepted: (signal) => ipcRenderer.invoke("ufm:recordManualGoogleAccepted", signal),
   getSerperLearningStats: () => ipcRenderer.invoke("ufm:getSerperLearningStats"),
+  guessFontFromCrop: (payload) => ipcRenderer.invoke("ufm:guessFontFromCrop", payload),
 
   // ---------- APP PATHS ----------
   getAppPaths: () => ipcRenderer.invoke("ufm:getAppPaths"),
@@ -331,6 +340,7 @@ contextBridge.exposeInMainWorld("ufm", {
     ipcRenderer.on("ufm:canvasZoom", handler);
     return () => ipcRenderer.removeListener("ufm:canvasZoom", handler);
   },
+  setWindowZoom: (factor) => ipcRenderer.invoke("ufm:setWindowZoom", factor),
 
   // ---------- STARTUP TIMING ----------
   getStartupTiming: () => ipcRenderer.invoke("ufm:getStartupTiming"),

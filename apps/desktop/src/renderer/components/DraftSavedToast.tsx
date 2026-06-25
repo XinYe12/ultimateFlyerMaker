@@ -12,6 +12,8 @@ type Props = {
   duration?: number;
   canUndo?: boolean;
   onUndo?: () => void;
+  canRedo?: boolean;
+  onRedo?: () => void;
 };
 
 export default function DraftSavedToast({
@@ -22,6 +24,8 @@ export default function DraftSavedToast({
   duration = 12500,
   canUndo,
   onUndo,
+  canRedo,
+  onRedo,
 }: Props) {
   const [isExiting, setIsExiting] = useState(false);
   const wasVisible = useRef(false);
@@ -74,15 +78,24 @@ export default function DraftSavedToast({
           {icon}
         </span>
         <span className="draft-saved-toast-text">{message}</span>
-        {canUndo && onUndo && (
+        {onUndo && (
           <button
             className="draft-saved-toast-undo"
-            onClick={(e) => {
-              e.stopPropagation();
-              onUndo();
-            }}
+            onClick={(e) => { e.stopPropagation(); onUndo(); }}
+            disabled={!canUndo}
+            title="Ctrl+Z"
           >
             ↩ Undo
+          </button>
+        )}
+        {onRedo && (
+          <button
+            className="draft-saved-toast-undo"
+            onClick={(e) => { e.stopPropagation(); onRedo(); }}
+            disabled={!canRedo}
+            title="Ctrl+Shift+Z"
+          >
+            ↪ Redo
           </button>
         )}
       </div>
@@ -158,8 +171,13 @@ export default function DraftSavedToast({
           white-space: nowrap;
           transition: background 0.15s;
         }
-        .draft-saved-toast-undo:hover {
+        .draft-saved-toast-undo:hover:not(:disabled) {
           background: rgba(255, 255, 255, 0.28);
+        }
+        .draft-saved-toast-undo:disabled {
+          opacity: 0.35;
+          cursor: default;
+          pointer-events: none;
         }
       `}</style>
     </div>

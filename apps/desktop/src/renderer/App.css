@@ -240,3 +240,9 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
+
+/* Custom scrollbar for dark panels (Electron/Chromium) */
+.ufm-scroll::-webkit-scrollbar        { width: 5px; }
+.ufm-scroll::-webkit-scrollbar-track  { background: transparent; }
+.ufm-scroll::-webkit-scrollbar-thumb  { background: rgba(100, 116, 139, 0.45); border-radius: 10px; }
+.ufm-scroll::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.7); }

@@ -298,6 +298,10 @@ export default function EditorCanvas({
     startX: number;
     leftStartWidth: number;
     rightStartWidth: number;
+    /** Snapshot taken at drag start — used to roll back if the gesture turns out to be a click */
+    originalLayout: CardLayout;
+    /** Set when drag was initiated from the merge button; if the mouse barely moved, execute merge instead */
+    mergeIds?: { leftCardIds: string[]; rightCardIds: string[] };
   } | null>(null);
 
   // ── Per-element scale drag state ──
@@ -398,6 +402,8 @@ export default function EditorCanvas({
 
   const [hoveredHMerge, setHoveredHMerge] = useState<number | null>(null);
   const [hoveredVMerge, setHoveredVMerge] = useState<number | null>(null);
+  /** Set by the divider mouseup handler when a tiny-movement "click" on the merge button is detected */
+  const [pendingClickMerge, setPendingClickMerge] = useState<{ leftCardIds: string[]; rightCardIds: string[] } | null>(null);
 
   // ── Swap drag state ──
   const scaledCanvasRef = useRef<HTMLDivElement>(null);
@@ -452,18 +458,20 @@ export default function EditorCanvas({
     });
   }, [page, region, isCard, cardLayout, department, layoutRows]);
 
+  // Exposed so card backgrounds and region background can share the same reference
+  const cardRegion: { x: number; y: number; width: number; height: number } | null =
+    region && isCardDepartment(region) ? region.region : null;
+
   // Card rects (for rendering backgrounds of all cards including empty)
   const cardRects = useMemo(() => {
     if (!region || !isCard || !cardLayout || cardLayout.length === 0) return [];
-    const cardRegion = (region as any).region;
-    return computeCardRects({ cards: cardLayout, region: cardRegion, rows: layoutRows });
-  }, [region, isCard, cardLayout, layoutRows]);
+    return computeCardRects({ cards: cardLayout, region: cardRegion!, rows: layoutRows });
+  }, [region, isCard, cardLayout, layoutRows, cardRegion]);
   const cardRectsRef = useRef(cardRects);
   cardRectsRef.current = cardRects;
 
   const cardClipStyle = useMemo((): React.CSSProperties | undefined => {
-    if (!region || !isCardDepartment(region) || !imageSize) return undefined;
-    const cardRegion = region.region;
+    if (!region || !isCardDepartment(region) || !imageSize || !cardRegion) return undefined;
     return {
       position: "absolute",
       left: 0,
@@ -472,7 +480,7 @@ export default function EditorCanvas({
       height: imageSize.height,
       clipPath: `inset(${cardRegion.y}px ${Math.max(0, imageSize.width - cardRegion.x - cardRegion.width)}px ${Math.max(0, imageSize.height - cardRegion.y - cardRegion.height)}px ${cardRegion.x}px)`,
     };
-  }, [region, imageSize]);
+  }, [region, imageSize, cardRegion]);
 
   // Slot-based placements
   const slotPlacements = useMemo(() => {
@@ -542,7 +550,12 @@ export default function EditorCanvas({
   }, [effectiveSlots, onSlotOverridesChange]);
 
   // Card divider drag start
-  const handleDividerDragStart = useCallback((leftCardId: string, rightCardId: string, e: React.MouseEvent) => {
+  const handleDividerDragStart = useCallback((
+    leftCardId: string,
+    rightCardId: string,
+    e: React.MouseEvent,
+    mergeIds?: { leftCardIds: string[]; rightCardIds: string[] },
+  ) => {
     if (!onCardLayoutChange || !cardLayout) return;
     e.preventDefault();
     e.stopPropagation();
@@ -557,6 +570,8 @@ export default function EditorCanvas({
       startX: e.clientX,
       leftStartWidth: leftCard.widthPx,
       rightStartWidth: rightCard.widthPx,
+      originalLayout: cardLayout,
+      mergeIds,
     });
   }, [cardLayout, onCardLayoutChange]);
 
@@ -917,7 +932,14 @@ export default function EditorCanvas({
       onCardLayoutChange(updated);
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e: MouseEvent) => {
+      const dx = Math.abs(e.clientX - dividerDrag.startX);
+      if (dx < 4 && dividerDrag.mergeIds) {
+        // Tiny movement from the merge button — treat as a click: roll back widths and queue merge
+        onCardLayoutChange(dividerDrag.originalLayout);
+        setPendingClickMerge(dividerDrag.mergeIds);
+      }
+      // else: drag committed — real-time width updates via mousemove are already applied
       setDividerDrag(null);
     };
 
@@ -928,6 +950,13 @@ export default function EditorCanvas({
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [dividerDrag, cardLayout, onCardLayoutChange]);
+
+  // Fire merge after a divider "click" (mouseup with tiny displacement)
+  useEffect(() => {
+    if (!pendingClickMerge) return;
+    handleGroupMergeClick(pendingClickMerge.leftCardIds, pendingClickMerge.rightCardIds);
+    setPendingClickMerge(null);
+  }, [pendingClickMerge]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Global mouse handlers for per-element scale drag
   useEffect(() => {
@@ -2180,7 +2209,23 @@ export default function EditorCanvas({
           {/* ═══ CARD-BASED DEPARTMENT ═══ */}
           {imageSize && isCard && cardClipStyle && (
             <div style={cardClipStyle}>
-              {/* Grey card backgrounds */}
+              {/* Region background — fills gap areas between cards with the department color.
+                  Card backgrounds render on top, so only the inter-card gaps show this. */}
+              {cardRegion && departmentArea?.regionStyle?.backgroundColor && (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: cardRegion.x,
+                    top: cardRegion.y,
+                    width: cardRegion.width,
+                    height: cardRegion.height,
+                    background: departmentArea.regionStyle.backgroundColor,
+                    pointerEvents: "none",
+                  }}
+                />
+              )}
+
+              {/* Card backgrounds */}
               {cardRects.map((rect) => {
                 const cs = templateCardStyle;
                 const borderW = Math.max(0, cs?.borderWidth ?? 0);
@@ -2304,40 +2349,22 @@ export default function EditorCanvas({
                       pointerEvents: "auto",
                     }}
                   >
-                    {/* Drag handle zone — only for 1:1 equal-height boundaries */}
-                    {is1to1 && (
-                      <div
-                        onMouseDown={(e) => handleDividerDragStart(d.leftCardIds[0], d.rightCardIds[0], e)}
-                        style={{
-                          position: "absolute",
-                          left: 6,
-                          top: 0,
-                          width: 8,
-                          height: "100%",
-                          cursor: "col-resize",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                        }}
-                      >
-                        <div style={{
-                          width: 3,
-                          height: "60%",
-                          background: dividerDrag?.leftCardId === d.leftCardIds[0]
-                            ? "#4C6EF5"
-                            : "rgba(0,0,0,0.2)",
-                          borderRadius: 2,
-                          transition: dividerDrag ? "none" : "background 0.2s",
-                        }} />
-                      </div>
-                    )}
-
-                    {/* Horizontal merge button — one per boundary, centered on full height */}
-                    {hoveredHMerge === idx && !dividerDrag && (
+                    {/* Merge button — click to merge, drag to resize width (1:1 boundaries only for resize) */}
+                    {hoveredHMerge === idx && (
                       <button
-                        onClick={(e) => {
+                        onMouseDown={(e) => {
                           e.stopPropagation();
-                          handleGroupMergeClick(d.leftCardIds, d.rightCardIds);
+                          if (is1to1) {
+                            // Start drag; mouseup handler decides merge vs resize based on displacement
+                            handleDividerDragStart(
+                              d.leftCardIds[0], d.rightCardIds[0], e,
+                              { leftCardIds: d.leftCardIds, rightCardIds: d.rightCardIds },
+                            );
+                          } else {
+                            // N:M boundary — no resize, just merge on release
+                            // Store mergeIds without activating drag machinery
+                            handleGroupMergeClick(d.leftCardIds, d.rightCardIds);
+                          }
                         }}
                         style={{
                           position: "absolute",
@@ -2347,10 +2374,10 @@ export default function EditorCanvas({
                           width: 32,
                           height: 32,
                           borderRadius: "50%",
-                          background: "#4C6EF5",
+                          background: dividerDrag?.leftCardId === d.leftCardIds[0] ? "#3b5bdb" : "#4C6EF5",
                           color: "#fff",
                           border: "2px solid #fff",
-                          cursor: "pointer",
+                          cursor: is1to1 ? "col-resize" : "pointer",
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
@@ -2361,7 +2388,7 @@ export default function EditorCanvas({
                           padding: 0,
                           lineHeight: 1,
                         }}
-                        title="Merge cells horizontally"
+                        title={is1to1 ? "Click to merge · Drag to resize" : "Merge cells"}
                       >
                         ⟷
                       </button>
@@ -2422,6 +2449,7 @@ export default function EditorCanvas({
                 >
                   {hoveredVMerge === idx && (
                     <button
+                      onMouseDown={(e) => e.stopPropagation()}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleGroupVMergeClick(vd.topCardIds, vd.bottomCardIds);

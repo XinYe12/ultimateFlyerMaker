@@ -1,6 +1,7 @@
 import { db, debugFirestoreInFlight, runFirestoreTimed, debugFirestoreTrack } from "./firebase.js";
 import { FIRESTORE_COLLECTION } from "../config/vectorConfig.js";
 import { getImageEmbedding, embedText } from "./imageEmbeddingService.js";
+import { computePHash, hammingDistance } from "./pHashService.js";
 import { cosineUnitToRaw, normalizeL2 } from "./vectorUtils.js";
 import { getResourceProfile } from "../resourceProfile.js";
 
@@ -292,6 +293,7 @@ const EMBED_SELECT_FIELDS = [
   "category",
   "publicUrl",
   "embedding",
+  "pHash",
 ];
 
 async function fetchEmbeddingsForIds(ids) {
@@ -594,32 +596,58 @@ export async function searchForDiscountItem(item, limit = 6, options = {}) {
 }
 
 /* ---------- Image search ---------- */
-export async function searchByImage(imagePath, limit = 5) {
-  let queryEmbedding;
-  try {
-    const res = await getImageEmbedding(imagePath);
-    queryEmbedding = res?.embedding;
-  } catch {
-    return [];
+
+/**
+ * Two-track image-to-image search:
+ *   Track 1 — pHash: perceptual hash comparison against all cached products (local, free)
+ *   Track 2 — Semantic: Gemini vision extracts a product title → hybrid text+embedding search
+ * pHash hits (exact/near-duplicate visuals) appear first; semantic hits fill the rest.
+ */
+export async function searchByImage(imagePath, limit = 6) {
+  const [hashResult, embeddingResult] = await Promise.allSettled([
+    computePHash(imagePath),
+    getImageEmbedding(imagePath),
+  ]);
+
+  const byId = new Map();
+
+  // Track 1: pHash — fast local comparison against cached products
+  if (hashResult.status === "fulfilled") {
+    const qHash = hashResult.value;
+    const cache = await getEmbeddingCache();
+    for (const doc of cache) {
+      if (doc.pHash && hammingDistance(qHash, doc.pHash) <= 15) {
+        byId.set(doc.id, { ...pickPublicFields(doc), score: 1.0 });
+      }
+    }
   }
 
-  if (!Array.isArray(queryEmbedding) || !queryEmbedding.length) return [];
+  // Track 2: Gemini vision title → existing hybrid text+embedding search
+  const parsed = embeddingResult.status === "fulfilled" ? embeddingResult.value?.parsed : null;
+  const title = parsed?.englishTitle || parsed?.cleanTitle || "";
+  if (title) {
+    const hits = await searchForDiscountItem({ en: title }, limit);
+    for (const hit of hits) {
+      if (!byId.has(hit.id)) byId.set(hit.id, hit);
+    }
+  }
 
-  const all = await getEmbeddingCache();
-  if (!all.length) return [];
-
-  const queryUnit = normalizeL2(queryEmbedding);
-  if (!queryUnit) return [];
-
-  return all
-    .map((p) => ({
-      ...p,
-      score: Array.isArray(p.embedding) && p.embedding.length === queryEmbedding.length
-        ? cosineUnitToRaw(queryUnit, p.embedding)
-        : 0,
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map(pickPublicFields);
+  return [...byId.values()].slice(0, limit);
 }
 
+/* ---------- Product update ---------- */
+
+/**
+ * Update the English title of a product in Firestore and invalidate the embedding cache.
+ * @param {string} id - Firestore document ID
+ * @param {string} englishTitle - New product name
+ */
+export async function updateProductTitle(id, englishTitle) {
+  const title = String(englishTitle || "").trim();
+  if (!id || !title) throw new Error("id and englishTitle are required");
+  await db.collection(FIRESTORE_COLLECTION).doc(id).update({
+    englishTitle: title,
+    updatedAt: Date.now(),
+  });
+  invalidateEmbeddingCache();
+}

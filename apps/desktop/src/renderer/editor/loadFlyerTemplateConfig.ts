@@ -153,6 +153,9 @@ export type DepartmentAreaDef = {
   gridLayout?: GridLayoutDef;
 };
 
+/** Version of the underprint generation algorithm. Bump to force re-generation. */
+export const UNDERPRINT_SCHEMA_VERSION = 2;
+
 export type CustomTemplatePage = {
   pageId: string;
   canvasWidth: number;
@@ -166,6 +169,8 @@ export type CustomTemplatePage = {
   sourceImagePath?: string;
   /** Fallback background color when no image */
   backgroundColor?: string;
+  /** Schema version of the generated underprint — used to trigger re-generation when the algorithm changes. */
+  underprintSchemaVersion?: number;
 };
 
 export type CustomFlyerTemplateConfig = {

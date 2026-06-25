@@ -431,7 +431,7 @@ export function useJobQueue() {
 
   // Sync current editor items + discount labels back to a drafting job (updates draft in job queue UI)
   const syncJobFromEditorItems = useCallback(
-    (jobId: string, items: IngestItem[], discountLabels?: any[], slotOverrides?: Record<number, { x: number; y: number; width: number; height: number }>, cardLayouts?: Record<string, CardLayout>, verificationDone?: boolean, verificationProgress?: any, departmentLocked?: boolean) => {
+    (jobId: string, items: IngestItem[], discountLabels?: any[], slotOverrides?: Record<number, { x: number; y: number; width: number; height: number }>, cardLayouts?: Record<string, CardLayout>, userRowCounts?: Record<string, number>, verificationDone?: boolean, verificationProgress?: any, departmentLocked?: boolean) => {
       // Exclude skeleton placeholder items (status "pending" with no result) from job persistence
       const filteredItems = items.filter(item => !(item.status === "pending" && !item.result));
       const images: ImageTask[] = filteredItems.map((item) => ({
@@ -482,6 +482,7 @@ export function useJobQueue() {
                   ...(cardLayouts[j.department] ? { [j.department]: cardLayouts[j.department] } : {}),
                 }
               : j.cardLayouts,
+            userRowCounts: userRowCounts !== undefined ? userRowCounts : j.userRowCounts,
           };
         })
       );

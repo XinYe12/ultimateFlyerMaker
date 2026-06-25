@@ -3,33 +3,11 @@ import { v4 as uuidv4 } from "uuid";
 import { CustomBoxDef, CustomFlyerTemplateConfig, CustomTemplatePage, DepartmentAreaDef } from "./loadFlyerTemplateConfig";
 import { saveCustomTemplate, saveCustomTemplateWithAssets } from "./customTemplateStorage";
 import ImportTemplateFromImagesDialog from "./ImportTemplateFromImagesDialog";
+import { FONT_OPTIONS, ZH_FONT_OPTIONS } from "./fontOptions";
+import DynamicDataPicker from "./DynamicDataPicker";
+import { previewDynamicContext, resolveEditableBoxContent } from "./dynamicData";
 
 const BUILDER_SCALE = 0.4;
-
-const FONT_OPTIONS = [
-  { label: "Default", value: "" },
-  { label: "Inter", value: "Inter, sans-serif" },
-  { label: "Bebas", value: '"Bebas Neue", Impact, sans-serif' },
-  { label: "Oswald", value: "Oswald, sans-serif" },
-  { label: "Anton", value: "Anton, Impact, sans-serif" },
-  { label: "Impact", value: "Impact, sans-serif" },
-  { label: "Georgia", value: "Georgia, serif" },
-  { label: "Barlow", value: '"Barlow Condensed", sans-serif' },
-  { label: "Teko", value: "Teko, sans-serif" },
-  { label: "Fjalla", value: '"Fjalla One", sans-serif' },
-  { label: "Raleway", value: '"Raleway", sans-serif' },
-  { label: "Nunito", value: '"Nunito", sans-serif' },
-];
-const ZH_FONT_OPTIONS = [
-  { label: "默认 Default", value: "" },
-  { label: "Source Han Sans 思源黑体", value: '"Source Han Sans", "Noto Sans SC", sans-serif' },
-  { label: "PingFang SC 苹方",         value: '"PingFang SC", sans-serif' },
-  { label: "Microsoft YaHei 微软雅黑", value: '"Microsoft YaHei", sans-serif' },
-  { label: "SimHei 黑体",              value: "SimHei, sans-serif" },
-  { label: "KaiTi 楷体",              value: "KaiTi, serif" },
-  { label: "FangSong 仿宋",            value: "FangSong, serif" },
-  { label: "SimSun 宋体",              value: "SimSun, serif" },
-];
 
 // Splits text into alternating CJK / non-CJK segments for mixed font rendering.
 function splitByCJK(text: string): Array<{ text: string; isCJK: boolean }> {
@@ -49,7 +27,7 @@ function splitByCJK(text: string): Array<{ text: string; isCJK: boolean }> {
   return segments;
 }
 
-const SNAP_GRID = 10;
+const SNAP_GRID = 1;
 const MIN_BOX_SIZE = 100;
 
 type DragState =
@@ -1103,9 +1081,18 @@ export default function TemplateBuilder({ onSave, onClose, initialConfig }: Prop
               {/* Text content */}
               <div style={fieldStyle}>
                 <label style={labelStyle}>Text Content</label>
-                {selectedBox.isEditable ? (
-                  <textarea style={{ ...inputStyle, width: "100%", boxSizing: "border-box", minHeight: 60, resize: "vertical" }} value={selectedBox.content ?? ''} onChange={e => updateBox(selectedBox.id, { content: e.target.value })} placeholder="Leave empty for no text" />
-                ) : (
+                {selectedBox.isEditable ? (() => {
+                  const dynamicPreviewCtx = previewDynamicContext();
+                  return (
+                  <DynamicDataPicker
+                    content={selectedBox.content ?? ""}
+                    onChange={value => updateBox(selectedBox.id, { content: value })}
+                    previewContext={dynamicPreviewCtx}
+                    resolvedPreview={resolveEditableBoxContent(selectedBox, dynamicPreviewCtx)}
+                    theme="light"
+                  />
+                  );
+                })() : (
                   <div style={{ ...inputStyle, width: "100%", boxSizing: "border-box", minHeight: 48, background: "#f1f5f9", color: "#64748b", fontSize: 12, lineHeight: 1.4 }}>
                     Fixed template element — embedded in the background image. This text is not editable when generating weekly flyers.
                   </div>

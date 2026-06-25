@@ -20,6 +20,20 @@ import {
   withAutomationGridDefaults,
 } from "./importWizardCellHelpers";
 import ImportWizardCanvas from "./ImportWizardCanvas";
+import FontPickerList from "./FontPickerList";
+import DynamicDataPicker from "./DynamicDataPicker";
+import { previewDynamicContext, resolveEditableBoxContent } from "./dynamicData";
+import WizardFloatingToolsPanel from "./WizardFloatingToolsPanel";
+import CellStyleLayerLegend from "./CellStyleLayerLegend";
+import CellMagnifierPreview from "./CellMagnifierPreview";
+import { FONT_OPTIONS, ZH_FONT_OPTIONS } from "./fontOptions";
+import {
+  sampleRegionColor,
+  samplePointColor,
+  sampleTextColorFromRegion,
+  cropRegionToDataUrl,
+} from "./sampleFlyerColor";
+import { isFontMatchConfident, matchFontFromFlyerRegion } from "./matchFontFromImage";
 import {
   nextUnderprintPresetIdx,
   UNDERPRINT_OPACITY_CYCLE,
@@ -115,9 +129,9 @@ type BoxDragState =
   | { type: "move"; id: string; startMouseX: number; startMouseY: number; startX: number; startY: number }
   | { type: "resize"; id: string; corner: "tl" | "tr" | "bl" | "br"; startMouseX: number; startMouseY: number; startX: number; startY: number; startW: number; startH: number };
 
-const SNAP = 10;
+const SNAP = 1;
 const MIN_SIZE = 80;
-const SIDEBAR_WIDTH = 400;
+const SIDEBAR_WIDTH = 300;
 const CANVAS_HANDLE_MARGIN = 7;
 
 function snap(v: number) { return Math.round(v / SNAP) * SNAP; }
@@ -154,6 +168,160 @@ const EDIT_STEP_TITLES: Record<Step, string> = {
   components: "Edit Editable Fields",
 };
 
+type WizardCanvasStep = Exclude<Step, "upload">;
+
+const WIZARD_STEPS_ORDER: WizardCanvasStep[] = ["regions", "cellStyle", "components"];
+
+const WIZARD_STEP_META: Record<WizardCanvasStep, { short: string; hint: string }> = {
+  regions: {
+    short: "Regions",
+    hint: "Draw each department area on every flyer page. Colored regions sit behind product cells.",
+  },
+  cellStyle: {
+    short: "Cell style",
+    hint: "Style one product cell — the same card look repeats on every slot in the department.",
+  },
+  components: {
+    short: "Fields",
+    hint: "Add valid-date, promo, and other text fields users can edit each week.",
+  },
+};
+
+function wizardStepIndex(step: WizardCanvasStep) {
+  return WIZARD_STEPS_ORDER.indexOf(step);
+}
+
+function WizardStepProgress({ step }: { step: WizardCanvasStep }) {
+  const activeIdx = wizardStepIndex(step);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 0, flexWrap: "wrap" }}>
+      {WIZARD_STEPS_ORDER.map((key, i) => {
+        const done = i < activeIdx;
+        const active = i === activeIdx;
+        const meta = WIZARD_STEP_META[key];
+        return (
+          <React.Fragment key={key}>
+            {i > 0 && (
+              <div
+                style={{
+                  width: 28,
+                  height: 2,
+                  margin: "0 4px",
+                  borderRadius: 1,
+                  background: done ? "#3b82f6" : "#334155",
+                  flexShrink: 0,
+                }}
+              />
+            )}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "6px 10px",
+                borderRadius: 8,
+                background: active ? "rgba(59,130,246,0.14)" : "transparent",
+                border: active ? "1px solid rgba(59,130,246,0.45)" : "1px solid transparent",
+              }}
+            >
+              <div
+                style={{
+                  width: 26,
+                  height: 26,
+                  borderRadius: "50%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  flexShrink: 0,
+                  background: active ? "#3b82f6" : done ? "#1d4ed8" : "#334155",
+                  color: "#fff",
+                  boxShadow: active ? "0 0 0 3px rgba(59,130,246,0.25)" : undefined,
+                }}
+              >
+                {done ? "✓" : i + 1}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: active ? "#93c5fd" : "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                  Step {i + 1}
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: active ? "#f8fafc" : done ? "#cbd5e1" : "#94a3b8", lineHeight: 1.2 }}>
+                  {meta.short}
+                </div>
+              </div>
+            </div>
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+function WizardPageStrip({
+  pages,
+  pageIdx,
+  onSelect,
+}: {
+  pages: PageDraft[];
+  pageIdx: number;
+  onSelect: (idx: number) => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Flyer pages
+        </span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#e2e8f0" }}>
+          Page {pageIdx + 1} <span style={{ color: "#64748b", fontWeight: 500 }}>of {pages.length}</span>
+        </span>
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {pages.map((pg, i) => {
+          const active = i === pageIdx;
+          return (
+            <button
+              key={pg.imgPath + i}
+              type="button"
+              onClick={() => onSelect(i)}
+              title={`Go to page ${i + 1}`}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 4,
+                padding: 4,
+                borderRadius: 8,
+                border: active ? "2px solid #3b82f6" : "1px solid #334155",
+                background: active ? "rgba(59,130,246,0.12)" : "#0f172a",
+                cursor: "pointer",
+                minWidth: 52,
+                boxShadow: active ? "0 0 0 2px rgba(59,130,246,0.2)" : undefined,
+              }}
+            >
+              <img
+                src={pg.fileUrl}
+                alt=""
+                style={{
+                  width: 40,
+                  height: 52,
+                  objectFit: "cover",
+                  borderRadius: 4,
+                  opacity: active ? 1 : 0.75,
+                }}
+              />
+              <span style={{ fontSize: 10, fontWeight: 700, color: active ? "#93c5fd" : "#64748b" }}>
+                {i + 1}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function ImportTemplateFromImagesDialog({ onParsed, onClose, initialConfig }: Props) {
   const [step, setStep] = useState<Step>("upload");
   const [imagePaths, setImagePaths] = useState<string[]>([]);
@@ -172,13 +340,19 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
   const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
   const [templateName, setTemplateName] = useState("Imported Template");
-  const [outlineOnly, setOutlineOnly] = useState(true);
+  const [outlineOnly, setOutlineOnly] = useState(false);
   const [viewMode, setViewMode] = useState<WizardViewMode>("overlay");
   const [underprintPresetIdx, setUnderprintPresetIdx] = useState(0);
   const [gridPreviewActive, setGridPreviewActive] = useState(false);
+  const [colorPickerMode, setColorPickerMode] = useState<null | "bg" | "text">(null);
+  const [fontMatchMessage, setFontMatchMessage] = useState<string | null>(null);
+  const [matchingFont, setMatchingFont] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
+  const canvasOverlayRef = useRef<HTMLDivElement>(null);
+  const [baseScale, setBaseScale] = useState(1);
+  const [canvasZoom, setCanvasZoom] = useState(1);
+  const scale = baseScale * canvasZoom;
   const areaDragRef = useRef<AreaDragState | null>(null);
   const boxDragRef = useRef<BoxDragState | null>(null);
   const sampleCellDragRef = useRef<SampleCellDragState | null>(null);
@@ -196,6 +370,85 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   const underprintDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gridFingerprintRef = useRef<string | null>(null);
   const scheduleUnderprintRegenRef = useRef<(pageIndex?: number) => void>(() => {});
+
+  // ── Wizard history (undo / redo) ──────────────────────────────────────────
+  const MAX_WIZARD_HISTORY = 30;
+  const wizardPastRef = useRef<PageDraft[][]>([]);
+  const wizardFutureRef = useRef<PageDraft[][]>([]);
+  const [wizardCanUndo, setWizardCanUndo] = useState(false);
+  const [wizardCanRedo, setWizardCanRedo] = useState(false);
+  const wizardHistoryDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wizardPendingSnapshotRef = useRef<PageDraft[] | null>(null);
+
+  const goToStep = useCallback((next: Step) => {
+    setStep(next);
+    setPageIdx(0);
+    setSelectedAreaId(null);
+    setSelectedBoxId(null);
+    setColorPickerMode(null);
+    setFontMatchMessage(null);
+    if (next !== "cellStyle") setGridPreviewActive(false);
+  }, []);
+
+  const goToPage = useCallback((idx: number) => {
+    setPageIdx(idx);
+    setSelectedAreaId(null);
+    setSelectedBoxId(null);
+    setColorPickerMode(null);
+  }, []);
+
+  const pushToHistoryNow = useCallback(() => {
+    if (wizardHistoryDebounceRef.current) {
+      clearTimeout(wizardHistoryDebounceRef.current);
+      wizardHistoryDebounceRef.current = null;
+      wizardPendingSnapshotRef.current = null;
+    }
+    wizardPastRef.current = [...wizardPastRef.current.slice(-(MAX_WIZARD_HISTORY - 1)), pagesRef.current];
+    wizardFutureRef.current = [];
+    setWizardCanUndo(true);
+    setWizardCanRedo(false);
+  }, []);
+
+  const pushToHistoryDebounced = useCallback(() => {
+    if (!wizardPendingSnapshotRef.current) {
+      wizardPendingSnapshotRef.current = pagesRef.current;
+    }
+    if (wizardHistoryDebounceRef.current) clearTimeout(wizardHistoryDebounceRef.current);
+    wizardHistoryDebounceRef.current = setTimeout(() => {
+      wizardHistoryDebounceRef.current = null;
+      if (wizardPendingSnapshotRef.current) {
+        wizardPastRef.current = [...wizardPastRef.current.slice(-(MAX_WIZARD_HISTORY - 1)), wizardPendingSnapshotRef.current];
+        wizardFutureRef.current = [];
+        setWizardCanUndo(true);
+        setWizardCanRedo(false);
+        wizardPendingSnapshotRef.current = null;
+      }
+    }, 500);
+  }, []);
+
+  const wizardUndo = useCallback(() => {
+    if (wizardPastRef.current.length === 0) return;
+    const prev = wizardPastRef.current[wizardPastRef.current.length - 1];
+    wizardFutureRef.current = [pagesRef.current, ...wizardFutureRef.current.slice(0, MAX_WIZARD_HISTORY - 1)];
+    wizardPastRef.current = wizardPastRef.current.slice(0, -1);
+    setPages(prev);
+    setSelectedAreaId(null);
+    setSelectedBoxId(null);
+    setWizardCanUndo(wizardPastRef.current.length > 0);
+    setWizardCanRedo(true);
+  }, []);
+
+  const wizardRedo = useCallback(() => {
+    if (wizardFutureRef.current.length === 0) return;
+    const next = wizardFutureRef.current[0];
+    wizardPastRef.current = [...wizardPastRef.current.slice(-(MAX_WIZARD_HISTORY - 1)), pagesRef.current];
+    wizardFutureRef.current = wizardFutureRef.current.slice(1);
+    setPages(next);
+    setSelectedAreaId(null);
+    setSelectedBoxId(null);
+    setWizardCanUndo(true);
+    setWizardCanRedo(wizardFutureRef.current.length > 0);
+  }, []);
 
   const page = pages[pageIdx];
   const underprintPreset = UNDERPRINT_OPACITY_CYCLE[underprintPresetIdx] ?? UNDERPRINT_OPACITY_CYCLE[0];
@@ -307,10 +560,11 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
       };
     });
     setPages(drafts);
-    setPageIdx(0);
     setTemplateName(initialConfig.name ?? "Imported Template");
     setParsedTemplateId(initialConfig.templateId);
-    setStep("regions");
+    const hasEditableFields = drafts.some(pg => pg.boxes.some(b => b.isEditable));
+    if (hasEditableFields) setOutlineOnly(false);
+    goToStep("regions");
   }, []); // intentionally runs once on mount
 
   // ── Load images (manual setup — no auto-detection) ────────────────────────
@@ -346,10 +600,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
       });
 
       setPages(drafts);
-      setPageIdx(0);
-      setSelectedAreaId(null);
-      setSelectedBoxId(null);
-      setStep("regions");
+      goToStep("regions");
     } catch (err: unknown) {
       setLoadError(formatIpcError(err));
     } finally {
@@ -378,12 +629,46 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
         (height - pad) / page.canvasHeight,
         1
       );
-      setScale(Math.max(0.1, s));
+      setBaseScale(Math.max(0.1, s));
     };
     updateScale();
     window.addEventListener("resize", updateScale);
     return () => window.removeEventListener("resize", updateScale);
   }, [step, page, pageIdx, viewMode]);
+
+  // Canvas-only zoom (Ctrl+/-/0) — same shortcuts as the editor view.
+  useEffect(() => {
+    const unsub = window.ufm.onCanvasZoom(({ delta, reset }: { delta?: number; reset?: boolean }) => {
+      setCanvasZoom(prev => {
+        if (reset) return 1.0;
+        return Math.min(3.0, Math.max(0.3, Math.round((prev + (delta ?? 0)) * 10) / 10));
+      });
+    });
+    return unsub;
+  }, []);
+
+  // Keyboard shortcuts: Ctrl+Z = undo, Ctrl+Shift+Z or Ctrl+Y = redo
+  useEffect(() => {
+    if (step === "upload") return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      if (e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        wizardUndo();
+      } else if ((e.key === "z" && e.shiftKey) || e.key === "y") {
+        e.preventDefault();
+        wizardRedo();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [step, wizardUndo, wizardRedo]);
+
+  useEffect(() => {
+    return () => {
+      if (wizardHistoryDebounceRef.current) clearTimeout(wizardHistoryDebounceRef.current);
+    };
+  }, []);
 
   // ── Area drag/resize (regions step) ─────────────────────────────────────
 
@@ -568,11 +853,12 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
         height: snap(Math.min(height, pg.canvasHeight - Math.max(0, y))),
       },
     };
+    pushToHistoryNow();
     setPages(prev => prev.map((p, i) =>
       i === pageIdxRef.current ? { ...p, areas: [...p.areas, newArea] } : p
     ));
     setSelectedAreaId(id);
-  }, []);
+  }, [pushToHistoryNow]);
 
   const handleRegionDrawStart = useCallback((e: React.MouseEvent, canvasX: number, canvasY: number) => {
     drawDragRef.current = { startMouseX: e.clientX, startMouseY: e.clientY, startCanvasX: canvasX, startCanvasY: canvasY };
@@ -628,6 +914,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
 
   const addArea = () => {
     if (!page) return;
+    pushToHistoryNow();
     const id = uuidv4();
     const newArea: AreaDraft = {
       id,
@@ -650,6 +937,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   };
 
   const deleteArea = (id: string) => {
+    pushToHistoryNow();
     setPages(prev => prev.map((pg, i) =>
       i === pageIdx ? { ...pg, areas: pg.areas.filter(a => a.id !== id) } : pg
     ));
@@ -657,6 +945,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   };
 
   const updateArea = (id: string, patch: Partial<AreaDraft>) => {
+    pushToHistoryNow();
     let normalized: Partial<AreaDraft> = { ...patch };
     if (patch.departmentKey != null) {
       normalized = {
@@ -674,6 +963,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   };
 
   const updateRegionStyle = (areaId: string, patch: Partial<RegionStyleDef>) => {
+    pushToHistoryDebounced();
     setPages(prev => prev.map((pg, i) => {
       if (i !== pageIdx) return pg;
       return {
@@ -687,6 +977,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   };
 
   const updateCardStyle = (areaId: string, patch: Partial<CardStyleDef>) => {
+    pushToHistoryDebounced();
     setPages(prev => prev.map((pg, i) => {
       if (i !== pageIdx) return pg;
       return {
@@ -702,6 +993,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   const createSampleCellForArea = (areaId: string) => {
     const area = page?.areas.find(a => a.id === areaId);
     if (!area) return;
+    pushToHistoryNow();
     const sampleCell = createSampleCell(area.productRegion, snap);
     setPages(prev => prev.map((pg, i) => {
       if (i !== pageIdx) return pg;
@@ -718,6 +1010,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   };
 
   const clearSampleCell = (areaId: string) => {
+    pushToHistoryNow();
     setPages(prev => prev.map((pg, i) => {
       if (i !== pageIdx) return pg;
       return {
@@ -729,22 +1022,36 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
 
   // ── Box CRUD ──────────────────────────────────────────────────────────────
 
-  const addBox = () => {
+  const addBox = async () => {
     if (!page) return;
+    pushToHistoryNow();
     const id = uuidv4();
+    const x = snap(page.canvasWidth * 0.1);
+    const y = snap(page.canvasHeight * 0.05);
+    const width = snap(page.canvasWidth * 0.8);
+    const height = snap(80);
+    let color = page.backgroundColor ?? "#ffffff";
+    let textColor = "#111111";
+    try {
+      color = await sampleRegionColor(page.fileUrl, { x, y, width, height });
+      const sampledText = await sampleTextColorFromRegion(page.fileUrl, { x, y, width, height }, color);
+      if (sampledText) textColor = sampledText;
+    } catch {
+      // keep defaults
+    }
     const newBox: BoxDraft = {
       id,
       label: "New Editable Field",
       departmentKey: "_header",
-      color: "#334155",
-      textColor: "#ffffff",
-      x: snap(page.canvasWidth * 0.1),
-      y: snap(page.canvasHeight * 0.05),
-      width: snap(page.canvasWidth * 0.8),
-      height: snap(80),
+      color,
+      textColor,
+      x,
+      y,
+      width,
+      height,
       rows: 1,
       boxType: "text",
-      content: "Edit me",
+      content: "{{days_count}}\n{{dates}}",
       fontSize: 24,
       isEditable: true,
       fieldKind: "date_range",
@@ -753,9 +1060,11 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
       i === pageIdx ? { ...pg, boxes: [...pg.boxes, newBox] } : pg
     ));
     setSelectedBoxId(id);
+    setOutlineOnly(false);
   };
 
   const deleteBox = (id: string) => {
+    pushToHistoryNow();
     setPages(prev => prev.map((pg, i) =>
       i === pageIdx ? { ...pg, boxes: pg.boxes.filter(b => b.id !== id) } : pg
     ));
@@ -763,6 +1072,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   };
 
   const updateBox = (id: string, patch: Partial<BoxDraft>) => {
+    pushToHistoryDebounced();
     setPages(prev => prev.map((pg, i) =>
       i === pageIdx ? {
         ...pg,
@@ -771,7 +1081,118 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     ));
   };
 
+  const boxRegion = (box: BoxDraft) => ({
+    x: box.x,
+    y: box.y,
+    width: box.width,
+    height: box.height,
+  });
+
+  const matchFlyerBackground = async (box: BoxDraft) => {
+    if (!page) return;
+    try {
+      const color = await sampleRegionColor(page.fileUrl, boxRegion(box));
+      updateBox(box.id, { color });
+    } catch {
+      setFontMatchMessage("Could not sample background color.");
+    }
+  };
+
+  const sampleTextColorForBox = async (box: BoxDraft) => {
+    if (!page) return;
+    try {
+      const textColor = await sampleTextColorFromRegion(
+        page.fileUrl,
+        boxRegion(box),
+        box.color === "transparent" ? (page.backgroundColor ?? "#ffffff") : box.color
+      );
+      if (textColor) updateBox(box.id, { textColor });
+      else setFontMatchMessage("Could not detect text color — pick manually.");
+    } catch {
+      setFontMatchMessage("Could not sample text color.");
+    }
+  };
+
+  const handleFlyerColorPick = useCallback(async (canvasX: number, canvasY: number) => {
+    if (!page || !selectedBoxId || !colorPickerMode) return;
+    try {
+      const hex = await samplePointColor(page.fileUrl, canvasX, canvasY);
+      if (colorPickerMode === "bg") {
+        updateBox(selectedBoxId, { color: hex });
+      } else {
+        updateBox(selectedBoxId, { textColor: hex });
+      }
+      setColorPickerMode(null);
+    } catch {
+      setFontMatchMessage("Could not pick color from flyer.");
+    }
+  }, [page, selectedBoxId, colorPickerMode, pageIdx]);
+
+  const guessFontForBox = async (box: BoxDraft) => {
+    if (!page) return;
+    setMatchingFont(true);
+    setFontMatchMessage(null);
+    try {
+      const sampleText = (box.content?.trim() || box.label || "SALE").slice(0, 24);
+      let result = await matchFontFromFlyerRegion(
+        page.fileUrl,
+        boxRegion(box),
+        sampleText,
+        box.fontSize ?? 24
+      );
+
+      if (!isFontMatchConfident(result)) {
+        const cropDataUrl = await cropRegionToDataUrl(page.fileUrl, boxRegion(box));
+        const gemini = await window.ufm.guessFontFromCrop({ cropDataUrl });
+        if (gemini && gemini.confidence > (result?.confidence ?? 0)) {
+          result = {
+            fontFamily: gemini.fontFamily,
+            label: gemini.label,
+            confidence: gemini.confidence,
+          };
+        }
+      }
+
+      if (result && isFontMatchConfident(result)) {
+        updateBox(box.id, { fontFamily: result.fontFamily });
+        setFontMatchMessage(`Matched: ${result.label} (${Math.round(result.confidence * 100)}%)`);
+      } else if (result) {
+        setFontMatchMessage(`Low confidence for ${result.label} (${Math.round(result.confidence * 100)}%) — pick manually.`);
+      } else {
+        setFontMatchMessage("Could not guess font — pick manually.");
+      }
+    } catch {
+      setFontMatchMessage("Font guess failed — pick manually.");
+    } finally {
+      setMatchingFont(false);
+    }
+  };
+
+  const wizardBtnStyle: React.CSSProperties = {
+    padding: "6px 10px",
+    borderRadius: 6,
+    border: "1px solid #475569",
+    background: "#334155",
+    color: "#e2e8f0",
+    fontSize: 11,
+    fontWeight: 600,
+    cursor: "pointer",
+  };
+
+  const wizardDeleteBtnStyle: React.CSSProperties = {
+    width: "100%",
+    padding: "7px 0",
+    background: "rgba(220,38,38,0.15)",
+    color: "#fca5a5",
+    border: "1px solid #dc2626",
+    borderRadius: 6,
+    cursor: "pointer",
+    fontSize: 12,
+    fontWeight: 600,
+  };
+
   const updateAreaRows = (areaId: string, rows: number) => {
+    pushToHistoryNow();
     const nextRows = Math.max(1, Math.min(20, rows));
     setPages(prev => prev.map((pg, i) => {
       if (i !== pageIdx) return pg;
@@ -807,6 +1228,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   };
 
   const updatePage = (patch: Partial<PageDraft>) => {
+    pushToHistoryDebounced();
     setPages(prev => prev.map((pg, i) =>
       i === pageIdx ? { ...pg, ...patch } : pg
     ));
@@ -820,6 +1242,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     region?: { x: number; y: number; width: number; height: number }
   ) => {
     if (!region) return;
+    pushToHistoryNow();
     setSelectedAreaId(areaId);
     boxDragRef.current = null;
     if (dragMode === "move") {
@@ -854,6 +1277,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     cell?: SampleCellDef
   ) => {
     if (!cell) return;
+    pushToHistoryNow();
     setSelectedAreaId(areaId);
     areaDragRef.current = null;
     boxDragRef.current = null;
@@ -889,6 +1313,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     box?: { x: number; y: number; width: number; height: number }
   ) => {
     if (!box) return;
+    pushToHistoryNow();
     setSelectedBoxId(boxId);
     areaDragRef.current = null;
     if (dragMode === "move") {
@@ -1060,6 +1485,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   const selectedArea = page?.areas.find(a => a.id === selectedAreaId) ?? null;
   const selectedBox = page?.boxes.find(b => b.id === selectedBoxId) ?? null;
   const editableBoxes = page?.boxes.filter(b => !!b.isEditable) ?? [];
+  const wizardDynamicPreviewCtx = previewDynamicContext();
 
   const wizardCanvasProps = page ? {
     page,
@@ -1082,6 +1508,9 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     onCanvasMouseDown: () => { setSelectedAreaId(null); setSelectedBoxId(null); },
     onRegionDrawStart: handleRegionDrawStart,
     drawRect: liveDrawRect,
+    colorPickerActive: colorPickerMode !== null,
+    onFlyerColorPick: handleFlyerColorPick,
+    dynamicDataContext: step === "components" ? wizardDynamicPreviewCtx : undefined,
   } : null;
 
   const segmentedBtn = (active: boolean): React.CSSProperties => ({
@@ -1096,6 +1525,15 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   });
 
   const showWizardSteps = step === "regions" || step === "cellStyle" || step === "components";
+  const wizardStep = showWizardSteps ? step as WizardCanvasStep : null;
+  const wizardStepMeta = wizardStep ? WIZARD_STEP_META[wizardStep] : null;
+  const floatingPanelTitle = !wizardStep
+    ? "Tools"
+    : wizardStep === "regions"
+      ? (selectedArea ? `Region — ${deptLabel(selectedArea.departmentKey)}` : "Regions")
+      : wizardStep === "cellStyle"
+        ? (selectedArea ? `Cell Style — ${deptLabel(selectedArea.departmentKey)}` : "Cell Style")
+        : (selectedBox ? `Edit Field — ${selectedBox.label}` : "Editable Fields");
 
   return (
     <div
@@ -1107,75 +1545,121 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
       }}
     >
         {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 20px", borderBottom: "1px solid #334155", flexShrink: 0 }}>
-          <span style={{ fontWeight: 700, fontSize: 16, color: "#f8fafc" }}>
-            {(initialConfig ? EDIT_STEP_TITLES : STEP_TITLES)[step]}
-          </span>
-          {showWizardSteps && (
-            <>
-              <span style={{ fontSize: 12, color: "#64748b" }}>|</span>
-              <span style={{ fontSize: 12, color: "#94a3b8" }}>
-                {step === "regions" ? "Step 1/3" : step === "cellStyle" ? "Step 2/3" : "Step 3/3"}
-              </span>
-              <span style={{ fontSize: 12, color: "#94a3b8" }}>Template name:</span>
-              <input
-                value={templateName}
-                onChange={e => setTemplateName(e.target.value)}
-                style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #475569", background: "#334155", color: "#fff", fontSize: 13, width: 200 }}
-                onMouseDown={e => e.stopPropagation()}
-              />
-              <span style={{ fontSize: 12, color: "#64748b" }}>|</span>
-              <div style={{ display: "flex", alignItems: "center", gap: 4, background: "#0f172a", borderRadius: 6, padding: 2, border: "1px solid #334155" }}>
-                <button type="button" style={segmentedBtn(viewMode === "overlay")} onClick={() => setViewMode("overlay")}>
-                  Overlay
-                </button>
-                <button type="button" style={segmentedBtn(viewMode === "sideBySide")} onClick={() => setViewMode("sideBySide")}>
-                  Side by side
-                </button>
-              </div>
-              {viewMode === "overlay" && step === "cellStyle" && gridPreviewActive && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 0, borderBottom: "1px solid #334155", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 20px" }}>
+            <span style={{ fontWeight: 700, fontSize: 16, color: "#f8fafc" }}>
+              {(initialConfig ? EDIT_STEP_TITLES : STEP_TITLES)[step]}
+            </span>
+            {showWizardSteps && wizardStepMeta && (
+              <>
+                <span style={{ fontSize: 12, color: "#64748b" }}>|</span>
+                <span style={{ fontSize: 12, color: "#94a3b8", maxWidth: 360, lineHeight: 1.35 }}>
+                  {wizardStepMeta.hint}
+                </span>
+                <span style={{ fontSize: 12, color: "#64748b" }}>|</span>
+                <span style={{ fontSize: 12, color: "#94a3b8" }}>Template name:</span>
+                <input
+                  value={templateName}
+                  onChange={e => setTemplateName(e.target.value)}
+                  style={{ padding: "3px 8px", borderRadius: 4, border: "1px solid #475569", background: "#334155", color: "#fff", fontSize: 13, width: 200 }}
+                  onMouseDown={e => e.stopPropagation()}
+                />
+                <span style={{ fontSize: 12, color: "#64748b" }}>|</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 4, background: "#0f172a", borderRadius: 6, padding: 2, border: "1px solid #334155" }}>
+                  <button type="button" style={segmentedBtn(viewMode === "overlay")} onClick={() => setViewMode("overlay")}>
+                    Overlay
+                  </button>
+                  <button type="button" style={segmentedBtn(viewMode === "sideBySide")} onClick={() => setViewMode("sideBySide")}>
+                    Side by side
+                  </button>
+                </div>
+                {viewMode === "overlay" && step === "cellStyle" && gridPreviewActive && (
+                  <button
+                    type="button"
+                    onClick={() => setUnderprintPresetIdx(nextUnderprintPresetIdx(underprintPresetIdx))}
+                    style={{
+                      padding: "4px 10px",
+                      borderRadius: 6,
+                      border: "1px solid #475569",
+                      background: "#334155",
+                      color: "#e2e8f0",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Underprint: {underprintPreset.label}
+                  </button>
+                )}
+              </>
+            )}
+            <div style={{ flex: 1 }} />
+            {showWizardSteps && (
+              <>
+                {saveSuccess && <span style={{ color: "#86efac", fontSize: 13, fontWeight: 600 }}>Saved!</span>}
+                <div style={{ display: "flex", alignItems: "center", gap: 2, background: "#0f172a", borderRadius: 6, padding: 2, border: "1px solid #334155" }}>
+                  <button
+                    type="button"
+                    disabled={!wizardCanUndo}
+                    onClick={wizardUndo}
+                    title="Undo (Ctrl+Z)"
+                    style={{
+                      padding: "4px 10px",
+                      border: "none",
+                      borderRadius: 4,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: wizardCanUndo ? "pointer" : "not-allowed",
+                      background: "transparent",
+                      color: wizardCanUndo ? "#e2e8f0" : "#475569",
+                    }}
+                  >
+                    ↩ Undo
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!wizardCanRedo}
+                    onClick={wizardRedo}
+                    title="Redo (Ctrl+Shift+Z)"
+                    style={{
+                      padding: "4px 10px",
+                      border: "none",
+                      borderRadius: 4,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: wizardCanRedo ? "pointer" : "not-allowed",
+                      background: "transparent",
+                      color: wizardCanRedo ? "#e2e8f0" : "#475569",
+                    }}
+                  >
+                    ↪ Redo
+                  </button>
+                </div>
                 <button
-                  type="button"
-                  onClick={() => setUnderprintPresetIdx(nextUnderprintPresetIdx(underprintPresetIdx))}
-                  style={{
-                    padding: "4px 10px",
-                    borderRadius: 6,
-                    border: "1px solid #475569",
-                    background: "#334155",
-                    color: "#e2e8f0",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
+                  onClick={saveProgress}
+                  style={{ padding: "4px 14px", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}
                 >
-                  Underprint: {underprintPreset.label}
+                  Save
                 </button>
-              )}
-            </>
+              </>
+            )}
+            <button
+              onClick={onClose}
+              style={{ padding: "4px 12px", background: "#475569", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13 }}
+            >
+              ← Back
+            </button>
+          </div>
+          {showWizardSteps && wizardStep && (
+            <div style={{ padding: "10px 20px 14px", background: "linear-gradient(180deg, rgba(15,23,42,0.65) 0%, transparent 100%)", borderTop: "1px solid rgba(51,65,85,0.6)" }}>
+              <WizardStepProgress step={wizardStep} />
+            </div>
           )}
-          <div style={{ flex: 1 }} />
-          {showWizardSteps && (
-            <>
-              {saveSuccess && <span style={{ color: "#86efac", fontSize: 13, fontWeight: 600 }}>Saved!</span>}
-              <button
-                onClick={saveProgress}
-                style={{ padding: "4px 14px", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 600 }}
-              >
-                Save
-              </button>
-            </>
-          )}
-          <button
-            onClick={onClose}
-            style={{ padding: "4px 12px", background: "#475569", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13 }}
-          >
-            ← Back
-          </button>
         </div>
 
         {/* Upload */}
         {step === "upload" && (
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start", padding: 32, gap: 20, overflowY: "auto" }}>
+          <div className="ufm-scroll" style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start", padding: 32, gap: 20, overflowY: "auto" }}>
             <div
               onDrop={onDrop}
               onDragOver={e => { if (loading) return; e.preventDefault(); setDragOver(true); }}
@@ -1268,10 +1752,93 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
         {showWizardSteps && page && wizardCanvasProps && (
           <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
             <div
+              ref={canvasOverlayRef}
+              style={{ flex: 1, minHeight: 0, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column" }}
+            >
+            <div
               ref={containerRef}
               style={{ flex: 1, minHeight: 0, overflow: "auto", background: "#0f172a", position: "relative" }}
-              onMouseDown={() => { setSelectedAreaId(null); setSelectedBoxId(null); }}
+              onMouseDown={() => { if (!colorPickerMode) { setSelectedAreaId(null); setSelectedBoxId(null); } }}
             >
+              {wizardStep && (
+                <div
+                  style={{
+                    position: "sticky",
+                    top: 0,
+                    zIndex: 5,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "10px 16px 0",
+                    pointerEvents: "none",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "6px 14px",
+                      borderRadius: 999,
+                      background: "rgba(15,23,42,0.88)",
+                      border: "1px solid #334155",
+                      boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
+                      backdropFilter: "blur(6px)",
+                    }}
+                  >
+                    <span style={{ fontSize: 11, fontWeight: 800, color: "#93c5fd", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                      Step {wizardStepIndex(wizardStep) + 1}
+                    </span>
+                    <span style={{ width: 1, height: 12, background: "#475569" }} />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#e2e8f0" }}>
+                      {WIZARD_STEP_META[wizardStep].short}
+                    </span>
+                    <span style={{ width: 1, height: 12, background: "#475569" }} />
+                    <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                      Page <strong style={{ color: "#f8fafc" }}>{pageIdx + 1}</strong> of {pages.length}
+                    </span>
+                  </div>
+                  {wizardStep === "cellStyle" && <CellStyleLayerLegend />}
+                </div>
+              )}
+              {colorPickerMode && (
+                <div
+                  style={{
+                    position: "sticky",
+                    top: 44,
+                    zIndex: 6,
+                    display: "flex",
+                    justifyContent: "center",
+                    padding: "0 16px 8px",
+                    pointerEvents: "none",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "8px 14px",
+                      borderRadius: 8,
+                      background: "rgba(124,58,237,0.92)",
+                      color: "#fff",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
+                    }}
+                  >
+                    Click the flyer to pick {colorPickerMode === "bg" ? "background" : "text"} color
+                    <button
+                      type="button"
+                      onClick={() => setColorPickerMode(null)}
+                      style={{ marginLeft: 4, padding: "2px 8px", borderRadius: 4, border: "1px solid rgba(255,255,255,0.4)", background: "transparent", color: "#fff", fontSize: 11, cursor: "pointer", pointerEvents: "auto" }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
               <div style={{ display: "flex", justifyContent: "center", padding: 16, minHeight: "min-content" }}>
               {viewMode === "overlay" ? (
                 <ImportWizardCanvas {...wizardCanvasProps} mode="edit" />
@@ -1297,50 +1864,448 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
               )}
               </div>
             </div>
+              {canvasZoom !== 1.0 && (
+                <div
+                  style={{
+                    position: "absolute",
+                    bottom: 12,
+                    right: 16,
+                    background: "rgba(0,0,0,0.55)",
+                    color: "#fff",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    padding: "3px 8px",
+                    borderRadius: 4,
+                    userSelect: "none",
+                    pointerEvents: "none",
+                    zIndex: 8,
+                  }}
+                >
+                  {Math.round(canvasZoom * 100)}%
+                </div>
+              )}
+
+            {wizardStep && (
+              <WizardFloatingToolsPanel
+                title={floatingPanelTitle}
+                visible
+                boundsRef={canvasOverlayRef}
+                resetKey={`${wizardStep}-${pageIdx}-${selectedAreaId ?? ""}-${selectedBoxId ?? ""}`}
+                width={360}
+              >
+                {wizardStep === "regions" && (
+                  <>
+                    <button onClick={addArea} style={{ width: "100%", padding: "8px 0", background: "#f59e0b", color: "#fff", border: "none", borderRadius: 6, fontWeight: 600, cursor: "pointer", fontSize: 13 }}>
+                      + Add Region
+                    </button>
+                    <p style={{ fontSize: 10, color: "#64748b", margin: 0, lineHeight: 1.45 }}>
+                      Place each department area on the canvas. Colored regions sit behind product cells.
+                    </p>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                        <span style={{ fontSize: 10, color: "#64748b" }}>Canvas width</span>
+                        <input type="number" min={100} max={8000} value={page.canvasWidth}
+                          onChange={e => updatePage({ canvasWidth: Math.max(100, parseInt(e.target.value) || 100) })}
+                          style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }} />
+                      </label>
+                      <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                        <span style={{ fontSize: 10, color: "#64748b" }}>Canvas height</span>
+                        <input type="number" min={100} max={8000} value={page.canvasHeight}
+                          onChange={e => updatePage({ canvasHeight: Math.max(100, parseInt(e.target.value) || 100) })}
+                          style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }} />
+                      </label>
+                    </div>
+                    {selectedArea ? (
+                      <>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                          <span style={{ fontSize: 11, color: "#64748b" }}>Label</span>
+                          <select
+                            value={selectedArea.departmentKey}
+                            onChange={e => updateArea(selectedArea.id, { departmentKey: e.target.value })}
+                            style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }}
+                          >
+                            {(STANDARD_DEPT_KEYS.includes(selectedArea.departmentKey as typeof STANDARD_DEPT_KEYS[number])
+                              ? STANDARD_DEPT_KEYS
+                              : [selectedArea.departmentKey, ...STANDARD_DEPT_KEYS]
+                            ).map(k => (
+                              <option key={k} value={k}>
+                                {deptLabel(k)}{!STANDARD_DEPT_KEYS.includes(k as typeof STANDARD_DEPT_KEYS[number]) ? " (legacy)" : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                          <span style={{ fontSize: 11, color: "#64748b" }}>Background</span>
+                          <input type="color" value={selectedArea.regionStyle?.backgroundColor ?? defaultRegionStyle(selectedArea.departmentKey).backgroundColor ?? "#f1f5f9"}
+                            onChange={e => updateRegionStyle(selectedArea.id, { backgroundColor: e.target.value })}
+                            style={{ width: "100%", height: 28, cursor: "pointer", border: "1px solid #475569", borderRadius: 4 }} />
+                        </label>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                          <span style={{ fontSize: 11, color: "#64748b" }}>Corner radius (px)</span>
+                          <input type="number" min={0} max={100} value={selectedArea.regionStyle?.borderRadius ?? 0}
+                            onChange={e => updateRegionStyle(selectedArea.id, { borderRadius: Math.max(0, parseInt(e.target.value) || 0) })}
+                            style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }} />
+                        </label>
+                        <button type="button" onClick={() => deleteArea(selectedArea.id)} style={wizardDeleteBtnStyle}>
+                          Delete Region
+                        </button>
+                      </>
+                    ) : (
+                      <p style={{ fontSize: 11, color: "#94a3b8", margin: 0, lineHeight: 1.45 }}>
+                        Select a region on the canvas or in the list to edit its properties.
+                      </p>
+                    )}
+                  </>
+                )}
+
+                {wizardStep === "cellStyle" && (
+                  <>
+                    <p style={{ fontSize: 10, color: "#64748b", margin: 0, lineHeight: 1.45 }}>
+                      Style one <strong style={{ color: "#cbd5e1" }}>product cell</strong> — the same look repeats on every slot in the department. Department backgrounds are locked here.
+                    </p>
+                    {!selectedArea ? (
+                      <p style={{ fontSize: 11, color: "#94a3b8", margin: 0, lineHeight: 1.45 }}>
+                        Select a department from the list to style its product cells.
+                      </p>
+                    ) : (() => {
+                      const cs: CardStyleDef = selectedArea.cardStyle ?? defaultCardStyle();
+                      return (
+                        <>
+                          {selectedArea.sampleCell && selectedArea.cardStyle && (
+                            <CellMagnifierPreview
+                              cardStyle={cs}
+                              departmentLabel={deptLabel(selectedArea.departmentKey)}
+                              width={selectedArea.sampleCell.width}
+                              height={selectedArea.sampleCell.height}
+                            />
+                          )}
+                          {!selectedArea.sampleCell ? (
+                            <button
+                              type="button"
+                              onClick={() => createSampleCellForArea(selectedArea.id)}
+                              style={{ padding: "10px 0", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 700 }}
+                            >
+                              + Create Sample Product Cell
+                            </button>
+                          ) : (
+                            <>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase" }}>Appearance</div>
+                              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                <span style={{ fontSize: 11, color: "#64748b" }}>Fill color</span>
+                                <input type="color" value={cs.backgroundColor ?? "#ffffff"}
+                                  onChange={e => updateCardStyle(selectedArea.id, { backgroundColor: e.target.value })}
+                                  style={{ width: "100%", height: 28, cursor: "pointer", border: "1px solid #475569", borderRadius: 4 }} />
+                              </label>
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
+                                  <span style={{ fontSize: 11, color: "#64748b" }}>Border width</span>
+                                  <input type="number" min={0} max={20} value={cs.borderWidth ?? 0}
+                                    onChange={e => updateCardStyle(selectedArea.id, { borderWidth: parseInt(e.target.value) || 0 })}
+                                    style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }} />
+                                </label>
+                                <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
+                                  <span style={{ fontSize: 11, color: "#64748b" }}>Corner radius</span>
+                                  <input type="number" min={0} max={100} value={cs.borderRadius ?? 0}
+                                    onChange={e => updateCardStyle(selectedArea.id, { borderRadius: parseInt(e.target.value) || 0 })}
+                                    style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }} />
+                                </label>
+                              </div>
+                              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                <span style={{ fontSize: 11, color: "#64748b" }}>Border color</span>
+                                <input type="color" value={cs.borderColor ?? "#cbd5e1"}
+                                  onChange={e => updateCardStyle(selectedArea.id, { borderColor: e.target.value })}
+                                  style={{ width: "100%", height: 28, cursor: "pointer", border: "1px solid #475569", borderRadius: 4 }} />
+                              </label>
+                              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#cbd5e1", cursor: "pointer" }}>
+                                <input type="checkbox" checked={!!cs.hasShadow}
+                                  onChange={e => updateCardStyle(selectedArea.id, { hasShadow: e.target.checked })} />
+                                Drop shadow
+                              </label>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", marginTop: 4 }}>
+                                Product grid
+                              </div>
+                              <p style={{ fontSize: 10, color: "#64748b", margin: 0, lineHeight: 1.45 }}>
+                                Same layout as flyer automation — {DEFAULT_COLS} products per row baseline. Adjust rows to fit your department size.
+                              </p>
+                              {(() => {
+                                const rows = selectedArea.rows ?? DEFAULT_ROWS;
+                                const slotCount = automationGridCardsForArea(selectedArea).cards.length;
+                                return (
+                                  <>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                      <span style={{ fontSize: 11, color: "#64748b", flex: 1 }}>Rows</span>
+                                      <button type="button" disabled={rows <= 1}
+                                        onClick={() => updateAreaRows(selectedArea.id, rows - 1)}
+                                        style={{ width: 28, height: 28, borderRadius: 6, border: "1px solid #475569", background: "#0f172a", color: "#e2e8f0", cursor: rows <= 1 ? "not-allowed" : "pointer", fontSize: 16, fontWeight: 700 }}>
+                                        −
+                                      </button>
+                                      <span style={{ fontSize: 13, color: "#f8fafc", fontWeight: 700, minWidth: 24, textAlign: "center" }}>{rows}</span>
+                                      <button type="button" disabled={rows >= 20}
+                                        onClick={() => updateAreaRows(selectedArea.id, rows + 1)}
+                                        style={{ width: 28, height: 28, borderRadius: 6, border: "1px solid #475569", background: "#0f172a", color: "#e2e8f0", cursor: rows >= 20 ? "not-allowed" : "pointer", fontSize: 16, fontWeight: 700 }}>
+                                        +
+                                      </button>
+                                    </div>
+                                    <p style={{ fontSize: 10, color: "#94a3b8", margin: 0 }}>
+                                      {slotCount} product slots ({rows} rows × {DEFAULT_COLS} cols). Ghost outlines on the canvas show every slot.
+                                    </p>
+                                    <button
+                                      type="button"
+                                      disabled={regenerating}
+                                      onClick={() => void toggleGridPreview()}
+                                      style={{
+                                        padding: "8px 0",
+                                        background: gridPreviewActive ? "#334155" : "#7c3aed",
+                                        color: "#fff",
+                                        border: "none",
+                                        borderRadius: 6,
+                                        cursor: regenerating ? "wait" : "pointer",
+                                        fontSize: 13,
+                                        fontWeight: 700,
+                                      }}
+                                    >
+                                      {regenerating ? "Loading…" : gridPreviewActive ? "Exit filled grid preview" : "Filled grid + underprint preview"}
+                                    </button>
+                                    <button type="button" onClick={() => clearSampleCell(selectedArea.id)} style={wizardDeleteBtnStyle}>
+                                      Delete Sample Cell
+                                    </button>
+                                  </>
+                                );
+                              })()}
+                            </>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </>
+                )}
+
+                {wizardStep === "components" && (
+                  <>
+                    <button onClick={addBox} style={{ width: "100%", padding: "8px 0", background: "#22c55e", color: "#fff", border: "none", borderRadius: 6, fontWeight: 600, cursor: "pointer", fontSize: 13 }}>
+                      + Add Editable Field
+                    </button>
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#cbd5e1", cursor: "pointer" }}>
+                      <input type="checkbox" checked={outlineOnly} onChange={e => setOutlineOnly(e.target.checked)} />
+                      Outline-only mode (hide solid fill to align on flyer)
+                    </label>
+                    {selectedBox ? (
+                      <>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          <span style={{ fontSize: 11, color: "#64748b" }}>Label</span>
+                          <input value={selectedBox.label} onChange={e => updateBox(selectedBox.id, { label: e.target.value })}
+                            style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 13 }} />
+                        </label>
+                        <DynamicDataPicker
+                          content={selectedBox.content ?? ""}
+                          onChange={value => updateBox(selectedBox.id, { content: value })}
+                          previewContext={wizardDynamicPreviewCtx}
+                          resolvedPreview={resolveEditableBoxContent(selectedBox, wizardDynamicPreviewCtx)}
+                          theme="dark"
+                        />
+                        <div
+                          style={{
+                            padding: "8px 10px",
+                            borderRadius: 6,
+                            background: selectedBox.color,
+                            color: selectedBox.textColor,
+                            fontFamily: selectedBox.fontFamily || undefined,
+                            fontSize: Math.min(20, selectedBox.fontSize ?? 24),
+                            fontWeight: 600,
+                            textAlign: selectedBox.textAlign ?? "left",
+                            lineHeight: 1.2,
+                            border: "1px solid #334155",
+                            whiteSpace: "pre-wrap",
+                          }}
+                        >
+                          {resolveEditableBoxContent(selectedBox, wizardDynamicPreviewCtx).slice(0, 120) || selectedBox.label}
+                        </div>
+                        <p style={{ fontSize: 10, color: "#64748b", margin: 0, lineHeight: 1.4 }}>
+                          Set the field fill to the flyer background color so only the text shows in the final template.
+                        </p>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          <button type="button" style={wizardBtnStyle} onClick={() => void matchFlyerBackground(selectedBox)}>
+                            Match flyer background
+                          </button>
+                          <button
+                            type="button"
+                            style={{ ...wizardBtnStyle, background: colorPickerMode === "bg" ? "#3b82f6" : wizardBtnStyle.background, borderColor: colorPickerMode === "bg" ? "#3b82f6" : "#475569" }}
+                            onClick={() => setColorPickerMode(m => m === "bg" ? null : "bg")}
+                          >
+                            {colorPickerMode === "bg" ? "Click flyer (BG)…" : "Pick BG from flyer"}
+                          </button>
+                          <button type="button" style={wizardBtnStyle} onClick={() => void sampleTextColorForBox(selectedBox)}>
+                            Sample text color
+                          </button>
+                          <button
+                            type="button"
+                            style={{ ...wizardBtnStyle, background: colorPickerMode === "text" ? "#3b82f6" : wizardBtnStyle.background, borderColor: colorPickerMode === "text" ? "#3b82f6" : "#475569" }}
+                            onClick={() => setColorPickerMode(m => m === "text" ? null : "text")}
+                          >
+                            {colorPickerMode === "text" ? "Click flyer (text)…" : "Pick text from flyer"}
+                          </button>
+                        </div>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+                            <span style={{ fontSize: 11, color: "#64748b" }}>Fill color</span>
+                            <input type="color" value={selectedBox.color === "transparent" ? "#ffffff" : selectedBox.color}
+                              onChange={e => updateBox(selectedBox.id, { color: e.target.value })}
+                              style={{ width: "100%", height: 32, cursor: "pointer", border: "1px solid #475569", borderRadius: 4 }} />
+                          </label>
+                          <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+                            <span style={{ fontSize: 11, color: "#64748b" }}>Text color</span>
+                            <input type="color" value={selectedBox.textColor}
+                              onChange={e => updateBox(selectedBox.id, { textColor: e.target.value })}
+                              style={{ width: "100%", height: 32, cursor: "pointer", border: "1px solid #475569", borderRadius: 4 }} />
+                          </label>
+                        </div>
+                        <FontPickerList
+                          label="Font (English)"
+                          options={FONT_OPTIONS}
+                          value={selectedBox.fontFamily}
+                          onChange={v => updateBox(selectedBox.id, { fontFamily: v || undefined })}
+                          theme="dark"
+                        />
+                        <FontPickerList
+                          label="Font (Chinese)"
+                          options={ZH_FONT_OPTIONS}
+                          value={selectedBox.zhFontFamily}
+                          onChange={v => updateBox(selectedBox.id, { zhFontFamily: v || undefined })}
+                          theme="dark"
+                        />
+                        <button
+                          type="button"
+                          disabled={matchingFont}
+                          onClick={() => void guessFontForBox(selectedBox)}
+                          style={{ ...wizardBtnStyle, width: "100%", background: matchingFont ? "#1e293b" : "#7c3aed", borderColor: "#7c3aed", color: "#fff", cursor: matchingFont ? "wait" : "pointer" }}
+                        >
+                          {matchingFont ? "Guessing font…" : "Guess font from flyer"}
+                        </button>
+                        {fontMatchMessage && (
+                          <p style={{ fontSize: 10, color: "#94a3b8", margin: 0, lineHeight: 1.4 }}>{fontMatchMessage}</p>
+                        )}
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+                            <span style={{ fontSize: 11, color: "#64748b" }}>Font px</span>
+                            <input type="number" min={8} max={200} value={selectedBox.fontSize ?? 24}
+                              onChange={e => updateBox(selectedBox.id, { fontSize: parseInt(e.target.value) || 24 })}
+                              style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 13 }} />
+                          </label>
+                          <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+                            <span style={{ fontSize: 11, color: "#64748b" }}>Text align</span>
+                            <select value={selectedBox.textAlign ?? "left"} onChange={e => updateBox(selectedBox.id, { textAlign: e.target.value as CustomBoxDef["textAlign"] })}
+                              style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 13 }}>
+                              <option value="left">Left</option>
+                              <option value="center">Center</option>
+                              <option value="right">Right</option>
+                            </select>
+                          </label>
+                        </div>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          <span style={{ fontSize: 11, color: "#64748b" }}>Vertical align</span>
+                          <select value={selectedBox.textVertical ?? "middle"} onChange={e => updateBox(selectedBox.id, { textVertical: e.target.value as CustomBoxDef["textVertical"] })}
+                            style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 13 }}>
+                            <option value="top">Top</option>
+                            <option value="middle">Middle</option>
+                            <option value="bottom">Bottom</option>
+                          </select>
+                        </label>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          <span style={{ fontSize: 11, color: "#64748b" }}>Field Kind</span>
+                          <select value={selectedBox.fieldKind ?? "date_range"} onChange={e => updateBox(selectedBox.id, { fieldKind: e.target.value as BoxDraft["fieldKind"] })}
+                            style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 13 }}>
+                            {EDITABLE_FIELD_KINDS.map(k => <option key={k} value={k}>{k}</option>)}
+                          </select>
+                        </label>
+                        <button type="button" onClick={() => deleteBox(selectedBox.id)} style={wizardDeleteBtnStyle}>
+                          Delete Field
+                        </button>
+                      </>
+                    ) : (
+                      <p style={{ fontSize: 11, color: "#94a3b8", margin: 0, lineHeight: 1.45 }}>
+                        Select a field on the canvas or in the list to edit it.
+                      </p>
+                    )}
+                  </>
+                )}
+              </WizardFloatingToolsPanel>
+            )}
+            </div>
 
             {/* Right panel */}
             <div style={{ width: SIDEBAR_WIDTH, flexShrink: 0, background: "#1e293b", borderLeft: "1px solid #334155", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+              {wizardStep && wizardStepMeta && (
+                <div
+                  style={{
+                    padding: "14px 14px 12px",
+                    background: "linear-gradient(135deg, rgba(59,130,246,0.14) 0%, rgba(59,130,246,0.04) 100%)",
+                    borderBottom: "1px solid #334155",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <div
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 800,
+                        color: "#93c5fd",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        background: "rgba(59,130,246,0.2)",
+                        padding: "3px 8px",
+                        borderRadius: 999,
+                      }}
+                    >
+                      Step {wizardStepIndex(wizardStep) + 1} of {WIZARD_STEPS_ORDER.length}
+                    </div>
+                    <div style={{ width: 1, height: 14, background: "#475569" }} />
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#cbd5e1" }}>
+                      {WIZARD_STEP_META[wizardStep].short}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#f8fafc", lineHeight: 1.3 }}>
+                    {(initialConfig ? EDIT_STEP_TITLES : STEP_TITLES)[wizardStep]}
+                  </div>
+                  <p style={{ fontSize: 11, color: "#94a3b8", margin: "6px 0 0", lineHeight: 1.45 }}>
+                    {wizardStepMeta.hint}
+                  </p>
+                </div>
+              )}
+
               {/* Page nav */}
-              <div style={{ padding: "10px 12px", borderBottom: "1px solid #334155", display: "flex", alignItems: "center", gap: 6 }}>
-                <button
-                  onClick={() => { setPageIdx(i => Math.max(0, i - 1)); setSelectedAreaId(null); setSelectedBoxId(null); }}
-                  disabled={pageIdx === 0}
-                  style={{ padding: "3px 8px", background: "#334155", border: "none", borderRadius: 4, color: pageIdx === 0 ? "#475569" : "#cbd5e1", cursor: pageIdx === 0 ? "not-allowed" : "pointer", fontSize: 14 }}
-                >◀</button>
-                <span style={{ flex: 1, textAlign: "center", fontSize: 12, color: "#94a3b8" }}>Page {pageIdx + 1} / {pages.length}</span>
-                <button
-                  onClick={() => { setPageIdx(i => Math.min(pages.length - 1, i + 1)); setSelectedAreaId(null); setSelectedBoxId(null); }}
-                  disabled={pageIdx >= pages.length - 1}
-                  style={{ padding: "3px 8px", background: "#334155", border: "none", borderRadius: 4, color: pageIdx >= pages.length - 1 ? "#475569" : "#cbd5e1", cursor: pageIdx >= pages.length - 1 ? "not-allowed" : "pointer", fontSize: 14 }}
-                >▶</button>
+              <div style={{ padding: "12px 14px", borderBottom: "1px solid #334155", display: "flex", flexDirection: "column", gap: 10 }}>
+                <WizardPageStrip pages={pages} pageIdx={pageIdx} onSelect={goToPage} />
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => goToPage(Math.max(0, pageIdx - 1))}
+                    disabled={pageIdx === 0}
+                    style={{ flex: 1, padding: "6px 0", background: "#334155", border: "none", borderRadius: 6, color: pageIdx === 0 ? "#475569" : "#cbd5e1", cursor: pageIdx === 0 ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 600 }}
+                  >
+                    ← Previous page
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => goToPage(Math.min(pages.length - 1, pageIdx + 1))}
+                    disabled={pageIdx >= pages.length - 1}
+                    style={{ flex: 1, padding: "6px 0", background: "#334155", border: "none", borderRadius: 6, color: pageIdx >= pages.length - 1 ? "#475569" : "#cbd5e1", cursor: pageIdx >= pages.length - 1 ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 600 }}
+                  >
+                    Next page →
+                  </button>
+                </div>
               </div>
 
               {/* Regions step panel */}
               {step === "regions" && (
                 <>
-                  <div style={{ padding: "10px 12px", borderBottom: "1px solid #334155", display: "flex", flexDirection: "column", gap: 8 }}>
-                    <button onClick={addArea} style={{ width: "100%", padding: "6px 0", background: "#f59e0b", color: "#fff", border: "none", borderRadius: 6, fontWeight: 600, cursor: "pointer", fontSize: 13 }}>
-                      + Add Region
-                    </button>
+                  <div style={{ padding: "10px 12px", borderBottom: "1px solid #334155" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>
+                      Regions ({page.areas.length})
+                    </div>
                     <p style={{ fontSize: 10, color: "#64748b", margin: 0, lineHeight: 1.45 }}>
-                      Place each department area on the canvas. It fills with a background color — this is the department background behind product cells.
+                      Select a region to edit. Tools are in the floating panel on the canvas.
                     </p>
                   </div>
-                  <div style={{ padding: "8px 12px", borderBottom: "1px solid #334155", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                    <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                      <span style={{ fontSize: 10, color: "#64748b" }}>Canvas width</span>
-                      <input type="number" min={100} max={8000} value={page.canvasWidth}
-                        onChange={e => updatePage({ canvasWidth: Math.max(100, parseInt(e.target.value) || 100) })}
-                        style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }} />
-                    </label>
-                    <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                      <span style={{ fontSize: 10, color: "#64748b" }}>Canvas height</span>
-                      <input type="number" min={100} max={8000} value={page.canvasHeight}
-                        onChange={e => updatePage({ canvasHeight: Math.max(100, parseInt(e.target.value) || 100) })}
-                        style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }} />
-                    </label>
-                  </div>
-                  <div style={{ flex: 1, overflowY: "auto", padding: "8px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div className="ufm-scroll" style={{ flex: 1, overflowY: "auto", padding: "8px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
                     {page.areas.length === 0 && (
                       <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.45, padding: "8px 0" }}>
                         No regions yet. Draw directly on the flyer, or click Add Region.
@@ -1363,41 +2328,11 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                       </div>
                     ))}
                   </div>
-                  {selectedArea && (
-                    <div style={{ borderTop: "1px solid #334155", padding: "12px", display: "flex", flexDirection: "column", gap: 8 }}>
-                      <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                        <span style={{ fontSize: 11, color: "#64748b" }}>Label</span>
-                        <select
-                          value={selectedArea.departmentKey}
-                          onChange={e => updateArea(selectedArea.id, { departmentKey: e.target.value })}
-                          style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }}
-                        >
-                          {(STANDARD_DEPT_KEYS.includes(selectedArea.departmentKey as typeof STANDARD_DEPT_KEYS[number])
-                            ? STANDARD_DEPT_KEYS
-                            : [selectedArea.departmentKey, ...STANDARD_DEPT_KEYS]
-                          ).map(k => (
-                            <option key={k} value={k}>
-                              {deptLabel(k)}{!STANDARD_DEPT_KEYS.includes(k as typeof STANDARD_DEPT_KEYS[number]) ? " (legacy)" : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                        <span style={{ fontSize: 11, color: "#64748b" }}>Background</span>
-                        <input type="color" value={selectedArea.regionStyle?.backgroundColor ?? defaultRegionStyle(selectedArea.departmentKey).backgroundColor ?? "#f1f5f9"}
-                          onChange={e => updateRegionStyle(selectedArea.id, { backgroundColor: e.target.value })}
-                          style={{ width: "100%", height: 28, cursor: "pointer", border: "1px solid #475569", borderRadius: 4 }} />
-                      </label>
-                      <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                        <span style={{ fontSize: 11, color: "#64748b" }}>Corner radius (px)</span>
-                        <input type="number" min={0} max={100} value={selectedArea.regionStyle?.borderRadius ?? 0}
-                          onChange={e => updateRegionStyle(selectedArea.id, { borderRadius: Math.max(0, parseInt(e.target.value) || 0) })}
-                          style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }} />
-                      </label>
-                    </div>
-                  )}
-                  <div style={{ padding: "12px", borderTop: "1px solid #334155" }}>
-                    <button onClick={() => { setSelectedAreaId(null); setStep("cellStyle"); }}
+                  <div style={{ padding: "12px", borderTop: "1px solid #334155", display: "flex", flexDirection: "column", gap: 6 }}>
+                    <p style={{ fontSize: 10, color: "#64748b", margin: 0, lineHeight: 1.4, textAlign: "center" }}>
+                      Finish all flyer pages in this step, then continue. Step 2 opens on page 1.
+                    </p>
+                    <button onClick={() => goToStep("cellStyle")}
                       style={{ width: "100%", padding: "8px 0", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
                       Next: Cell Style →
                     </button>
@@ -1409,11 +2344,14 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
               {step === "cellStyle" && (
                 <>
                   <div style={{ padding: "10px 12px", borderBottom: "1px solid #334155" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>
+                      Departments
+                    </div>
                     <p style={{ fontSize: 10, color: "#64748b", margin: 0, lineHeight: 1.45 }}>
-                      Department backgrounds are locked. Select a department, create a sample cell, then style it.
+                      Select a department to style product cells. Ghost slots appear on the canvas once a sample cell exists.
                     </p>
                   </div>
-                  <div style={{ flex: 1, overflowY: "auto", padding: "8px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div className="ufm-scroll" style={{ flex: 1, overflowY: "auto", padding: "8px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
                     {page.areas.map(area => (
                       <div
                         key={area.id}
@@ -1431,118 +2369,15 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                       </div>
                     ))}
                   </div>
-                  {selectedArea && (() => {
-                    const cs: CardStyleDef = selectedArea.cardStyle ?? defaultCardStyle();
-                    return (
-                      <div style={{ borderTop: "1px solid #334155", padding: "14px", display: "flex", flexDirection: "column", gap: 10, flex: "1 1 50%", minHeight: 0, overflowY: "auto" }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase" }}>
-                          Sample Cell — {deptLabel(selectedArea.departmentKey)}
-                        </div>
-                        {!selectedArea.sampleCell ? (
-                          <button
-                            type="button"
-                            onClick={() => createSampleCellForArea(selectedArea.id)}
-                            style={{ padding: "10px 0", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 700 }}
-                          >
-                            + Create Sample Cell
-                          </button>
-                        ) : (
-                          <>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase" }}>Appearance</div>
-                            <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                              <span style={{ fontSize: 11, color: "#64748b" }}>Fill color</span>
-                              <input type="color" value={cs.backgroundColor ?? "#ffffff"}
-                                onChange={e => updateCardStyle(selectedArea.id, { backgroundColor: e.target.value })}
-                                style={{ width: "100%", height: 28, cursor: "pointer", border: "1px solid #475569", borderRadius: 4 }} />
-                            </label>
-                            <div style={{ display: "flex", gap: 6 }}>
-                              <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
-                                <span style={{ fontSize: 11, color: "#64748b" }}>Border width</span>
-                                <input type="number" min={0} max={20} value={cs.borderWidth ?? 0}
-                                  onChange={e => updateCardStyle(selectedArea.id, { borderWidth: parseInt(e.target.value) || 0 })}
-                                  style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }} />
-                              </label>
-                              <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
-                                <span style={{ fontSize: 11, color: "#64748b" }}>Corner radius</span>
-                                <input type="number" min={0} max={100} value={cs.borderRadius ?? 0}
-                                  onChange={e => updateCardStyle(selectedArea.id, { borderRadius: parseInt(e.target.value) || 0 })}
-                                  style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }} />
-                              </label>
-                            </div>
-                            <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                              <span style={{ fontSize: 11, color: "#64748b" }}>Border color</span>
-                              <input type="color" value={cs.borderColor ?? "#cbd5e1"}
-                                onChange={e => updateCardStyle(selectedArea.id, { borderColor: e.target.value })}
-                                style={{ width: "100%", height: 28, cursor: "pointer", border: "1px solid #475569", borderRadius: 4 }} />
-                            </label>
-                            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#cbd5e1", cursor: "pointer" }}>
-                              <input type="checkbox" checked={!!cs.hasShadow}
-                                onChange={e => updateCardStyle(selectedArea.id, { hasShadow: e.target.checked })} />
-                              Drop shadow
-                            </label>
-                            <button type="button" onClick={() => clearSampleCell(selectedArea.id)}
-                              style={{ padding: "6px 0", background: "rgba(220,38,38,0.12)", color: "#fca5a5", border: "1px solid #dc2626", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>
-                              Remove sample cell
-                            </button>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", marginTop: 4 }}>
-                              Product grid
-                            </div>
-                            <p style={{ fontSize: 10, color: "#64748b", margin: 0, lineHeight: 1.45 }}>
-                              Same layout as flyer automation — {DEFAULT_COLS} products per row baseline. Adjust rows to fit your department size.
-                            </p>
-                            {(() => {
-                              const rows = selectedArea.rows ?? DEFAULT_ROWS;
-                              const slotCount = automationGridCardsForArea(selectedArea).cards.length;
-                              return (
-                                <>
-                                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                    <span style={{ fontSize: 11, color: "#64748b", flex: 1 }}>Rows</span>
-                                    <button type="button" disabled={rows <= 1}
-                                      onClick={() => updateAreaRows(selectedArea.id, rows - 1)}
-                                      style={{ width: 28, height: 28, borderRadius: 6, border: "1px solid #475569", background: "#0f172a", color: "#e2e8f0", cursor: rows <= 1 ? "not-allowed" : "pointer", fontSize: 16, fontWeight: 700 }}>
-                                      −
-                                    </button>
-                                    <span style={{ fontSize: 13, color: "#f8fafc", fontWeight: 700, minWidth: 24, textAlign: "center" }}>{rows}</span>
-                                    <button type="button" disabled={rows >= 20}
-                                      onClick={() => updateAreaRows(selectedArea.id, rows + 1)}
-                                      style={{ width: 28, height: 28, borderRadius: 6, border: "1px solid #475569", background: "#0f172a", color: "#e2e8f0", cursor: rows >= 20 ? "not-allowed" : "pointer", fontSize: 16, fontWeight: 700 }}>
-                                      +
-                                    </button>
-                                  </div>
-                                  <p style={{ fontSize: 10, color: "#94a3b8", margin: 0 }}>
-                                    {slotCount} product slots ({rows} rows × {DEFAULT_COLS} cols)
-                                  </p>
-                                  <button
-                                    type="button"
-                                    disabled={regenerating}
-                                    onClick={() => void toggleGridPreview()}
-                                    style={{
-                                      padding: "8px 0",
-                                      background: gridPreviewActive ? "#334155" : "#7c3aed",
-                                      color: "#fff",
-                                      border: "none",
-                                      borderRadius: 6,
-                                      cursor: regenerating ? "wait" : "pointer",
-                                      fontSize: 13,
-                                      fontWeight: 700,
-                                    }}
-                                  >
-                                    {regenerating ? "Loading preview…" : gridPreviewActive ? "Exit Grid Preview" : "Preview Product Grid"}
-                                  </button>
-                                </>
-                              );
-                            })()}
-                          </>
-                        )}
-                      </div>
-                    );
-                  })()}
                   <div style={{ padding: "12px", borderTop: "1px solid #334155", display: "flex", flexDirection: "column", gap: 8 }}>
-                    <button onClick={() => { setGridPreviewActive(false); setStep("regions"); }} style={{ padding: "6px 0", background: "#334155", color: "#cbd5e1", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>
-                      ← Back
+                    <button onClick={() => goToStep("regions")} style={{ padding: "6px 0", background: "#334155", color: "#cbd5e1", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>
+                      ← Back to Regions
                     </button>
+                    <p style={{ fontSize: 10, color: "#64748b", margin: 0, lineHeight: 1.4, textAlign: "center" }}>
+                      Style cells on every page before continuing. Step 3 opens on page 1.
+                    </p>
                     <button
-                      onClick={() => { setGridPreviewActive(false); setSelectedAreaId(null); setStep("components"); }}
+                      onClick={() => goToStep("components")}
                       disabled={!page.areas.some(a => a.sampleCell && a.cardStyle)}
                       style={{ padding: "8px 0", background: page.areas.some(a => a.sampleCell && a.cardStyle) ? "#3b82f6" : "#334155", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 14, cursor: page.areas.some(a => a.sampleCell && a.cardStyle) ? "pointer" : "not-allowed" }}
                     >
@@ -1555,19 +2390,12 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
               {/* Step 3 — Editable fields */}
               {step === "components" && (
                 <>
-                  <div style={{ padding: "12px 14px", borderBottom: "1px solid #334155", display: "flex", flexDirection: "column", gap: 8 }}>
-                    <button onClick={addBox} style={{ width: "100%", padding: "8px 0", background: "#22c55e", color: "#fff", border: "none", borderRadius: 6, fontWeight: 600, cursor: "pointer", fontSize: 13 }}>
-                      + Add Editable Field
-                    </button>
-                    <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#cbd5e1", cursor: "pointer" }}>
-                      <input type="checkbox" checked={outlineOnly} onChange={e => setOutlineOnly(e.target.checked)} />
-                      Outline-only mode (align against flyer)
-                    </label>
-                    <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.4 }}>
-                      Add editable fields (valid dates, promo lines) and position them on the canvas.
-                    </div>
+                  <div style={{ padding: "10px 12px", borderBottom: "1px solid #334155" }}>
+                    <p style={{ fontSize: 10, color: "#64748b", margin: 0, lineHeight: 1.45 }}>
+                      Select a field to edit. Tools are in the floating panel on the canvas.
+                    </p>
                   </div>
-                  <div style={{ flex: "1 1 35%", minHeight: 120, overflowY: "auto", padding: "10px 14px", display: "flex", flexDirection: "column", gap: 6, borderBottom: selectedBox ? "1px solid #334155" : undefined }}>
+                  <div className="ufm-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "10px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
                     <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                       Editable Fields ({editableBoxes.length})
                     </div>
@@ -1579,7 +2407,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                     {editableBoxes.map(box => (
                       <div
                         key={box.id}
-                        onClick={() => setSelectedBoxId(box.id)}
+                        onClick={() => { setSelectedBoxId(box.id); setFontMatchMessage(null); setColorPickerMode(null); }}
                         style={{
                           padding: "8px 10px", borderRadius: 6, cursor: "pointer",
                           background: box.id === selectedBoxId ? "#334155" : "#0f172a",
@@ -1587,82 +2415,17 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                         }}
                       >
                         <div style={{ fontSize: 13, color: "#e2e8f0", fontWeight: 600 }}>{box.label}</div>
-                        <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2, lineHeight: 1.35, maxHeight: 36, overflow: "hidden" }}>
-                          {(box.content ?? "").slice(0, 80)}{(box.content ?? "").length > 80 ? "…" : ""}
+                        <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2, lineHeight: 1.35, maxHeight: 36, overflow: "hidden", whiteSpace: "pre-wrap" }}>
+                          {resolveEditableBoxContent(box, wizardDynamicPreviewCtx).slice(0, 80)}
+                          {(box.content ?? "").length > 80 ? "…" : ""}
                         </div>
                         {box.isEditable && <span style={{ fontSize: 10, color: "#f59e0b", marginTop: 4, display: "inline-block" }}>{box.fieldKind ?? "custom"}</span>}
                       </div>
                     ))}
                   </div>
-                  {selectedBox && (
-                    <div style={{ flex: "1 1 45%", minHeight: 0, overflowY: "auto", padding: "14px", display: "flex", flexDirection: "column", gap: 10 }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase" }}>Edit Field</div>
-                      <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        <span style={{ fontSize: 11, color: "#64748b" }}>Label</span>
-                        <input value={selectedBox.label} onChange={e => updateBox(selectedBox.id, { label: e.target.value })}
-                          style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 13 }} />
-                      </label>
-                      <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        <span style={{ fontSize: 11, color: "#64748b" }}>Content</span>
-                        <textarea value={selectedBox.content ?? ""} onChange={e => updateBox(selectedBox.id, { content: e.target.value })}
-                          rows={3} style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 13, resize: "vertical", lineHeight: 1.35 }} />
-                      </label>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
-                          <span style={{ fontSize: 11, color: "#64748b" }}>Font px</span>
-                          <input type="number" min={8} max={200} value={selectedBox.fontSize ?? 24}
-                            onChange={e => updateBox(selectedBox.id, { fontSize: parseInt(e.target.value) || 24 })}
-                            style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 13 }} />
-                        </label>
-                        <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
-                          <span style={{ fontSize: 11, color: "#64748b" }}>Text align</span>
-                          <select value={selectedBox.textAlign ?? "left"} onChange={e => updateBox(selectedBox.id, { textAlign: e.target.value as CustomBoxDef["textAlign"] })}
-                            style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 13 }}>
-                            <option value="left">Left</option>
-                            <option value="center">Center</option>
-                            <option value="right">Right</option>
-                          </select>
-                        </label>
-                      </div>
-                      <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        <span style={{ fontSize: 11, color: "#64748b" }}>Vertical align</span>
-                        <select value={selectedBox.textVertical ?? "middle"} onChange={e => updateBox(selectedBox.id, { textVertical: e.target.value as CustomBoxDef["textVertical"] })}
-                          style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 13 }}>
-                          <option value="top">Top</option>
-                          <option value="middle">Middle</option>
-                          <option value="bottom">Bottom</option>
-                        </select>
-                      </label>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
-                          <span style={{ fontSize: 11, color: "#64748b" }}>BG color</span>
-                          <input type="color" value={selectedBox.color === "transparent" ? "#ffffff" : selectedBox.color}
-                            onChange={e => updateBox(selectedBox.id, { color: e.target.value })}
-                            style={{ width: "100%", height: 32, cursor: "pointer", border: "1px solid #475569", borderRadius: 4 }} />
-                        </label>
-                        <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
-                          <span style={{ fontSize: 11, color: "#64748b" }}>Text color</span>
-                          <input type="color" value={selectedBox.textColor}
-                            onChange={e => updateBox(selectedBox.id, { textColor: e.target.value })}
-                            style={{ width: "100%", height: 32, cursor: "pointer", border: "1px solid #475569", borderRadius: 4 }} />
-                        </label>
-                      </div>
-                      <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        <span style={{ fontSize: 11, color: "#64748b" }}>Field Kind</span>
-                        <select value={selectedBox.fieldKind ?? "date_range"} onChange={e => updateBox(selectedBox.id, { fieldKind: e.target.value as BoxDraft["fieldKind"] })}
-                          style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 13 }}>
-                          {EDITABLE_FIELD_KINDS.map(k => <option key={k} value={k}>{k}</option>)}
-                        </select>
-                      </label>
-                      <button onClick={() => deleteBox(selectedBox.id)}
-                        style={{ padding: "7px 0", background: "rgba(220,38,38,0.15)", color: "#fca5a5", border: "1px solid #dc2626", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>
-                        Delete Field
-                      </button>
-                    </div>
-                  )}
                   <div style={{ padding: "12px 14px", borderTop: "1px solid #334155", display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}>
-                    <button onClick={() => setStep("cellStyle")} style={{ padding: "7px 0", background: "#334155", color: "#cbd5e1", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>
-                      ← Back
+                    <button onClick={() => goToStep("cellStyle")} style={{ padding: "7px 0", background: "#334155", color: "#cbd5e1", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>
+                      ← Back to Cell Style
                     </button>
                     <button
                       onClick={async () => {

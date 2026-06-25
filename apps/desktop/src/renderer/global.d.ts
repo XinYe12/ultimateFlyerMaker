@@ -164,6 +164,8 @@ declare global {
       testGemini: () => Promise<{ apiKeyPresent: boolean; vision: { ok: boolean; status?: number; body?: string; error?: string } | null; embed: { ok: boolean; status?: number; body?: string; error?: string } | null; error?: string }>;
 
       searchDatabaseByText: (query: string, limit?: number) => Promise<DbSearchResult[]>;
+      searchDatabaseByImage: (imagePath: string) => Promise<DbSearchResult[]>;
+      updateProductTitle: (id: string, englishTitle: string) => Promise<void>;
       downloadAndIngestFromUrl: (jobIdOrUrl: string, publicUrl?: string) => Promise<{ path: string; result: IngestResult }>;
       cancelReplacementJob: (jobId: string) => Promise<void>;
       googleImageSearch: (query: string) => Promise<GoogleSearchResult[]>;
@@ -261,6 +263,7 @@ declare global {
       showConfirmDialog: (opts: { message: string; detail?: string; confirmLabel?: string; cancelLabel?: string }) => Promise<boolean>;
 
       onCanvasZoom: (cb: (data: { delta?: number; reset?: boolean }) => void) => () => void;
+      setWindowZoom: (factor: number) => Promise<void>;
 
       getStartupTiming: () => Promise<{
         totalMs: number;
@@ -286,16 +289,23 @@ declare global {
         topDomains: Array<{ domain: string; acceptRate: number; total: number }>;
       } | null>;
 
+      guessFontFromCrop: (payload: { cropDataUrl: string }) => Promise<{
+        fontFamily: string;
+        label: string;
+        confidence: number;
+        source: string;
+      } | null>;
+
       probeTemplateImages: (imagePaths: string[]) => Promise<Array<{ path: string; width: number; height: number }>>;
       loadTemplateFromImages: (payload: {
         pages: Array<{ path: string; canvasWidth: number; canvasHeight: number; backgroundColor: string }>;
       }) => Promise<import("./editor/loadFlyerTemplateConfig").CustomFlyerTemplateConfig>;
       regenerateUnderprint: (payload: {
-        sourceImagePath: string;
+        sourcePath: string;
         outputPath: string;
         canvasWidth: number;
         canvasHeight: number;
-        areas: Array<{ x: number; y: number; w: number; h: number }>;
+        departmentAreas: import("./editor/loadFlyerTemplateConfig").DepartmentAreaDef[];
       }) => Promise<string>;
       persistTemplateAssets: (templateId: string, pages: unknown[]) => Promise<{ ok: boolean }>;
     };

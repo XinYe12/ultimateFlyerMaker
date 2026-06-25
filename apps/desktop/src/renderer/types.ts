@@ -317,6 +317,9 @@ export type FlyerJob = {
   /** Card layouts for card-based departments (departmentId → cards) */
   cardLayouts?: Record<string, CardLayout>;
 
+  /** User-set row counts per department (persisted so they survive reload) */
+  userRowCounts?: Record<string, number>;
+
   /** ISO date string (yyyy-MM-dd) of the Friday that starts this flyer's Fri–Thu cycle */
   flyerWeekStart?: string;
 };

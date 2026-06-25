@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { DbSearchResult } from "../global.d";
 
 type Props = {
@@ -23,6 +23,10 @@ export default function DbSearchModal({
   const [results, setResults] = useState<DbSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchedOnce, setSearchedOnce] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const editInputRef = useRef<HTMLInputElement>(null);
   const hasMultiFlavors = Array.isArray(cutoutPaths) && cutoutPaths.length > 1;
   const [selectedFlavorIdx, setSelectedFlavorIdx] = useState<number | null>(
     hasMultiFlavors ? 0 : null,
@@ -30,11 +34,37 @@ export default function DbSearchModal({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        if (editingId) { setEditingId(null); return; }
+        onClose();
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [onClose, editingId]);
+
+  const startEditing = (r: DbSearchResult) => {
+    setEditingId(r.id);
+    setEditingName(r.englishTitle || r.chineseTitle || "");
+    setTimeout(() => editInputRef.current?.select(), 0);
+  };
+
+  const commitEdit = async (id: string) => {
+    const name = editingName.trim();
+    setEditingId(null);
+    if (!name) return;
+    const current = results.find(r => r.id === id);
+    if (current && (current.englishTitle || current.chineseTitle || "") === name) return;
+    setSavingId(id);
+    try {
+      await window.ufm.updateProductTitle(id, name);
+      setResults(prev => prev.map(r => r.id === id ? { ...r, englishTitle: name } : r));
+    } catch (err) {
+      console.error("Failed to update product title:", err);
+    } finally {
+      setSavingId(null);
+    }
+  };
 
   const handleSearch = async () => {
     const query = searchQuery.trim();
@@ -51,6 +81,20 @@ export default function DbSearchModal({
       console.error("Database search failed:", err);
       onClose();
       alert("Search failed: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleImageSearch = async (imagePath: string) => {
+    setLoading(true);
+    try {
+      const res = await window.ufm.searchDatabaseByImage(imagePath);
+      setResults(res ?? []);
+      setSearchedOnce(true);
+    } catch (err) {
+      console.error("Image search failed:", err);
+      alert("Image search failed: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setLoading(false);
     }
@@ -169,7 +213,7 @@ export default function DbSearchModal({
               <p style={{ color: "#666", marginBottom: 12 }}>
                 Enter or edit the product name, then click Search.
               </p>
-              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
                 <input
                   type="text"
                   value={searchQuery}
@@ -200,6 +244,28 @@ export default function DbSearchModal({
                   Search
                 </button>
               </div>
+              <div style={{ margin: "10px 0 8px", textAlign: "center", color: "#bbb", fontSize: 12 }}>— or —</div>
+              <div
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const file = e.dataTransfer.files[0] as (File & { path?: string }) | undefined;
+                  if (file?.path) handleImageSearch(file.path);
+                }}
+                style={{
+                  border: "2px dashed #ddd",
+                  borderRadius: 8,
+                  padding: "18px 12px",
+                  textAlign: "center",
+                  color: "#aaa",
+                  fontSize: 13,
+                  background: "#fafafa",
+                  marginBottom: 16,
+                  userSelect: "none",
+                }}
+              >
+                Drop a product image here to search visually
+              </div>
             </>
           ) : (
             <>
@@ -219,46 +285,69 @@ export default function DbSearchModal({
                 ← Change search
               </button>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
-                {results.map((r) => (
-                  <button
-                    key={r.id}
-                    type="button"
-                    onClick={() => r.publicUrl && handleSelect(r.publicUrl)}
-                    disabled={!r.publicUrl}
-                    style={{
-                      padding: 0,
-                      border: "2px solid #ddd",
-                      borderRadius: 8,
-                      overflow: "hidden",
-                      background: "#fff",
-                      cursor: r.publicUrl ? "pointer" : "not-allowed",
-                    }}
-                  >
-                    {r.publicUrl ? (
-                      <img
-                        src={r.publicUrl}
-                        alt={r.englishTitle ?? r.chineseTitle ?? r.id}
-                        style={{ width: "100%", height: 140, objectFit: "contain", display: "block" }}
-                      />
-                    ) : (
+                {results.map((r) => {
+                  const isEditing = editingId === r.id;
+                  const isSaving = savingId === r.id;
+                  const displayName = r.englishTitle || r.chineseTitle || r.id;
+                  return (
+                    <div
+                      key={r.id}
+                      style={{
+                        border: "2px solid #ddd",
+                        borderRadius: 8,
+                        overflow: "hidden",
+                        background: "#fff",
+                      }}
+                    >
+                      {/* Image — click to select */}
                       <div
-                        style={{
-                          width: "100%",
-                          height: 140,
-                          background: "#f0f0f0",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                        }}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => r.publicUrl && !isEditing && handleSelect(r.publicUrl)}
+                        onKeyDown={(e) => e.key === "Enter" && r.publicUrl && !isEditing && handleSelect(r.publicUrl)}
+                        style={{ cursor: r.publicUrl && !isEditing ? "pointer" : "default" }}
                       >
-                        No image
+                        {r.publicUrl ? (
+                          <img
+                            src={r.publicUrl}
+                            alt={displayName}
+                            style={{ width: "100%", height: 140, objectFit: "contain", display: "block" }}
+                          />
+                        ) : (
+                          <div style={{ width: "100%", height: 140, background: "#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center", color: "#aaa", fontSize: 12 }}>
+                            No image
+                          </div>
+                        )}
                       </div>
-                    )}
-                    <div style={{ padding: 8, fontSize: 12, textAlign: "left", color: "#333" }}>
-                      {r.englishTitle || r.chineseTitle || r.id}
+                      {/* Name — click to edit */}
+                      <div style={{ padding: "6px 8px", borderTop: "1px solid #f0f0f0" }}>
+                        {isEditing ? (
+                          <input
+                            ref={editInputRef}
+                            value={editingName}
+                            onChange={(e) => setEditingName(e.target.value)}
+                            onBlur={() => commitEdit(r.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") { e.preventDefault(); commitEdit(r.id); }
+                              if (e.key === "Escape") { e.stopPropagation(); setEditingId(null); }
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ width: "100%", fontSize: 12, border: "1px solid #228BE6", borderRadius: 4, padding: "2px 4px", outline: "none", boxSizing: "border-box" }}
+                          />
+                        ) : (
+                          <div
+                            title="Click to edit name"
+                            onClick={(e) => { e.stopPropagation(); startEditing(r); }}
+                            style={{ fontSize: 12, color: isSaving ? "#999" : "#333", cursor: "text", minHeight: 18, display: "flex", alignItems: "center", gap: 4 }}
+                          >
+                            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{isSaving ? "Saving…" : displayName}</span>
+                            {!isSaving && <span style={{ color: "#bbb", fontSize: 10, flexShrink: 0 }}>✎</span>}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </button>
-                ))}
+                  );
+                })}
               </div>
             </>
           )}

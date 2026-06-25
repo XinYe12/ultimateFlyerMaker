@@ -19,7 +19,7 @@ import { parseDiscountXlsx, parseAllDepartmentsXlsx } from "./ipc/parseDiscountX
 import { exportExampleXlsx } from "./ipc/exportExampleXlsx.js";
 import { ingestImages } from "./ipc/ingestImages.js";
 import { getJobProcessor } from "./jobs/JobProcessor.js";
-import { searchForDiscountItem } from "./ingestion/searchService.js";
+import { searchForDiscountItem, searchByImage, updateProductTitle } from "./ingestion/searchService.js";
 import { braveImageSearchByQuery } from "./ingestion/braveSearchService.js";
 import { googleImageSearch, googleKeysPresent } from "./ingestion/googleImageSearchService.js";
 import os from "os";
@@ -40,6 +40,7 @@ import { promoteSerperResults } from "./ingestion/promoteSerperResults.js";
 import { initSerperScorer, shutdownSerperScorer } from "./ingestion/serperScorer.js";
 import { recordSerperRejection, recordManualGoogleAccepted } from "./ingestion/serperSignalService.js";
 import { getSerperLearningStats } from "./ipc/getSerperLearningStats.js";
+import { guessFontFromCrop } from "./ipc/guessFontFromCrop.js";
 import { testGeminiConnection } from "./ingestion/imageEmbeddingService.js";
 import { loadTemplateFromImages, probeTemplateImages } from "./ipc/loadTemplateFromImages.js";
 import { regenerateUnderprint, persistTemplateAssets } from "./ipc/generateUnderprint.js";
@@ -733,6 +734,20 @@ ipcMain.handle("ufm:searchDatabaseByText", async (_, query, limit = 6) => {
   }
 });
 
+ipcMain.handle("ufm:searchDatabaseByImage", async (_, imagePath) => {
+  try {
+    if (!imagePath) return [];
+    return await searchByImage(String(imagePath).trim());
+  } catch (err) {
+    console.error("[searchDatabaseByImage] error:", err);
+    return [];
+  }
+});
+
+ipcMain.handle("ufm:updateProductTitle", async (_, id, englishTitle) => {
+  await updateProductTitle(id, englishTitle);
+});
+
 /* ---------- IPC: image search (Google CSE preferred, Brave fallback) ---------- */
 ipcMain.handle("ufm:googleImageSearch", async (_, query) => {
   try {
@@ -897,6 +912,11 @@ ipcMain.handle("ufm:testFirestore", async () => {
 
 ipcMain.handle("ufm:testGemini", async () => {
   return testGeminiConnection();
+});
+
+/* ---------- IPC: window zoom (non-editor views) ---------- */
+ipcMain.handle("ufm:setWindowZoom", (_, factor) => {
+  mainWindow.webContents.setZoomFactor(Math.min(3.0, Math.max(0.3, factor)));
 });
 
 /* ---------- IPC: confirm dialog ---------- */
@@ -1180,6 +1200,15 @@ ipcMain.handle("ufm:getSerperLearningStats", async () => {
     return await getSerperLearningStats();
   } catch (err) {
     console.warn("[getSerperLearningStats] Failed:", err.message);
+    return null;
+  }
+});
+
+ipcMain.handle("ufm:guessFontFromCrop", async (_, payload) => {
+  try {
+    return await guessFontFromCrop(payload);
+  } catch (err) {
+    console.warn("[guessFontFromCrop] Failed:", err.message);
     return null;
   }
 });

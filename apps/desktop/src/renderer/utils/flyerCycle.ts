@@ -2,6 +2,57 @@
 // Rule: before Thursday (Mon/Tue/Wed) → current cycle (last Friday).
 //       Thursday or after → next cycle (next Friday).
 
+function formatShortDate(date: Date): string {
+  const month = date.toLocaleDateString("en-US", { month: "short" });
+  return `${month} ${date.getDate()}`;
+}
+
+export type ValidDatePart = "weekday" | "long" | "short" | "year";
+
+/** Friday through Thursday of the flyer validity cycle. */
+export function getValidCycleRange(cycleStartFriday: Date): { start: Date; end: Date } {
+  const start = new Date(cycleStartFriday);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return { start, end };
+}
+
+export function formatFlyerDatePart(date: Date, part: ValidDatePart): string {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  switch (part) {
+    case "weekday":
+      return d.toLocaleDateString("en-US", { weekday: "long" });
+    case "long":
+      return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+    case "short":
+      return formatShortDate(d);
+    case "year":
+      return String(d.getFullYear());
+  }
+}
+
+/** Friday that starts the flyer cycle shown in the job queue "Week Cycle" header. */
+export function getDisplayCycleStartFriday(fromDate: Date = new Date()): Date {
+  const today = new Date(fromDate);
+  const currentDay = today.getDay();
+  let daysUntilFriday = (5 - currentDay + 7) % 7;
+  if (daysUntilFriday === 0 && today.getHours() >= 12) {
+    daysUntilFriday = 7;
+  }
+  const nextFriday = new Date(today);
+  nextFriday.setDate(today.getDate() + daysUntilFriday);
+  nextFriday.setHours(0, 0, 0, 0);
+  return nextFriday;
+}
+
+/** Full flyer validity range, e.g. "Jun 26 - Jul 2" (Friday through Thursday). */
+export function formatFlyerCycleRange(cycleStartFriday: Date): string {
+  const { start, end } = getValidCycleRange(cycleStartFriday);
+  return `${formatShortDate(start)} - ${formatShortDate(end)}`;
+}
+
 export function getCycleStartFriday(fromDate: Date = new Date()): Date {
   const dow = fromDate.getDay(); // 0=Sun,1=Mon,...,6=Sat
   const d = new Date(fromDate);

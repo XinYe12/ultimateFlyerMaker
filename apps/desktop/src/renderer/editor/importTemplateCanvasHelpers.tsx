@@ -1,5 +1,6 @@
 import React from "react";
 import { CustomBoxDef, DepartmentAreaDef, RegionStyleDef } from "./loadFlyerTemplateConfig";
+import { DynamicDataContext, resolveEditableBoxContent } from "./dynamicData";
 
 export type TextDragState = {
   boxId: string;
@@ -32,13 +33,25 @@ export function renderImportBoxOverlay(
   scale: number,
   isSelected: boolean,
   outlineOnly: boolean,
-  onTextDragStart?: (e: React.MouseEvent, box: CustomBoxDef) => void
+  onTextDragStart?: (e: React.MouseEvent, box: CustomBoxDef) => void,
+  dynamicCtx?: DynamicDataContext
 ) {
-  const textContent = box.content?.trim() ? box.content : (box.label ?? "");
-  const fillOpacity = outlineOnly ? (isSelected ? "22" : "00") : isSelected ? "44" : "22";
+  const textContent = box.isEditable && dynamicCtx
+    ? resolveEditableBoxContent(box, dynamicCtx, { keepUnresolved: true })
+    : (box.content?.trim() ? box.content : (box.label ?? ""));
+  const useSolidEditableFill = box.isEditable && !outlineOnly && box.color !== "transparent";
+  const fillOpacity = useSolidEditableFill
+    ? ""
+    : outlineOnly
+      ? (isSelected ? "22" : "00")
+      : isSelected
+        ? "44"
+        : "22";
   const bgColor = box.boxType === "image"
     ? "rgba(148,163,184,0.25)"
-    : `${box.color}${fillOpacity}`;
+    : useSolidEditableFill
+      ? box.color
+      : `${box.color}${fillOpacity}`;
 
   const isVerticalLabel = box.width < box.height * 0.45 && box.height > 40;
   const innerStyle: React.CSSProperties = {
@@ -64,6 +77,7 @@ export function renderImportBoxOverlay(
         style={{
           position: "absolute", inset: 0,
           background: bgColor,
+          opacity: isSelected ? 0.5 : 1,
           borderRadius: (box.borderRadius ?? 0) * scale,
           pointerEvents: "none",
         }}
@@ -93,11 +107,6 @@ export function renderImportBoxOverlay(
           onMouseDown={isSelected && onTextDragStart ? (e) => onTextDragStart(e, box) : undefined}
         >
           <div style={innerStyle}>{textContent}</div>
-        </div>
-      )}
-      {box.isEditable && (
-        <div style={{ position: "absolute", top: 2, right: 2, fontSize: 8, background: "#f59e0b", color: "#fff", padding: "1px 4px", borderRadius: 3, pointerEvents: "none" }}>
-          {box.fieldKind ?? "field"}
         </div>
       )}
     </>

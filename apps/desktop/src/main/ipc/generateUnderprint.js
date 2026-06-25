@@ -46,7 +46,7 @@ export async function generateUnderprint(sourcePath, outputPath, width, height, 
 
     const rs = area.regionStyle ?? {};
     const cs = area.cardStyle ?? {};
-    const regionBg = safeHex(rs.backgroundColor, safeHex(cs.backgroundColor, "#ffffff"));
+    const regionBg = safeHex(rs.backgroundColor, null); // only explicit region color; null = let source image show through
     const regionRadius = Math.max(0, parseInt(rs.borderRadius ?? 0, 10));
     const cellBg = safeHex(cs.backgroundColor, "#ffffff");
     const borderW = Math.max(0, parseInt(cs.borderWidth ?? 0, 10));
@@ -59,17 +59,20 @@ export async function generateUnderprint(sourcePath, outputPath, width, height, 
       defs.push(`<clipPath id="${clipId}"><rect x="${pr.x}" y="${pr.y}" width="${pr.width}" height="${pr.height}" rx="${clipRx}"/></clipPath>`);
     }
 
-    // Department background (not clipped — defines the visible region)
-    shapes.push(rectSvg({
-      x: pr.x,
-      y: pr.y,
-      width: pr.width,
-      height: pr.height,
-      fill: regionBg,
-      stroke: null,
-      strokeWidth: 0,
-      radius: regionRadius,
-    }));
+    // Only draw a region background if explicitly configured — otherwise let the
+    // source image show through the gaps between cells so each cell appears independent.
+    if (regionBg) {
+      shapes.push(rectSvg({
+        x: pr.x,
+        y: pr.y,
+        width: pr.width,
+        height: pr.height,
+        fill: regionBg,
+        stroke: null,
+        strokeWidth: 0,
+        radius: regionRadius,
+      }));
+    }
 
     const cells = automationCellRectsForArea(area);
     const cellShapes = [];

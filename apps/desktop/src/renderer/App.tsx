@@ -32,7 +32,8 @@ import JobQueueView from "./jobs/JobQueueView";
 import DbUploadView from "./db-upload/DbUploadView";
 import TemplateSelectView from "./editor/TemplateSelectView";
 import ImportTemplateFromImagesDialog from "./editor/ImportTemplateFromImagesDialog";
-import { saveCustomTemplate, saveCustomTemplateWithAssets } from "./editor/customTemplateStorage";
+import { saveCustomTemplate, saveCustomTemplateWithAssets, upgradeTemplateUnderprintsIfNeeded } from "./editor/customTemplateStorage";
+import { captureSnapshot, applySnapshotToQueue, EditorSnapshot } from "./editor/editorHistory";
 import { reconcileCardLayoutForDepartment, defaultRowsForDepartment } from "./editor/templateDepartmentLayout";
 import { applyTextStylePatch, type TextFieldSection } from "./editor/textFieldStyle";
 import SettingsView from "./settings/SettingsView";
@@ -151,6 +152,7 @@ export default function App() {
   const [flyerExported, setFlyerExported] = useState(false);
   const [canvasZoom, setCanvasZoom] = useState(1.0);
   const windowZoomRef = useRef(1.0);
+  const [canvasKey, setCanvasKey] = useState(0);
   const [departmentSaves, setDepartmentSaves] = useState<DeptSaveEntry[]>([]);
   const [showRecoveryOverlay, setShowRecoveryOverlay] = useState(false);
 
@@ -232,14 +234,14 @@ export default function App() {
     return () => { unsubOk(); unsubErr(); };
   }, []);
 
-  // Ctrl+/-/0 zoom: canvas-only in editor; CSS root zoom everywhere else.
-  // Switching into the editor clears CSS zoom so only the canvas scales.
-  // Switching out of the editor restores the last CSS zoom level.
+  // Ctrl+/-/0 zoom: canvas-only in editor and template wizard; setZoomFactor elsewhere.
+  // Entering the editor or wizard resets window zoom to 1.0 so toolbar/sidebar stay normal.
+  // Leaving those views restores the previous window zoom level.
   useEffect(() => {
-    if (view === "editor") {
-      document.documentElement.style.zoom = "";
+    if (view === "editor" || view === "importTemplate") {
+      window.ufm.setWindowZoom(1.0);
     } else {
-      document.documentElement.style.zoom = windowZoomRef.current === 1.0 ? "" : String(windowZoomRef.current);
+      if (windowZoomRef.current !== 1.0) window.ufm.setWindowZoom(windowZoomRef.current);
     }
   }, [view]);
 
@@ -250,10 +252,10 @@ export default function App() {
           if (reset) return 1.0;
           return Math.min(3.0, Math.max(0.3, Math.round((prev + (delta ?? 0)) * 10) / 10));
         });
-      } else {
+      } else if (view !== "importTemplate") {
         const next = reset ? 1.0 : Math.min(3.0, Math.max(0.3, Math.round((windowZoomRef.current + (delta ?? 0)) * 10) / 10));
         windowZoomRef.current = next;
-        document.documentElement.style.zoom = next === 1.0 ? "" : String(next);
+        window.ufm.setWindowZoom(next);
       }
     });
     return unsub;
@@ -491,7 +493,8 @@ export default function App() {
   useEffect(() => {
     setTemplateConfig(null);
     templateConfigRef.current = null;
-    loadFlyerTemplateConfig(templateId).then(config => {
+
+    const applyConfig = (config: FlyerTemplateConfig) => {
       templateConfigRef.current = config;
       setTemplateConfig(config);
       const depts = new Set<string>();
@@ -502,6 +505,20 @@ export default function App() {
       setAvailableDepartments(deptList);
       if (!depts.has(department)) {
         setDepartment(deptList[0] ?? "grocery");
+      }
+    };
+
+    loadFlyerTemplateConfig(templateId).then(async config => {
+      applyConfig(config);
+      // For custom (imported) templates, re-generate underprinst if the generation
+      // algorithm changed (schema version bump). This runs once per template upgrade.
+      if (templateId.startsWith("imported_")) {
+        const upgraded = await upgradeTemplateUnderprintsIfNeeded(templateId);
+        if (upgraded) {
+          // Reload with fresh underprint paths and remount EditorCanvas to bust image cache.
+          loadFlyerTemplateConfig(templateId).then(applyConfig);
+          setCanvasKey(k => k + 1);
+        }
       }
     });
   }, [templateId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -554,24 +571,123 @@ export default function App() {
     });
   }, [userRowCounts]);
 
-  // Card layout undo history (per department, state-based for re-render)
-  const [cardLayoutHistory, setCardLayoutHistory] = useState<Record<string, CardLayout[]>>({});
+  // ── Editor history (undo / redo) ──
+  const MAX_HISTORY = 50;
+  const [historyPast,   setHistoryPast]   = useState<EditorSnapshot[]>([]);
+  const [historyFuture, setHistoryFuture] = useState<EditorSnapshot[]>([]);
+  /** Last committed snapshot — the "before" for the next debounce push */
+  const historyPresentRef = useRef<EditorSnapshot | null>(null);
+  const debounceTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** True while undo/redo is being applied — suppresses the debounced snapshot */
+  const isRestoringRef = useRef(false);
 
-  // Set card layout for current department (with undo history)
-  const setCurrentCardLayout = useCallback((layout: CardLayout) => {
-    setCardLayouts(prev => {
-      const old = prev[department];
-      if (old) {
-        setCardLayoutHistory(h => {
-          const hist = [...(h[department] ?? []), old];
-          // Keep at most 20 undo steps
-          if (hist.length > 20) hist.shift();
-          return { ...h, [department]: hist };
-        });
+  // Reset history when a new job is opened
+  useEffect(() => {
+    if (view !== "editor" || !viewingJob) return;
+    setHistoryPast([]);
+    setHistoryFuture([]);
+    historyPresentRef.current = null;
+    isRestoringRef.current = false;
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+  }, [viewingJob?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Debounced snapshot: 350 ms after the last change settles, push the previous
+  // stable state to historyPast so the user can undo back to it.
+  useEffect(() => {
+    if (view !== "editor" || !viewingJob) return;
+    if (isRestoringRef.current) return;
+
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      if (isRestoringRef.current) return;
+      const current = captureSnapshot(cardLayouts, slotOverrides, userRowCounts, editorQueue);
+      if (!historyPresentRef.current) {
+        // First settle after job open — just record the baseline, don't push to past
+        historyPresentRef.current = current;
+        return;
       }
-      return { ...prev, [department]: layout };
-    });
-  }, [department]);
+      setHistoryPast(prev => {
+        const next = [...prev, historyPresentRef.current!];
+        return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
+      });
+      setHistoryFuture([]);
+      historyPresentRef.current = current;
+    }, 350);
+
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, [cardLayouts, slotOverrides, userRowCounts, editorQueue]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const undo = useCallback(() => {
+    if (historyPast.length === 0) return;
+    const target = historyPast[historyPast.length - 1];
+    const current = captureSnapshot(cardLayouts, slotOverrides, userRowCounts, editorQueue);
+
+    isRestoringRef.current = true;
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+
+    setCardLayouts(target.cardLayouts);
+    setSlotOverrides(target.slotOverrides);
+    setUserRowCounts(target.userRowCounts);
+    loadItems(applySnapshotToQueue(target, editorQueue));
+    historyPresentRef.current = target;
+
+    setHistoryPast(p => p.slice(0, -1));
+    setHistoryFuture(f => [current, ...f].slice(0, MAX_HISTORY));
+
+    setTimeout(() => { isRestoringRef.current = false; }, 500);
+  }, [historyPast, cardLayouts, slotOverrides, userRowCounts, editorQueue, loadItems]);
+
+  const redo = useCallback(() => {
+    if (historyFuture.length === 0) return;
+    const target = historyFuture[0];
+    const current = captureSnapshot(cardLayouts, slotOverrides, userRowCounts, editorQueue);
+
+    isRestoringRef.current = true;
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+
+    setCardLayouts(target.cardLayouts);
+    setSlotOverrides(target.slotOverrides);
+    setUserRowCounts(target.userRowCounts);
+    loadItems(applySnapshotToQueue(target, editorQueue));
+    historyPresentRef.current = target;
+
+    setHistoryPast(p => [...p, current].slice(-MAX_HISTORY));
+    setHistoryFuture(f => f.slice(1));
+
+    setTimeout(() => { isRestoringRef.current = false; }, 500);
+  }, [historyFuture, cardLayouts, slotOverrides, userRowCounts, editorQueue, loadItems]);
+
+  const canUndo = historyPast.length > 0;
+  const canRedo = historyFuture.length > 0;
+
+  // Refs so keyboard handler always calls the latest undo/redo without re-registering
+  const undoRef = useRef(undo);
+  undoRef.current = undo;
+  const redoRef = useRef(redo);
+  redoRef.current = redo;
+
+  // Keyboard shortcuts: Ctrl+Z = undo, Ctrl+Shift+Z or Ctrl+Y = redo
+  useEffect(() => {
+    if (view !== "editor") return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isCtrl = e.ctrlKey || e.metaKey;
+      if (!isCtrl) return;
+      // Don't intercept when user is typing in a text field
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
+      if (e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undoRef.current();
+      } else if ((e.key === "z" && e.shiftKey) || e.key === "y") {
+        e.preventDefault();
+        redoRef.current();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [view]);
 
   const handleApplyTextStyleGlobally = useCallback((section: TextFieldSection, patch: Partial<CardDef>) => {
     setCardLayouts(prev => {
@@ -584,18 +700,6 @@ export default function App() {
       return next;
     });
   }, []);
-
-  const undoCardLayout = useCallback(() => {
-    setCardLayoutHistory(h => {
-      const hist = [...(h[department] ?? [])];
-      if (hist.length === 0) return h;
-      const prev = hist.pop()!;
-      setCardLayouts(layouts => ({ ...layouts, [department]: prev }));
-      return { ...h, [department]: hist };
-    });
-  }, [department]);
-
-  const canUndoCardLayout = (cardLayoutHistory[department]?.length ?? 0) > 0;
 
   const handleRowCountChange = useCallback((newRows: number) => {
     if (newRows < 1) return;
@@ -869,7 +973,7 @@ export default function App() {
       lastViewingJobIdRef.current = viewingJob.id;
       editorSyncRunCount.current = 0;
     }
-    syncJobFromEditorItems(viewingJob.id, editorQueue, discountLabels, slotOverrides, cardLayouts, verificationDone, verificationProgress, departmentLocked);
+    syncJobFromEditorItems(viewingJob.id, editorQueue, discountLabels, slotOverrides, cardLayouts, userRowCounts, verificationDone, verificationProgress, departmentLocked);
     editorSyncRunCount.current += 1;
     if (editorSyncRunCount.current > 1) {
       setToastState(prev => {
@@ -877,7 +981,7 @@ export default function App() {
         return { visible: true, message: "Draft saved", variant: "success" };
       });
     }
-  }, [view, viewingJob, editorQueue, discountLabels, slotOverrides, cardLayouts, verificationDone, verificationProgress, departmentLocked, syncJobFromEditorItems]);
+  }, [view, viewingJob, editorQueue, discountLabels, slotOverrides, cardLayouts, userRowCounts, verificationDone, verificationProgress, departmentLocked, syncJobFromEditorItems]);
 
   // Watch for job failures → show error toast
   useEffect(() => {
@@ -957,6 +1061,7 @@ export default function App() {
     setDepartmentLocked(job.result?.departmentLocked ?? false);
 
     setSlotOverrides(job.slotOverrides ?? {});
+    setUserRowCounts(job.userRowCounts ?? {});
     // When templateId is changing, templateConfigRef still holds the old config — using it
     // would produce card slots sized for the wrong template. Skip hydration; restore any
     // saved layout from the job directly, or clear so the "ensure card layout" effect
@@ -1052,6 +1157,7 @@ export default function App() {
     }
 
     setSlotOverrides(job.slotOverrides ?? {});
+    setUserRowCounts(job.userRowCounts ?? {});
     // Same guard as handleViewFlyer: if templateId is changing, templateConfigRef still
     // has the old config. Avoid building a layout from wrong dimensions; let the
     // "ensure card layout" effect rebuild once the new config arrives.
@@ -1921,7 +2027,7 @@ export default function App() {
       // Flush pending editor state to the job before clearing viewingJob, so the
       // effect (which guards on viewingJob) doesn't skip the last unsaved changes.
       if (viewingJob) {
-        syncJobFromEditorItems(viewingJob.id, editorQueue, discountLabels, slotOverrides, cardLayouts, verificationDone, verificationProgress, departmentLocked);
+        syncJobFromEditorItems(viewingJob.id, editorQueue, discountLabels, slotOverrides, cardLayouts, userRowCounts, verificationDone, verificationProgress, departmentLocked);
       }
       setViewingJob(null);
       setToastState(prev => ({ ...prev, visible: false }));
@@ -1939,7 +2045,7 @@ export default function App() {
     if (view === "editor") {
       // Flush pending editor state to the job before clearing viewingJob.
       if (viewingJob) {
-        syncJobFromEditorItems(viewingJob.id, editorQueue, discountLabels, slotOverrides, cardLayouts, verificationDone, verificationProgress, departmentLocked);
+        syncJobFromEditorItems(viewingJob.id, editorQueue, discountLabels, slotOverrides, cardLayouts, userRowCounts, verificationDone, verificationProgress, departmentLocked);
       }
       // Fire-and-forget: promote accepted Serper images to the product DB
       const toPromote = serperPromotionRef.current;
@@ -2196,8 +2302,10 @@ export default function App() {
           variant={toastState.variant}
           duration={toastState.variant === "error" ? 5000 : 2500}
           onHide={() => setToastState(prev => ({ ...prev, visible: false }))}
-          canUndo={canUndoCardLayout}
-          onUndo={undoCardLayout}
+          canUndo={view === "editor" && canUndo}
+          onUndo={view === "editor" ? undo : undefined}
+          canRedo={view === "editor" && canRedo}
+          onRedo={view === "editor" ? redo : undefined}
         />
 
         {view === "editor" && (
@@ -2440,6 +2548,7 @@ export default function App() {
                       progressTotal={editorAutomationProgress.total}
                     />
                 <EditorCanvas
+                  key={canvasKey}
                   editorQueue={editorQueue}
                   templateId={templateId}
                   department={department}
@@ -2460,7 +2569,7 @@ export default function App() {
                   slotOverrides={slotOverrides}
                   onSlotOverridesChange={departmentLocked ? undefined : setSlotOverrides}
                   cardLayout={currentCardLayout}
-                  onCardLayoutChange={departmentLocked ? undefined : setCurrentCardLayout}
+                  onCardLayoutChange={departmentLocked ? undefined : (layout) => setCardLayouts(prev => ({ ...prev, [department]: layout }))}
                   onRemoveFromQueue={departmentLocked ? undefined : removeItemFromQueue}
                   rowCount={userRowCounts[department]}
                   onRowCountChange={departmentLocked ? undefined : handleRowCountChange}
