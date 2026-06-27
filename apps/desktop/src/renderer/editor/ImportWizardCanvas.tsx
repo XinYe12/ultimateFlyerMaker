@@ -2,12 +2,9 @@ import React from "react";
 import { CustomBoxDef, DepartmentAreaDef } from "./loadFlyerTemplateConfig";
 import { renderImportBoxOverlay } from "./importTemplateCanvasHelpers";
 import {
-  CELL_GHOST_PREVIEW_ALPHA,
-  defaultCardStyle,
-  renderAutomationGridPreview,
+  renderCenteredSampleCell,
+  renderDepartmentGrid,
   renderReadonlyDepartmentFill,
-  renderStyledCell,
-  SampleCellDef,
 } from "./importWizardCellHelpers";
 import { WizardViewMode } from "./importWizardViewState";
 
@@ -15,7 +12,6 @@ export type WizardCanvasStep = "regions" | "cellStyle" | "components";
 
 export type WizardAreaDraft = DepartmentAreaDef & {
   id: string;
-  sampleCell?: SampleCellDef;
 };
 
 export type WizardPageDraft = {
@@ -44,14 +40,6 @@ type BoxDragStart = (
   box?: { x: number; y: number; width: number; height: number }
 ) => void;
 
-type SampleCellDragStart = (
-  e: React.MouseEvent,
-  areaId: string,
-  mode: "move" | "resize",
-  corner?: "tl" | "tr" | "bl" | "br",
-  cell?: SampleCellDef
-) => void;
-
 export type ImportWizardCanvasProps = {
   page: WizardPageDraft;
   step: WizardCanvasStep;
@@ -69,7 +57,6 @@ export type ImportWizardCanvasProps = {
   onSelectBox: (id: string) => void;
   onAreaDragStart: AreaDragStart;
   onBoxDragStart: BoxDragStart;
-  onSampleCellDragStart: SampleCellDragStart;
   onCanvasMouseDown?: () => void;
   /** Called when user starts drawing a new region (mousedown on empty canvas in regions step). */
   onRegionDrawStart?: (e: React.MouseEvent, startX: number, startY: number) => void;
@@ -98,10 +85,6 @@ function resolveBackgroundLayers(
       return { whiteBase: false, imageUrl: page.underprintUrl };
     }
     return { whiteBase: false, imageUrl: page.fileUrl };
-  }
-
-  if (viewMode === "sideBySide") {
-    return { whiteBase: true };
   }
 
   if (gridPreview) {
@@ -133,7 +116,6 @@ export default function ImportWizardCanvas({
   onSelectBox,
   onAreaDragStart,
   onBoxDragStart,
-  onSampleCellDragStart,
   onCanvasMouseDown,
   onRegionDrawStart,
   drawRect,
@@ -290,12 +272,12 @@ export default function ImportWizardCanvas({
         }
 
         if (step === "cellStyle" || step === "components") {
-          const deptName = `${deptLabel(area.departmentKey)} department`;
           return (
             <React.Fragment key={area.id}>
               {renderReadonlyDepartmentFill(area, scale, {
-                dimmed: step === "cellStyle",
-                label: step === "cellStyle" ? deptName : undefined,
+                dimmed: false,
+                selected: step === "cellStyle" && isSelected,
+                borderColor: color,
               })}
 
               {step === "cellStyle" && area.cardStyle && (
@@ -313,80 +295,9 @@ export default function ImportWizardCanvas({
                     ...(regionRadius > 0 ? { clipPath: `inset(0 round ${regionRadius}px)` } : {}),
                   }}
                 >
-                  {renderAutomationGridPreview(area, scale, isSelected, {
-                    previewAlpha: gridPreview ? 0.45 : CELL_GHOST_PREVIEW_ALPHA,
-                    showMockContent: gridPreview,
-                  })}
-                </div>
-              )}
-
-              {step === "cellStyle" && area.sampleCell && area.cardStyle && (
-                <div
-                  style={{
-                    position: "absolute",
-                    left: (r.x + area.sampleCell.x) * scale,
-                    top: (r.y + area.sampleCell.y) * scale,
-                    width: area.sampleCell.width * scale,
-                    height: area.sampleCell.height * scale,
-                    zIndex: 25,
-                    cursor: readOnly ? "default" : "move",
-                    userSelect: "none",
-                  }}
-                  onMouseDown={readOnly ? undefined : e => {
-                    e.stopPropagation();
-                    onSelectArea(area.id);
-                    onSampleCellDragStart(e, area.id, "move", undefined, area.sampleCell);
-                  }}
-                >
-                  {renderStyledCell(
-                    area.cardStyle ?? defaultCardStyle(),
-                    { x: 0, y: 0, width: area.sampleCell.width, height: area.sampleCell.height },
-                    scale,
-                    isSelected,
-                    undefined,
-                    { showMockContent: true },
-                  )}
-                  <div
-                    style={{
-                      position: "absolute",
-                      bottom: 3,
-                      left: 4,
-                      fontSize: 9,
-                      fontWeight: 700,
-                      color: "#1d4ed8",
-                      background: "rgba(255,255,255,0.92)",
-                      padding: "1px 5px",
-                      borderRadius: 3,
-                      pointerEvents: "none",
-                      boxShadow: "0 1px 3px rgba(15,23,42,0.15)",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    Sample product cell
-                  </div>
-                  {isSelected && !readOnly && (["tl", "tr", "bl", "br"] as const).map(corner => (
-                    <div
-                      key={corner}
-                      style={{
-                        position: "absolute",
-                        width: HANDLE_SIZE,
-                        height: HANDLE_SIZE,
-                        background: "#3b82f6",
-                        border: "2px solid #fff",
-                        borderRadius: 2,
-                        cursor: corner === "tl" || corner === "br" ? "nwse-resize" : "nesw-resize",
-                        zIndex: 2,
-                        ...(corner === "tl" ? { top: -HANDLE_SIZE / 2, left: -HANDLE_SIZE / 2 }
-                          : corner === "tr" ? { top: -HANDLE_SIZE / 2, right: -HANDLE_SIZE / 2 }
-                          : corner === "bl" ? { bottom: -HANDLE_SIZE / 2, left: -HANDLE_SIZE / 2 }
-                          : { bottom: -HANDLE_SIZE / 2, right: -HANDLE_SIZE / 2 }),
-                      }}
-                      onMouseDown={e => {
-                        e.stopPropagation();
-                        onSampleCellDragStart(e, area.id, "resize", corner, area.sampleCell);
-                      }}
-                    />
-                  ))}
+                  {gridPreview
+                    ? renderDepartmentGrid(area, scale, isSelected, { showMockContent: true })
+                    : renderCenteredSampleCell(area, scale, isSelected)}
                 </div>
               )}
             </React.Fragment>

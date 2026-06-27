@@ -8,14 +8,38 @@
 # Output: dist/cutout_service/cutout_service  (one-dir layout)
 # Copy the whole dist/cutout_service/ folder into Electron's extraResources.
 
+from PyInstaller.utils.hooks import copy_metadata
+
 block_cipher = None
+
+# rembg/pymatting read package versions via importlib.metadata at import time
+_metadata_pkgs = (
+    "pymatting",
+    "rembg",
+    "onnxruntime",
+    "scikit-image",
+    "imageio",
+    "tifffile",
+    "lazy_loader",
+)
+_datas = []
+for _pkg in _metadata_pkgs:
+    try:
+        _datas += copy_metadata(_pkg)
+    except Exception:
+        pass
 
 a = Analysis(
     ["main.py"],
     pathex=["src"],
     binaries=[],
-    datas=[],
+    datas=_datas,
     hiddenimports=[
+        # Local packages (uvicorn loads cutout_service.server by string at runtime)
+        "cutout_service",
+        "cutout_service.server",
+        "ocr",
+        "ocr.ocr_engine",
         # uvicorn internals that are loaded dynamically
         "uvicorn.logging",
         "uvicorn.loops",
@@ -40,6 +64,8 @@ a = Analysis(
         "PIL.Image",
         "rembg",
         "onnxruntime",
+        "pymatting",
+        "pymatting.util",
         # paddleocr (heavy; include if OCR endpoint needed in the binary)
         "paddleocr",
         # cv2 is imported inside remove_stray_blobs(); PyInstaller misses function-body imports

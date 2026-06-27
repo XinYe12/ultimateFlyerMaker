@@ -25,6 +25,7 @@ interface Props {
   items: PanelImageItem[];
   activeDepartment: string;
   onClose: () => void;
+  embedded?: boolean;
 }
 
 function PanelThumb({ item, primarySrc, fallbackSrc, onDragStart }: {
@@ -95,7 +96,7 @@ function PanelThumb({ item, primarySrc, fallbackSrc, onDragStart }: {
   );
 }
 
-export default function ProjectImagePanel({ items, activeDepartment, onClose }: Props) {
+export default function ProjectImagePanel({ items, activeDepartment, onClose, embedded }: Props) {
   const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
 
   const grouped = useMemo(() => {
@@ -141,6 +142,7 @@ export default function ProjectImagePanel({ items, activeDepartment, onClose }: 
       boxSizing: "border-box",
     }}>
       {/* Header */}
+      {!embedded && (
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "10px 12px 8px",
@@ -165,6 +167,7 @@ export default function ProjectImagePanel({ items, activeDepartment, onClose }: 
           ×
         </button>
       </div>
+      )}
 
       {/* Hint */}
       <div style={{ padding: "5px 12px 4px", fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>

@@ -104,6 +104,32 @@ export async function generateUnderprint(sourcePath, outputPath, width, height, 
     }
   }
 
+  // Fill horizontal gaps between vertically-adjacent department regions.
+  // Source flyer images often have printed divider lines between sections;
+  // these are not covered by the cell fills above and appear as black lines.
+  const validAreas = (departmentAreas ?? []).filter(a => a.productRegion);
+  if (validAreas.length > 1) {
+    const sorted = [...validAreas].sort((a, b) => a.productRegion.y - b.productRegion.y);
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const above = sorted[i].productRegion;
+      const below = sorted[i + 1].productRegion;
+      const gapTop = above.y + above.height;
+      const gapBottom = below.y;
+      if (gapBottom > gapTop) {
+        shapes.push(rectSvg({
+          x: 0,
+          y: gapTop,
+          width,
+          height: gapBottom - gapTop,
+          fill: '#ffffff',
+          stroke: null,
+          strokeWidth: 0,
+          radius: 0,
+        }));
+      }
+    }
+  }
+
   await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
 
   const pipeline = sharp(sourcePath).resize(width, height, { fit: "fill" });

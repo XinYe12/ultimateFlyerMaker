@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   computeCardRects,
   resolveLayoutRows,
+  resolveLayoutRowsForRendering,
   deriveRowCount,
+  deriveActiveRowCount,
 } from "../../../../shared/flyer/layout/layoutCardRows";
 
 describe("resolveLayoutRows", () => {
@@ -16,6 +18,43 @@ describe("resolveLayoutRows", () => {
     expect(resolveLayoutRows([{ id: "a", row: 2, order: 0, widthPx: 100 }], undefined)).toBe(3);
     expect(deriveRowCount(cards)).toBe(1);
     expect(resolveLayoutRows(cards, undefined)).toBe(1);
+  });
+});
+
+describe("deriveActiveRowCount", () => {
+  it("ignores trailing empty rows below the last product", () => {
+    const cards = [
+      { id: "a", row: 0, order: 0, widthPx: 100, itemId: "1" },
+      { id: "b", row: 1, order: 0, widthPx: 100, itemId: "2" },
+      { id: "c", row: 2, order: 0, widthPx: 100, itemId: "3" },
+      { id: "d", row: 3, order: 0, widthPx: 100 },
+      { id: "e", row: 4, order: 0, widthPx: 100 },
+    ];
+    expect(deriveActiveRowCount(cards)).toBe(3);
+  });
+
+  it("keeps intentional empty rows that sit between filled rows", () => {
+    const cards = [
+      { id: "a", row: 0, order: 0, widthPx: 100, itemId: "1" },
+      { id: "b", row: 2, order: 0, widthPx: 100, itemId: "2" },
+    ];
+    expect(deriveActiveRowCount(cards)).toBe(3);
+  });
+});
+
+describe("resolveLayoutRowsForRendering", () => {
+  const threeRowCards = [
+    { id: "a", row: 0, order: 0, widthPx: 100, itemId: "1" },
+    { id: "b", row: 1, order: 0, widthPx: 100, itemId: "2" },
+    { id: "c", row: 2, order: 0, widthPx: 100, itemId: "3" },
+  ];
+
+  it("uses occupied rows from layout even when explicit count is inflated", () => {
+    expect(resolveLayoutRowsForRendering(threeRowCards, 8, 8)).toBe(3);
+  });
+
+  it("uses explicit row count for empty grids", () => {
+    expect(resolveLayoutRowsForRendering([], 5, 8)).toBe(5);
   });
 });
 

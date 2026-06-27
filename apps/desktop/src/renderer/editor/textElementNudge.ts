@@ -11,19 +11,12 @@ function clamp(v: number, { min, max }: AxisLimits): number {
   return Math.max(min, Math.min(max, v));
 }
 
-function titleLimits(orient: CardOrientation): NudgeLimits {
-  switch (orient) {
-    case "horizontal":
-      return { x: { min: -32, max: 8 }, y: { min: -8, max: 32 } };
-    case "top":
-      return { x: { min: -32, max: 32 }, y: { min: -8, max: 32 } };
-    default:
-      return { x: { min: -8, max: 32 }, y: { min: -8, max: 32 } };
-  }
+function titleLimits(_orient: CardOrientation): NudgeLimits {
+  return { x: { min: -150, max: 150 }, y: { min: -150, max: 150 } };
 }
 
 function priceLimits(): NudgeLimits {
-  return { x: { min: -8, max: 32 }, y: { min: -8, max: 32 } };
+  return { x: { min: -150, max: 150 }, y: { min: -150, max: 150 } };
 }
 
 export function computeTextNudgePatch(

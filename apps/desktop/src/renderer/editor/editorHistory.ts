@@ -1,4 +1,4 @@
-import { CardLayout, IngestItem, IngestResult } from '../types';
+import { CardLayout, DiscountLabel, IngestItem, IngestResult } from '../types';
 
 // Fields from IngestResult that are mutable after initial ingest (excludes heavy OCR/AI data)
 type SlimResult = Omit<IngestResult, 'ocr' | 'llmResult' | 'dbMatches' | 'webMatches'>;
@@ -18,20 +18,35 @@ export type EditorSnapshot = {
   cardLayouts: Record<string, CardLayout>;
   slotOverrides: Record<number, { x: number; y: number; width: number; height: number }>;
   userRowCounts: Record<string, number>;
+  discountLabels: DiscountLabel[];
   /** Slim view of each queue item — excludes heavy OCR/AI match data to keep memory bounded */
   queueItems: SlimQueueItem[];
 };
+
+export type HistoryEntry = {
+  id: string;
+  label: string;
+  departments: string[];
+  timestamp: number;
+  snapshot: EditorSnapshot;
+};
+
+export function snapshotsEqual(a: EditorSnapshot, b: EditorSnapshot): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
 
 export function captureSnapshot(
   cardLayouts: Record<string, CardLayout>,
   slotOverrides: Record<number, { x: number; y: number; width: number; height: number }>,
   userRowCounts: Record<string, number>,
   editorQueue: IngestItem[],
+  discountLabels: DiscountLabel[] = [],
 ): EditorSnapshot {
   return {
     cardLayouts: JSON.parse(JSON.stringify(cardLayouts)),
     slotOverrides: JSON.parse(JSON.stringify(slotOverrides)),
     userRowCounts: { ...userRowCounts },
+    discountLabels: JSON.parse(JSON.stringify(discountLabels)),
     queueItems: editorQueue.map(item => ({
       id: item.id,
       path: item.path,

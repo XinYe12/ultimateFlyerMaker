@@ -41,12 +41,17 @@ export function useJobQueue() {
     });
   }, []);
 
-  // Persist to file whenever jobs change (guard prevents overwriting before initial load)
+  // Persist to file whenever jobs change — serialize writes so an older save cannot
+  // overwrite a newer one after "clear all departments" (or any rapid job mutations).
+  const saveChainRef = useRef(Promise.resolve());
   useEffect(() => {
     if (!initialized.current) return;
-    saveJobsToFile(jobs).catch(err => {
-      console.error("[useJobQueue] Persistent save failed — data is in memory but may not survive a restart:", err);
-    });
+    const snapshot = jobs;
+    saveChainRef.current = saveChainRef.current
+      .then(() => saveJobsToFile(snapshot))
+      .catch(err => {
+        console.error("[useJobQueue] Persistent save failed — data is in memory but may not survive a restart:", err);
+      });
   }, [jobs]);
 
   // Listen for IPC events
@@ -414,6 +419,11 @@ export function useJobQueue() {
     setJobs(prev => prev.filter(j => j.id !== jobId));
   }, []);
 
+  // Delete all jobs for a template in one atomic state update
+  const deleteJobsForTemplate = useCallback((templateId: string) => {
+    setJobs(prev => prev.filter(j => j.templateId !== templateId));
+  }, []);
+
   // Update flyerWeekStart for all jobs on a given template
   const setAllJobsWeekStart = useCallback((tplId: string, dateStr: string) => {
     setJobs(prev => prev.map(j => j.templateId === tplId ? { ...j, flyerWeekStart: dateStr } : j));
@@ -511,6 +521,7 @@ export function useJobQueue() {
     setAllJobsWeekStart,
     cancelAllJobs,
     deleteJob,
+    deleteJobsForTemplate,
     getJob,
     syncJobFromEditorItems,
   };

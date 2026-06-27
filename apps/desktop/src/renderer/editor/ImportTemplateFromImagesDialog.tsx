@@ -12,10 +12,12 @@ import { defaultRegionStyle } from "./importTemplateCanvasHelpers";
 import { saveCustomTemplate, saveCustomTemplateWithAssets } from "./customTemplateStorage";
 import {
   createSampleCell,
-  automationGridCardsForArea,
   defaultCardStyle,
+  defaultGridPadding,
   DEFAULT_COLS,
   DEFAULT_ROWS,
+  getComputedCellSize,
+  initializeAreaForCellStyle,
   SampleCellDef,
   withAutomationGridDefaults,
 } from "./importWizardCellHelpers";
@@ -142,10 +144,6 @@ function formatIpcError(err: unknown): string {
   return match?.[1]?.trim() || raw;
 }
 
-type SampleCellDragState =
-  | { type: "move"; areaId: string; startMouseX: number; startMouseY: number; startX: number; startY: number }
-  | { type: "resize"; areaId: string; corner: "tl" | "tr" | "bl" | "br"; startMouseX: number; startMouseY: number; startX: number; startY: number; startW: number; startH: number };
-
 type Step = "upload" | "regions" | "cellStyle" | "components";
 
 type Props = {
@@ -179,7 +177,7 @@ const WIZARD_STEP_META: Record<WizardCanvasStep, { short: string; hint: string }
   },
   cellStyle: {
     short: "Cell style",
-    hint: "Style one product cell — the same card look repeats on every slot in the department.",
+    hint: "Style the product grid on each department — the same card look repeats on every slot.",
   },
   components: {
     short: "Fields",
@@ -355,7 +353,6 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   const scale = baseScale * canvasZoom;
   const areaDragRef = useRef<AreaDragState | null>(null);
   const boxDragRef = useRef<BoxDragState | null>(null);
-  const sampleCellDragRef = useRef<SampleCellDragState | null>(null);
   const drawDragRef = useRef<{ startMouseX: number; startMouseY: number; startCanvasX: number; startCanvasY: number } | null>(null);
   const [liveDrawRect, setLiveDrawRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const liveDrawRectRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
@@ -380,7 +377,22 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   const wizardHistoryDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wizardPendingSnapshotRef = useRef<PageDraft[] | null>(null);
 
+  const initializeAreaDraft = useCallback((area: AreaDraft): AreaDraft => {
+    const initialized = initializeAreaForCellStyle(area) as AreaDraft;
+    const computed = getComputedCellSize(initialized);
+    return {
+      ...initialized,
+      sampleCell: createSampleCell(initialized.productRegion, computed ?? undefined),
+    };
+  }, []);
+
   const goToStep = useCallback((next: Step) => {
+    if (next === "cellStyle") {
+      setPages(prev => prev.map(pg => ({
+        ...pg,
+        areas: pg.areas.map(a => initializeAreaDraft(a)),
+      })));
+    }
     setStep(next);
     setPageIdx(0);
     setSelectedAreaId(null);
@@ -388,7 +400,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     setColorPickerMode(null);
     setFontMatchMessage(null);
     if (next !== "cellStyle") setGridPreviewActive(false);
-  }, []);
+  }, [initializeAreaDraft]);
 
   const goToPage = useCallback((idx: number) => {
     setPageIdx(idx);
@@ -530,31 +542,10 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
         boxes: (p.boxes ?? []).map(b => ({ ...b, id: b.id ?? uuidv4() })),
         areas: (p.departmentAreas ?? []).map(a => {
           const departmentKey = a.departmentKey || a.label || "Region";
-          // Reconstruct sampleCell from persisted gridLayout cell dims so step 2 shows "Sample cell ready"
-          let sampleCell: SampleCellDef | undefined;
-          if (a.cardStyle) {
-            const tw = a.gridLayout?.targetCellWidth;
-            const th = a.gridLayout?.targetCellHeight;
-            if (tw && th) {
-              const w = Math.max(48, tw);
-              const h = Math.max(48, th);
-              sampleCell = {
-                x: Math.round(Math.max(0, (a.productRegion.width - w) / 2)),
-                y: Math.round(Math.max(0, (a.productRegion.height - h) / 2)),
-                width: w,
-                height: h,
-              };
-            } else {
-              sampleCell = createSampleCell(a.productRegion, v => Math.round(v / SNAP) * SNAP);
-            }
-          }
           return {
-            ...a,
+            ...initializeAreaDraft({ ...a, departmentKey, label: departmentKey, id: a.id ?? "" } as AreaDraft),
             id: a.id ?? uuidv4(),
-            departmentKey,
-            label: departmentKey,
             regionStyle: a.regionStyle ?? defaultRegionStyle(departmentKey),
-            ...(sampleCell ? { sampleCell } : {}),
           } as AreaDraft;
         }),
       };
@@ -778,61 +769,6 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     }));
   }, [scale, pageIdx]);
 
-  const onSampleCellMouseMove = useCallback((e: MouseEvent) => {
-    const d = sampleCellDragRef.current;
-    if (!d) return;
-    const dx = (e.clientX - d.startMouseX) / scale;
-    const dy = (e.clientY - d.startMouseY) / scale;
-
-    setPages(prev => prev.map((pg, i) => {
-      if (i !== pageIdx) return pg;
-      return {
-        ...pg,
-        areas: pg.areas.map(a => {
-          if (a.id !== d.areaId || !a.sampleCell) return a;
-          const pr = a.productRegion;
-          const cell = { ...a.sampleCell };
-          if (d.type === "move") {
-            cell.x = snap(Math.max(0, Math.min(d.startX + dx, pr.width - cell.width)));
-            cell.y = snap(Math.max(0, Math.min(d.startY + dy, pr.height - cell.height)));
-          } else {
-            const { startX: sx, startY: sy, startW: sw, startH: sh } = d;
-            let { x, y, width, height } = { x: sx, y: sy, width: sw, height: sh };
-            if (d.corner === "tl") {
-              const nx = snap(Math.min(sx + dx, sx + sw - MIN_SIZE));
-              const ny = snap(Math.min(sy + dy, sy + sh - MIN_SIZE));
-              width = snap(Math.max(MIN_SIZE, width - (nx - sx)));
-              height = snap(Math.max(MIN_SIZE, height - (ny - sy)));
-              x = nx; y = ny;
-            } else if (d.corner === "tr") {
-              const ny = snap(Math.min(sy + dy, sy + sh - MIN_SIZE));
-              height = snap(Math.max(MIN_SIZE, height - (ny - sy)));
-              width = snap(Math.max(MIN_SIZE, width + dx));
-              y = ny;
-            } else if (d.corner === "bl") {
-              const nx = snap(Math.min(sx + dx, sx + sw - MIN_SIZE));
-              width = snap(Math.max(MIN_SIZE, width - (nx - sx)));
-              height = snap(Math.max(MIN_SIZE, height + dy));
-              x = nx;
-            } else {
-              width = snap(Math.max(MIN_SIZE, width + dx));
-              height = snap(Math.max(MIN_SIZE, height + dy));
-            }
-            x = Math.max(0, x);
-            y = Math.max(0, y);
-            width = Math.min(width, pr.width - x);
-            height = Math.min(height, pr.height - y);
-            cell.x = x;
-            cell.y = y;
-            cell.width = width;
-            cell.height = height;
-          }
-          return { ...a, sampleCell: cell };
-        }),
-      };
-    }));
-  }, [scale, pageIdx]);
-
   // ── Area CRUD (declared before onMouseUp so it can be referenced as a dep) ──
 
   const addAreaFromRect = useCallback(({ x, y, width, height }: { x: number; y: number; width: number; height: number }) => {
@@ -869,7 +805,6 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   const onMouseUp = useCallback(() => {
     areaDragRef.current = null;
     boxDragRef.current = null;
-    sampleCellDragRef.current = null;
 
     const draw = drawDragRef.current;
     if (draw) {
@@ -885,8 +820,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
 
   useEffect(() => {
     const moveHandler = (e: MouseEvent) => {
-      if (sampleCellDragRef.current) onSampleCellMouseMove(e);
-      else if (areaDragRef.current) onAreaMouseMove(e);
+      if (areaDragRef.current) onAreaMouseMove(e);
       else if (boxDragRef.current) onBoxMouseMove(e);
       else if (drawDragRef.current) {
         const d = drawDragRef.current;
@@ -910,7 +844,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
       window.removeEventListener("mousemove", moveHandler);
       window.removeEventListener("mouseup", onMouseUp);
     };
-  }, [onAreaMouseMove, onBoxMouseMove, onSampleCellMouseMove, onMouseUp]);
+  }, [onAreaMouseMove, onBoxMouseMove, onMouseUp]);
 
   const addArea = () => {
     if (!page) return;
@@ -990,34 +924,40 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     }));
   };
 
-  const createSampleCellForArea = (areaId: string) => {
-    const area = page?.areas.find(a => a.id === areaId);
-    if (!area) return;
+  const updateAreaRows = (areaId: string, rows: number) => {
     pushToHistoryNow();
-    const sampleCell = createSampleCell(area.productRegion, snap);
+    const nextRows = Math.max(1, Math.min(20, rows));
     setPages(prev => prev.map((pg, i) => {
       if (i !== pageIdx) return pg;
       return {
         ...pg,
-        areas: pg.areas.map(a => a.id === areaId ? {
-          ...withAutomationGridDefaults(a),
-          sampleCell,
-          cardStyle: a.cardStyle ?? defaultCardStyle(),
-        } as AreaDraft : a),
+        areas: pg.areas.map(a => {
+          if (a.id !== areaId) return a;
+          const updated = { ...a, rows: nextRows } as AreaDraft;
+          const computed = getComputedCellSize(updated);
+          return { ...updated, sampleCell: createSampleCell(updated.productRegion, computed ?? undefined) };
+        }),
       };
     }));
-    setSelectedAreaId(areaId);
+    if (gridPreviewActive) scheduleUnderprintRegenRef.current(pageIdx);
   };
 
-  const clearSampleCell = (areaId: string) => {
+  const updateAreaCols = (areaId: string, cols: number) => {
     pushToHistoryNow();
+    const nextCols = Math.max(1, Math.min(12, cols));
     setPages(prev => prev.map((pg, i) => {
       if (i !== pageIdx) return pg;
       return {
         ...pg,
-        areas: pg.areas.map(a => a.id === areaId ? { ...a, sampleCell: undefined, cardStyle: undefined } : a),
+        areas: pg.areas.map(a => {
+          if (a.id !== areaId) return a;
+          const updated = { ...a, cols: nextCols } as AreaDraft;
+          const computed = getComputedCellSize(updated);
+          return { ...updated, sampleCell: createSampleCell(updated.productRegion, computed ?? undefined) };
+        }),
       };
     }));
+    if (gridPreviewActive) scheduleUnderprintRegenRef.current(pageIdx);
   };
 
   // ── Box CRUD ──────────────────────────────────────────────────────────────
@@ -1191,30 +1131,12 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     fontWeight: 600,
   };
 
-  const updateAreaRows = (areaId: string, rows: number) => {
-    pushToHistoryNow();
-    const nextRows = Math.max(1, Math.min(20, rows));
-    setPages(prev => prev.map((pg, i) => {
-      if (i !== pageIdx) return pg;
-      return {
-        ...pg,
-        areas: pg.areas.map(a => {
-          if (a.id !== areaId) return a;
-          return { ...withAutomationGridDefaults(a), rows: nextRows, sampleCell: a.sampleCell } as AreaDraft;
-        }),
-      };
-    }));
-    if (gridPreviewActive) {
-      scheduleUnderprintRegenRef.current(pageIdx);
-    }
-  };
-
   const syncAutomationGridForPage = useCallback((pageIndex: number) => {
     setPages(prev => prev.map((pg, i) => {
       if (i !== pageIndex) return pg;
       return {
         ...pg,
-        areas: pg.areas.map(a => (a.cardStyle ? { ...withAutomationGridDefaults(a), sampleCell: a.sampleCell } : a) as AreaDraft),
+        areas: pg.areas.map(a => (a.cardStyle ? { ...withAutomationGridDefaults(a) } : a) as AreaDraft),
       };
     }));
   }, []);
@@ -1265,42 +1187,6 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
         startY: region.y,
         startW: region.width,
         startH: region.height,
-      };
-    }
-  };
-
-  const handleSampleCellDragStart = (
-    e: React.MouseEvent,
-    areaId: string,
-    dragMode: "move" | "resize",
-    corner?: "tl" | "tr" | "bl" | "br",
-    cell?: SampleCellDef
-  ) => {
-    if (!cell) return;
-    pushToHistoryNow();
-    setSelectedAreaId(areaId);
-    areaDragRef.current = null;
-    boxDragRef.current = null;
-    if (dragMode === "move") {
-      sampleCellDragRef.current = {
-        type: "move",
-        areaId,
-        startMouseX: e.clientX,
-        startMouseY: e.clientY,
-        startX: cell.x,
-        startY: cell.y,
-      };
-    } else if (corner) {
-      sampleCellDragRef.current = {
-        type: "resize",
-        areaId,
-        corner,
-        startMouseX: e.clientX,
-        startMouseY: e.clientY,
-        startX: cell.x,
-        startY: cell.y,
-        startW: cell.width,
-        startH: cell.height,
       };
     }
   };
@@ -1435,11 +1321,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
       boxes: pg.boxes.filter(b => !!b.isEditable),
       departmentAreas: pg.areas.map(a => {
         const normalized = a.cardStyle ? withAutomationGridDefaults(a) : a;
-        // Persist sampleCell dimensions so they can be restored on next edit
-        const sc = (a as AreaDraft).sampleCell;
-        const gridLayout = sc
-          ? { ...(normalized.gridLayout ?? {}), targetCellWidth: sc.width, targetCellHeight: sc.height }
-          : normalized.gridLayout;
+        const gridLayout = normalized.gridLayout ?? (normalized.cardStyle ? defaultGridPadding(normalized.productRegion) : undefined);
         return {
           id: normalized.id,
           departmentKey: normalized.departmentKey,
@@ -1504,7 +1386,6 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     onSelectBox: setSelectedBoxId,
     onAreaDragStart: handleAreaDragStart,
     onBoxDragStart: handleBoxDragStart,
-    onSampleCellDragStart: handleSampleCellDragStart,
     onCanvasMouseDown: () => { setSelectedAreaId(null); setSelectedBoxId(null); },
     onRegionDrawStart: handleRegionDrawStart,
     drawRect: liveDrawRect,
@@ -1659,7 +1540,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
 
         {/* Upload */}
         {step === "upload" && (
-          <div className="ufm-scroll" style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start", padding: 32, gap: 20, overflowY: "auto" }}>
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start", padding: 32, gap: 20, overflowY: "auto" }}>
             <div
               onDrop={onDrop}
               onDragOver={e => { if (loading) return; e.preventDefault(); setDragOver(true); }}
@@ -1961,7 +1842,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                 {wizardStep === "cellStyle" && (
                   <>
                     <p style={{ fontSize: 10, color: "#64748b", margin: 0, lineHeight: 1.45 }}>
-                      Style one <strong style={{ color: "#cbd5e1" }}>product cell</strong> — the same look repeats on every slot in the department. Department backgrounds are locked here.
+                      Style the <strong style={{ color: "#cbd5e1" }}>product cell</strong> for each department — a sample cell sits in the center of the region while you adjust appearance and grid size.
                     </p>
                     {!selectedArea ? (
                       <p style={{ fontSize: 11, color: "#94a3b8", margin: 0, lineHeight: 1.45 }}>
@@ -1969,111 +1850,89 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                       </p>
                     ) : (() => {
                       const cs: CardStyleDef = selectedArea.cardStyle ?? defaultCardStyle();
+                      const computed = getComputedCellSize(selectedArea);
                       return (
                         <>
-                          {selectedArea.sampleCell && selectedArea.cardStyle && (
+                          {selectedArea.cardStyle && (
                             <CellMagnifierPreview
                               cardStyle={cs}
                               departmentLabel={deptLabel(selectedArea.departmentKey)}
-                              width={selectedArea.sampleCell.width}
-                              height={selectedArea.sampleCell.height}
+                              width={computed?.width ?? 120}
+                              height={computed?.height ?? 150}
                             />
                           )}
-                          {!selectedArea.sampleCell ? (
-                            <button
-                              type="button"
-                              onClick={() => createSampleCellForArea(selectedArea.id)}
-                              style={{ padding: "10px 0", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 700 }}
-                            >
-                              + Create Sample Product Cell
-                            </button>
-                          ) : (
-                            <>
-                              <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase" }}>Appearance</div>
-                              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                                <span style={{ fontSize: 11, color: "#64748b" }}>Fill color</span>
-                                <input type="color" value={cs.backgroundColor ?? "#ffffff"}
-                                  onChange={e => updateCardStyle(selectedArea.id, { backgroundColor: e.target.value })}
-                                  style={{ width: "100%", height: 28, cursor: "pointer", border: "1px solid #475569", borderRadius: 4 }} />
-                              </label>
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
-                                  <span style={{ fontSize: 11, color: "#64748b" }}>Border width</span>
-                                  <input type="number" min={0} max={20} value={cs.borderWidth ?? 0}
-                                    onChange={e => updateCardStyle(selectedArea.id, { borderWidth: parseInt(e.target.value) || 0 })}
-                                    style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }} />
-                                </label>
-                                <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
-                                  <span style={{ fontSize: 11, color: "#64748b" }}>Corner radius</span>
-                                  <input type="number" min={0} max={100} value={cs.borderRadius ?? 0}
-                                    onChange={e => updateCardStyle(selectedArea.id, { borderRadius: parseInt(e.target.value) || 0 })}
-                                    style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }} />
-                                </label>
-                              </div>
-                              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                                <span style={{ fontSize: 11, color: "#64748b" }}>Border color</span>
-                                <input type="color" value={cs.borderColor ?? "#cbd5e1"}
-                                  onChange={e => updateCardStyle(selectedArea.id, { borderColor: e.target.value })}
-                                  style={{ width: "100%", height: 28, cursor: "pointer", border: "1px solid #475569", borderRadius: 4 }} />
-                              </label>
-                              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#cbd5e1", cursor: "pointer" }}>
-                                <input type="checkbox" checked={!!cs.hasShadow}
-                                  onChange={e => updateCardStyle(selectedArea.id, { hasShadow: e.target.checked })} />
-                                Drop shadow
-                              </label>
-                              <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", marginTop: 4 }}>
-                                Product grid
-                              </div>
-                              <p style={{ fontSize: 10, color: "#64748b", margin: 0, lineHeight: 1.45 }}>
-                                Same layout as flyer automation — {DEFAULT_COLS} products per row baseline. Adjust rows to fit your department size.
-                              </p>
-                              {(() => {
-                                const rows = selectedArea.rows ?? DEFAULT_ROWS;
-                                const slotCount = automationGridCardsForArea(selectedArea).cards.length;
-                                return (
-                                  <>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                      <span style={{ fontSize: 11, color: "#64748b", flex: 1 }}>Rows</span>
-                                      <button type="button" disabled={rows <= 1}
-                                        onClick={() => updateAreaRows(selectedArea.id, rows - 1)}
-                                        style={{ width: 28, height: 28, borderRadius: 6, border: "1px solid #475569", background: "#0f172a", color: "#e2e8f0", cursor: rows <= 1 ? "not-allowed" : "pointer", fontSize: 16, fontWeight: 700 }}>
-                                        −
-                                      </button>
-                                      <span style={{ fontSize: 13, color: "#f8fafc", fontWeight: 700, minWidth: 24, textAlign: "center" }}>{rows}</span>
-                                      <button type="button" disabled={rows >= 20}
-                                        onClick={() => updateAreaRows(selectedArea.id, rows + 1)}
-                                        style={{ width: 28, height: 28, borderRadius: 6, border: "1px solid #475569", background: "#0f172a", color: "#e2e8f0", cursor: rows >= 20 ? "not-allowed" : "pointer", fontSize: 16, fontWeight: 700 }}>
-                                        +
-                                      </button>
-                                    </div>
-                                    <p style={{ fontSize: 10, color: "#94a3b8", margin: 0 }}>
-                                      {slotCount} product slots ({rows} rows × {DEFAULT_COLS} cols). Ghost outlines on the canvas show every slot.
-                                    </p>
-                                    <button
-                                      type="button"
-                                      disabled={regenerating}
-                                      onClick={() => void toggleGridPreview()}
-                                      style={{
-                                        padding: "8px 0",
-                                        background: gridPreviewActive ? "#334155" : "#7c3aed",
-                                        color: "#fff",
-                                        border: "none",
-                                        borderRadius: 6,
-                                        cursor: regenerating ? "wait" : "pointer",
-                                        fontSize: 13,
-                                        fontWeight: 700,
-                                      }}
-                                    >
-                                      {regenerating ? "Loading…" : gridPreviewActive ? "Exit filled grid preview" : "Filled grid + underprint preview"}
-                                    </button>
-                                    <button type="button" onClick={() => clearSampleCell(selectedArea.id)} style={wizardDeleteBtnStyle}>
-                                      Delete Sample Cell
-                                    </button>
-                                  </>
-                                );
-                              })()}
-                            </>
-                          )}
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase" }}>Appearance</div>
+                          <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                            <span style={{ fontSize: 11, color: "#64748b" }}>Fill color</span>
+                            <input type="color" value={cs.backgroundColor ?? "#ffffff"}
+                              onChange={e => updateCardStyle(selectedArea.id, { backgroundColor: e.target.value })}
+                              style={{ width: "100%", height: 28, cursor: "pointer", border: "1px solid #475569", borderRadius: 4 }} />
+                          </label>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
+                              <span style={{ fontSize: 11, color: "#64748b" }}>Border width</span>
+                              <input type="number" min={0} max={20} value={cs.borderWidth ?? 0}
+                                onChange={e => updateCardStyle(selectedArea.id, { borderWidth: parseInt(e.target.value) || 0 })}
+                                style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }} />
+                            </label>
+                            <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
+                              <span style={{ fontSize: 11, color: "#64748b" }}>Corner radius</span>
+                              <input type="number" min={0} max={100} value={cs.borderRadius ?? 0}
+                                onChange={e => updateCardStyle(selectedArea.id, { borderRadius: parseInt(e.target.value) || 0 })}
+                                style={{ padding: "4px 6px", borderRadius: 4, border: "1px solid #475569", background: "#0f172a", color: "#f8fafc", fontSize: 12 }} />
+                            </label>
+                          </div>
+                          <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                            <span style={{ fontSize: 11, color: "#64748b" }}>Border color</span>
+                            <input type="color" value={cs.borderColor ?? "#cbd5e1"}
+                              onChange={e => updateCardStyle(selectedArea.id, { borderColor: e.target.value })}
+                              style={{ width: "100%", height: 28, cursor: "pointer", border: "1px solid #475569", borderRadius: 4 }} />
+                          </label>
+                          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#cbd5e1", cursor: "pointer" }}>
+                            <input type="checkbox" checked={!!cs.hasShadow}
+                              onChange={e => updateCardStyle(selectedArea.id, { hasShadow: e.target.checked })} />
+                            Drop shadow
+                          </label>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", marginTop: 4 }}>Grid</div>
+                          {(() => {
+                            const rows = selectedArea.rows ?? DEFAULT_ROWS;
+                            const cols = selectedArea.cols ?? DEFAULT_COLS;
+                            const btnStyle: React.CSSProperties = { width: 28, height: 28, borderRadius: 6, border: "1px solid #475569", background: "#0f172a", color: "#e2e8f0", fontSize: 16, fontWeight: 700, cursor: "pointer" };
+                            return (
+                              <>
+                                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                  <span style={{ fontSize: 11, color: "#64748b", flex: 1 }}>Rows</span>
+                                  <button type="button" disabled={rows <= 1} onClick={() => updateAreaRows(selectedArea.id, rows - 1)} style={{ ...btnStyle, cursor: rows <= 1 ? "not-allowed" : "pointer" }}>−</button>
+                                  <span style={{ fontSize: 13, color: "#f8fafc", fontWeight: 700, minWidth: 24, textAlign: "center" }}>{rows}</span>
+                                  <button type="button" disabled={rows >= 20} onClick={() => updateAreaRows(selectedArea.id, rows + 1)} style={{ ...btnStyle, cursor: rows >= 20 ? "not-allowed" : "pointer" }}>+</button>
+                                </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                  <span style={{ fontSize: 11, color: "#64748b", flex: 1 }}>Columns</span>
+                                  <button type="button" disabled={cols <= 1} onClick={() => updateAreaCols(selectedArea.id, cols - 1)} style={{ ...btnStyle, cursor: cols <= 1 ? "not-allowed" : "pointer" }}>−</button>
+                                  <span style={{ fontSize: 13, color: "#f8fafc", fontWeight: 700, minWidth: 24, textAlign: "center" }}>{cols}</span>
+                                  <button type="button" disabled={cols >= 12} onClick={() => updateAreaCols(selectedArea.id, cols + 1)} style={{ ...btnStyle, cursor: cols >= 12 ? "not-allowed" : "pointer" }}>+</button>
+                                </div>
+                              </>
+                            );
+                          })()}
+                          <button
+                            type="button"
+                            disabled={regenerating}
+                            onClick={() => void toggleGridPreview()}
+                            style={{
+                              padding: "8px 0",
+                              background: gridPreviewActive ? "#334155" : "#7c3aed",
+                              color: "#fff",
+                              border: "none",
+                              borderRadius: 6,
+                              cursor: regenerating ? "wait" : "pointer",
+                              fontSize: 13,
+                              fontWeight: 700,
+                              marginTop: 8,
+                            }}
+                          >
+                            {regenerating ? "Loading…" : gridPreviewActive ? "Exit underprint preview" : "Underprint preview"}
+                          </button>
                         </>
                       );
                     })()}
@@ -2305,7 +2164,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                       Select a region to edit. Tools are in the floating panel on the canvas.
                     </p>
                   </div>
-                  <div className="ufm-scroll" style={{ flex: 1, overflowY: "auto", padding: "8px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ flex: 1, overflowY: "auto", padding: "8px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
                     {page.areas.length === 0 && (
                       <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.45, padding: "8px 0" }}>
                         No regions yet. Draw directly on the flyer, or click Add Region.
@@ -2348,10 +2207,10 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                       Departments
                     </div>
                     <p style={{ fontSize: 10, color: "#64748b", margin: 0, lineHeight: 1.45 }}>
-                      Select a department to style product cells. Ghost slots appear on the canvas once a sample cell exists.
+                      Select a department to style its product grid on the flyer.
                     </p>
                   </div>
-                  <div className="ufm-scroll" style={{ flex: 1, overflowY: "auto", padding: "8px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ flex: 1, overflowY: "auto", padding: "8px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
                     {page.areas.map(area => (
                       <div
                         key={area.id}
@@ -2364,7 +2223,9 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                       >
                         <span style={{ fontSize: 12, color: "#e2e8f0" }}>{deptLabel(area.departmentKey)}</span>
                         <div style={{ fontSize: 10, color: "#64748b" }}>
-                          {area.sampleCell ? "Sample cell ready" : "No cell yet"}
+                          {area.cardStyle
+                            ? `${area.rows ?? DEFAULT_ROWS}×${area.cols ?? DEFAULT_COLS} grid`
+                            : "Not styled"}
                         </div>
                       </div>
                     ))}
@@ -2378,8 +2239,8 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                     </p>
                     <button
                       onClick={() => goToStep("components")}
-                      disabled={!page.areas.some(a => a.sampleCell && a.cardStyle)}
-                      style={{ padding: "8px 0", background: page.areas.some(a => a.sampleCell && a.cardStyle) ? "#3b82f6" : "#334155", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 14, cursor: page.areas.some(a => a.sampleCell && a.cardStyle) ? "pointer" : "not-allowed" }}
+                      disabled={!page.areas.some(a => a.cardStyle)}
+                      style={{ padding: "8px 0", background: page.areas.some(a => a.cardStyle) ? "#3b82f6" : "#334155", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 14, cursor: page.areas.some(a => a.cardStyle) ? "pointer" : "not-allowed" }}
                     >
                       Next: Editable Fields →
                     </button>
@@ -2395,7 +2256,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                       Select a field to edit. Tools are in the floating panel on the canvas.
                     </p>
                   </div>
-                  <div className="ufm-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "10px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "10px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
                     <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                       Editable Fields ({editableBoxes.length})
                     </div>

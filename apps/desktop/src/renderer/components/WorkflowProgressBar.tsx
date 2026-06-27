@@ -16,9 +16,10 @@ type Props = {
   currentStep: number;
   onNavigate: (step: number) => void;
   onExportClick?: () => void;
+  onHelpClick?: () => void;
 };
 
-export default function WorkflowProgressBar({ currentStep, onNavigate, onExportClick }: Props) {
+export default function WorkflowProgressBar({ currentStep, onNavigate, onExportClick, onHelpClick }: Props) {
   const handleClick = (index: number) => {
     // Enforce linear progression: only allow navigating to completed or current steps
     if (index > currentStep) return;
@@ -34,7 +35,11 @@ export default function WorkflowProgressBar({ currentStep, onNavigate, onExportC
       borderBottom: "1px solid #e5e7eb",
       padding: "7px 32px 8px",
       marginBottom: 6,
+      display: "flex",
+      alignItems: "flex-start",
+      gap: 12,
     }}>
+      <div style={{ flex: 1, position: "relative" }}>
       <div style={{ position: "relative", display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         {/* Grey track (full width) */}
         <div style={{
@@ -125,6 +130,35 @@ export default function WorkflowProgressBar({ currentStep, onNavigate, onExportC
           );
         })}
       </div>
+      </div>
+      {onHelpClick && (
+        <button
+          type="button"
+          onClick={onHelpClick}
+          title="Open User Manual"
+          style={{
+            flexShrink: 0,
+            width: 28,
+            height: 28,
+            marginTop: 2,
+            borderRadius: "50%",
+            border: "1px solid #d1d5db",
+            background: "#fff",
+            color: "#6b7280",
+            fontSize: 14,
+            fontWeight: 700,
+            cursor: "pointer",
+            lineHeight: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = "#4C6EF5"; e.currentTarget.style.color = "#4C6EF5"; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = "#d1d5db"; e.currentTarget.style.color = "#6b7280"; }}
+        >
+          ?
+        </button>
+      )}
     </div>
   );
 }

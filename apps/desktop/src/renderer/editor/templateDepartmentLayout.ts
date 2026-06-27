@@ -1,4 +1,5 @@
 import type { CardDef } from "../../../../shared/flyer/layout/layoutCardRows";
+import { deriveRowCount, deriveActiveRowCount } from "../../../../shared/flyer/layout/layoutCardRows";
 import { autoLayoutCards } from "../../../../shared/flyer/layout/autoLayoutCards";
 import {
   DepartmentAreaDef,
@@ -29,18 +30,21 @@ function applyTemplateStyleToCards(cards: CardDef[], area: DepartmentAreaDef | n
   return cards.map(c => ({ ...defaults, ...c }));
 }
 
-function layoutCardsForRegion(
-  itemIds: string[],
-  regionWidth: number,
-  defaultRows: number,
-  opts?: CardLayoutOpts
-): CardDef[] {
-  return autoLayoutCards({
-    itemIds,
-    regionWidth,
-    defaultRows,
-    targetRows: opts?.targetRows,
-  });
+/**
+ * Auto-compute the ideal row count from product count and region dimensions.
+ * Targets portrait-ish cells (~1.5 height/width ratio) that fill the region naturally.
+ * Result: 1 product → 1 row, 16 products in an 800×600 region → ~4 rows.
+ */
+export function computeAutoRows(
+  itemCount: number,
+  region: { width: number; height: number },
+): number {
+  if (itemCount <= 1) return 1;
+  const TARGET_CELL_ASPECT = 1.5; // target height/width ratio for a product cell
+  const regionAspect = region.width / Math.max(1, region.height);
+  const rowsRaw = Math.sqrt(itemCount * TARGET_CELL_ASPECT / regionAspect);
+  const rows = Math.max(1, Math.round(rowsRaw));
+  return Math.min(rows, itemCount); // never more rows than items
 }
 
 /** Card layout for a department — original dynamic row/column packing. */
@@ -52,25 +56,25 @@ export function buildCardLayoutForDepartment(
 ): CardDef[] {
   const area = findDepartmentArea(config, department);
   if (area) {
-    const defaultRows = area.rows ?? DEFAULT_ROWS;
-    const cards = layoutCardsForRegion(
+    // Auto-compute rows from product count; user's explicit targetRows (from toolbar) overrides
+    const autoRows = computeAutoRows(itemIds.length, area.productRegion);
+    const cards = autoLayoutCards({
       itemIds,
-      area.productRegion.width,
-      defaultRows,
-      opts
-    );
+      regionWidth: area.productRegion.width,
+      targetRows: opts?.targetRows ?? autoRows,
+    });
     return applyTemplateStyleToCards(cards, area);
   }
 
   const page = findPageForDepartment(config, department);
   const deptDef = page?.departments[department];
   if (deptDef && isCardDepartment(deptDef)) {
-    return layoutCardsForRegion(
+    const autoRows = computeAutoRows(itemIds.length, deptDef.region);
+    return autoLayoutCards({
       itemIds,
-      deptDef.region.width,
-      deptDef.rows,
-      opts
-    );
+      regionWidth: deptDef.region.width,
+      targetRows: opts?.targetRows ?? autoRows,
+    });
   }
 
   return autoLayoutCards({ itemIds, regionWidth: 800, targetRows: opts?.targetRows });
@@ -123,6 +127,35 @@ function mergeCardPreservation(
   });
 }
 
+function regionWidthForDepartment(
+  config: FlyerTemplateConfig,
+  department: string,
+): number {
+  const area = findDepartmentArea(config, department);
+  if (area) return area.productRegion.width;
+  const page = findPageForDepartment(config, department);
+  const deptDef = page?.departments[department];
+  if (deptDef && isCardDepartment(deptDef)) return deptDef.region.width;
+  return 800;
+}
+
+/** Re-pack products when they were dropped into an oversized empty grid. */
+export function compactInflatedCardLayout(
+  layout: CardDef[],
+  itemIds: string[],
+  regionWidth: number,
+): CardDef[] {
+  if (!layout.length || !itemIds.length) return layout;
+  const activeRows = deriveActiveRowCount(layout);
+  const layoutRows = deriveRowCount(layout);
+  if (layoutRows <= activeRows) return layout;
+  return autoLayoutCards({
+    itemIds,
+    regionWidth,
+    targetRows: activeRows,
+  });
+}
+
 /** Build or reuse card layout so every discount item gets a slot. */
 export function reconcileCardLayoutForDepartment(
   config: FlyerTemplateConfig,
@@ -131,11 +164,17 @@ export function reconcileCardLayoutForDepartment(
   existingLayout?: CardDef[] | null,
   opts?: CardLayoutOpts
 ): CardDef[] {
-  if (!cardLayoutNeedsRebuild(existingLayout, itemIds)) {
-    return existingLayout!;
+  const regionWidth = regionWidthForDepartment(config, department);
+  let layout = existingLayout;
+  if (layout?.length && itemIds.length) {
+    layout = compactInflatedCardLayout(layout, itemIds, regionWidth);
+  }
+
+  if (!cardLayoutNeedsRebuild(layout, itemIds)) {
+    return layout ?? existingLayout!;
   }
   const built = buildCardLayoutForDepartment(config, department, itemIds, opts);
-  return mergeCardPreservation(built, existingLayout);
+  return mergeCardPreservation(built, layout ?? existingLayout);
 }
 
 /** Default row count from wizard department metadata. */
@@ -149,4 +188,18 @@ export function defaultRowsForDepartment(
   const deptDef = page?.departments[department];
   if (deptDef && isCardDepartment(deptDef)) return deptDef.rows;
   return DEFAULT_ROWS;
+}
+
+/** Align saved toolbar row counts with the actual card layout on disk. */
+export function reconcileRowCountsWithLayouts(
+  counts: Record<string, number>,
+  layouts?: Record<string, CardDef[] | null | undefined>,
+): Record<string, number> {
+  if (!layouts) return counts;
+  const next = { ...counts };
+  for (const [dept, layout] of Object.entries(layouts)) {
+    if (!layout?.length) continue;
+    next[dept] = deriveActiveRowCount(layout);
+  }
+  return next;
 }

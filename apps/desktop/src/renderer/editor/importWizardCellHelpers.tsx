@@ -17,43 +17,7 @@ export type SampleCellDef = {
 
 export const DEFAULT_ROWS = 3;
 export const DEFAULT_COLS = AUTOMATION_COLS_PER_ROW;
-const MIN_CELL = 48;
-export const TARGET_CELL_SIZE_MIN = 1;
-export const TARGET_CELL_SIZE_MAX = 100;
-
-export function clampTargetCellSize(v: number): number {
-  return Math.max(TARGET_CELL_SIZE_MIN, Math.min(TARGET_CELL_SIZE_MAX, Math.round(v)));
-}
-
-export function gridInnerBounds(
-  region: { width: number; height: number },
-  gridLayout: GridLayoutDef = {}
-) {
-  const insetTop = Math.max(0, gridLayout.insetTop ?? 0);
-  const insetLeft = Math.max(0, gridLayout.insetLeft ?? 0);
-  const insetRight = Math.max(0, gridLayout.insetRight ?? 0);
-  const insetBottom = Math.max(0, gridLayout.insetBottom ?? 0);
-  return {
-    width: Math.max(0, region.width - insetLeft - insetRight),
-    height: Math.max(0, region.height - insetTop - insetBottom),
-  };
-}
-
-/** How many rows/cols fit a target cell size inside padded grid bounds. */
-export function suggestRowsColsForCellSize(
-  region: { width: number; height: number },
-  cellW: number,
-  cellH: number,
-  gridLayout: GridLayoutDef = {}
-): { rows: number; cols: number } {
-  const gap = Math.max(0, gridLayout.cellGap ?? 0);
-  const inner = gridInnerBounds(region, gridLayout);
-  const w = Math.max(TARGET_CELL_SIZE_MIN, cellW);
-  const h = Math.max(TARGET_CELL_SIZE_MIN, cellH);
-  const cols = Math.max(1, Math.floor((inner.width + gap) / (w + gap)));
-  const rows = Math.max(1, Math.floor((inner.height + gap) / (h + gap)));
-  return { rows, cols };
-}
+const MIN_CELL = 1;
 
 /** Actual cell dimensions produced by the current grid config. */
 export function getComputedCellSize(
@@ -67,45 +31,6 @@ export function getComputedCellSize(
   return { width: cell.width, height: cell.height };
 }
 
-/** Sensible initial target — roughly 5×4 cells instead of a few huge blocks. */
-export function defaultTargetCellSize(
-  region: { width: number; height: number },
-  gridLayout: GridLayoutDef = {}
-): { width: number; height: number } {
-  const gl = gridLayout.insetTop != null ? gridLayout : defaultGridPadding(region);
-  const inner = gridInnerBounds(region, gl);
-  const gap = gl.cellGap ?? 0;
-  const cols = 5;
-  const rows = 4;
-  return {
-    width: Math.max(MIN_CELL, Math.floor((inner.width - gap * (cols - 1)) / cols)),
-    height: Math.max(MIN_CELL, Math.floor((inner.height - gap * (rows - 1)) / rows)),
-  };
-}
-
-export function resolveTargetCellSize(
-  area: DepartmentAreaDef & { sampleCell?: SampleCellDef }
-): { width: number; height: number } {
-  const gl = area.gridLayout ?? defaultGridPadding(area.productRegion);
-  if (area.gridLayout?.targetCellWidth && area.gridLayout?.targetCellHeight) {
-    return {
-      width: clampTargetCellSize(area.gridLayout.targetCellWidth),
-      height: clampTargetCellSize(area.gridLayout.targetCellHeight),
-    };
-  }
-  if (area.sampleCell) {
-    return {
-      width: clampTargetCellSize(area.sampleCell.width),
-      height: clampTargetCellSize(area.sampleCell.height),
-    };
-  }
-  const defaults = defaultTargetCellSize(area.productRegion, gl);
-  return {
-    width: clampTargetCellSize(defaults.width),
-    height: clampTargetCellSize(defaults.height),
-  };
-}
-
 export function defaultCardStyle(): CardStyleDef {
   return {
     backgroundColor: "#ffffff",
@@ -116,28 +41,59 @@ export function defaultCardStyle(): CardStyleDef {
   };
 }
 
-/** Pleasing inset/gap defaults — ~4% of the shorter department edge. */
-export function defaultGridPadding(region: { width: number; height: number }): GridLayoutDef {
-  const pad = Math.max(10, Math.round(Math.min(region.width, region.height) * 0.04));
-  const gap = Math.max(6, Math.round(pad * 0.65));
+/** Unified spacing — fixed 12px gap/inset on all sides for all departments. */
+export function defaultGridPadding(_region?: { width: number; height: number }): GridLayoutDef {
+  const gap = 12;
   return {
-    insetTop: pad,
-    insetLeft: pad,
-    insetRight: pad,
-    insetBottom: pad,
+    insetTop: gap,
+    insetLeft: gap,
+    insetRight: gap,
+    insetBottom: gap,
     cellGap: gap,
   };
 }
 
-export function createSampleCell(region: { width: number; height: number }, snap: (v: number) => number): SampleCellDef {
-  const w = snap(Math.max(MIN_CELL, region.width * 0.3));
-  const h = snap(Math.max(MIN_CELL, region.height * 0.32));
+/** Initialize department for the cellStyle step — apply default grid padding and card style. */
+export function initializeAreaForCellStyle(area: DepartmentAreaDef): DepartmentAreaDef {
   return {
-    x: snap((region.width - w) / 2),
-    y: snap((region.height - h) / 2),
-    width: w,
-    height: h,
+    ...area,
+    cardStyle: area.cardStyle ?? defaultCardStyle(),
+    gridLayout: area.gridLayout ?? defaultGridPadding(area.productRegion),
+    rows: area.rows ?? DEFAULT_ROWS,
+    cols: area.cols ?? DEFAULT_COLS,
   };
+}
+
+/** Wizard-only preview cell — centered inside the department, sized from the target grid cell. */
+export function createSampleCell(
+  region: { width: number; height: number },
+  size?: { width: number; height: number },
+): SampleCellDef {
+  // Cap at one cell of a DEFAULT_COLS × DEFAULT_ROWS grid so the sample never fills the area.
+  const maxWidth = Math.round(region.width / DEFAULT_COLS);
+  const maxHeight = Math.round(region.height / DEFAULT_ROWS);
+  const width = Math.min(
+    maxWidth,
+    Math.max(MIN_CELL, size?.width ?? Math.round(region.width * 0.22)),
+  );
+  const height = Math.min(
+    maxHeight,
+    Math.max(MIN_CELL, size?.height ?? Math.round(region.height * 0.18)),
+  );
+  return {
+    x: Math.round((region.width - width) / 2),
+    y: Math.round((region.height - height) / 2),
+    width,
+    height,
+  };
+}
+
+export function sampleCellForArea(
+  area: DepartmentAreaDef & { sampleCell?: SampleCellDef },
+): SampleCellDef {
+  if ((area as any).sampleCell) return (area as any).sampleCell;
+  const computed = getComputedCellSize(area);
+  return createSampleCell(area.productRegion, computed ?? undefined);
 }
 
 export function cellBoxShadow(cs: CardStyleDef, selected: boolean): string | undefined {
@@ -146,11 +102,13 @@ export function cellBoxShadow(cs: CardStyleDef, selected: boolean): string | und
   return undefined;
 }
 
-export const CELL_GHOST_PREVIEW_ALPHA = 0.22;
+export const CELL_GHOST_PREVIEW_ALPHA = 0.75;
 
 export type StyledCellRenderOpts = {
   previewAlpha?: number;
   showMockContent?: boolean;
+  previewRows?: number;
+  previewCols?: number;
 };
 
 /** Placeholder image, title, and price inside a product cell. */
@@ -300,26 +258,56 @@ export function renderStyledCell(
   return renderStyledCellShell(cs, rect, scale, selected, opts, key);
 }
 
+/** Inner grid bounds (after padding) relative to productRegion origin. */
+export function getDepartmentGridBounds(area: DepartmentAreaDef) {
+  const rows = Math.max(1, area.rows ?? DEFAULT_ROWS);
+  const cols = Math.max(1, area.cols ?? DEFAULT_COLS);
+  const { gridBounds } = computeProductGrid(area.productRegion, rows, cols, area.gridLayout ?? {});
+  const pr = area.productRegion;
+  return {
+    x: gridBounds.x - pr.x,
+    y: gridBounds.y - pr.y,
+    width: gridBounds.width,
+    height: gridBounds.height,
+  };
+}
+
 export function renderDepartmentGrid(
   area: DepartmentAreaDef & { id: string },
   scale: number,
   selected: boolean,
-  opts?: { previewAlpha?: number }
+  opts?: StyledCellRenderOpts
 ) {
   const cs: CardStyleDef = area.cardStyle ?? defaultCardStyle();
   const rows = Math.max(1, area.rows ?? DEFAULT_ROWS);
   const cols = Math.max(1, area.cols ?? DEFAULT_COLS);
   const { cells } = computeProductGrid(area.productRegion, rows, cols, area.gridLayout ?? {});
 
-  return cells.map((cell: { x: number; y: number; width: number; height: number; row: number; col: number }) => {
-    const rel = {
-      x: cell.x - area.productRegion.x,
-      y: cell.y - area.productRegion.y,
-      width: cell.width,
-      height: cell.height,
-    };
-    return renderStyledCell(cs, rel, scale, selected, `${area.id}-${cell.row}-${cell.col}`, opts);
-  });
+  const maxRow = opts?.previewRows ?? rows;
+  const maxCol = opts?.previewCols ?? cols;
+
+  return cells
+    .filter((cell: { row: number; col: number }) => cell.row < maxRow && cell.col < maxCol)
+    .map((cell: { x: number; y: number; width: number; height: number; row: number; col: number }) => {
+      const rel = {
+        x: cell.x - area.productRegion.x,
+        y: cell.y - area.productRegion.y,
+        width: cell.width,
+        height: cell.height,
+      };
+      return renderStyledCell(cs, rel, scale, selected, `${area.id}-${cell.row}-${cell.col}`, opts);
+    });
+}
+
+/** Render one centered sample cell for the wizard step-2 canvas preview. */
+export function renderCenteredSampleCell(
+  area: DepartmentAreaDef & { id: string; sampleCell?: SampleCellDef },
+  scale: number,
+  selected: boolean,
+): React.ReactNode {
+  const cs: CardStyleDef = area.cardStyle ?? defaultCardStyle();
+  const sample = sampleCellForArea(area);
+  return renderStyledCell(cs, sample, scale, selected, `${area.id}-sample`, { showMockContent: false });
 }
 
 /** Same grid layout the automation editor uses — dynamic cols per row, adjustable row count. */
@@ -346,7 +334,7 @@ export function withAutomationGridDefaults(area: DepartmentAreaDef): DepartmentA
   return {
     ...area,
     rows,
-    cols: AUTOMATION_COLS_PER_ROW,
+    cols: area.cols ?? AUTOMATION_COLS_PER_ROW,
     gridLayout: area.gridLayout ?? defaultGridPadding(area.productRegion),
   };
 }
@@ -381,7 +369,7 @@ export function renderAutomationGridPreview(
 export function renderReadonlyDepartmentFill(
   area: DepartmentAreaDef & { id: string },
   scale: number,
-  opts?: { dimmed?: boolean; label?: string }
+  opts?: { dimmed?: boolean; label?: string; selected?: boolean; borderColor?: string }
 ) {
   const r = area.productRegion;
   const regionBg = area.regionStyle?.backgroundColor ?? "#f1f5f9";
@@ -400,6 +388,7 @@ export function renderReadonlyDepartmentFill(
           background: regionBg,
           opacity: opts?.dimmed ? 0.45 : 1,
           borderRadius: regionRadius,
+          border: opts?.selected && opts?.borderColor ? `2px solid ${opts.borderColor}` : undefined,
           ...(regionRadius > 0 ? { clipPath: `inset(0 round ${regionRadius}px)` } : {}),
           boxSizing: "border-box",
         }}

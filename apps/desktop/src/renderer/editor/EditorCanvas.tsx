@@ -15,9 +15,9 @@ import type { PanelImageDropHandler } from "./panelImageDrag";
 import { computeTextNudgePatch, TEXT_NUDGE_STEP, TEXT_NUDGE_STEP_FAST } from "./textElementNudge";
 import { layoutFlyer, layoutFlyerSlots } from "../../../../shared/flyer/layout/layoutFlyer";
 import { isSlottedDepartment, isCardDepartment } from "./loadFlyerTemplateConfig";
-import { layoutCardRows, computeCardRects, deriveRowCount, resolveLayoutRows, CARD_GAP, CARD_BG } from "../../../../shared/flyer/layout/layoutCardRows";
+import { layoutCardRows, computeCardRects, deriveRowCount, resolveLayoutRows, resolveLayoutRowsForRendering, CARD_GAP, DEFAULT_CELL_GAP, CARD_BG } from "../../../../shared/flyer/layout/layoutCardRows";
 
-import { IngestItem, CardDef, CardLayout, ReplacementJob } from "../types";
+import { IngestItem, CardDef, CardLayout, ReplacementJob, AddProductFormMeta } from "../types";
 import MergeSelectionDialog, { MergeCandidate } from "./MergeSelectionDialog";
 import TextSideToolbar from "./TextSideToolbar";
 import { applyTextStylePatch, textStylePatchFromCard, type TextFieldSection } from "./textFieldStyle";
@@ -38,13 +38,6 @@ type GroupDivider = {
   height: number; // full height of combined row range
 };
 
-type GroupVDivider = {
-  topCardIds: string[];
-  bottomCardIds: string[];
-  x: number;      // left of combined x range (absolute pixels)
-  y: number;      // center of the gap (absolute pixels)
-  width: number;  // full width of combined x range
-};
 
 function getItemPriceDisplay(item: any): string {
   const rawSaleFromDiscount = item?.result?.discount?.price ?? item?.result?.discount?.display;
@@ -100,10 +93,13 @@ export default function EditorCanvas({
   flyerWeekStart,
   replacementJobs,
   onCancelReplacementJob,
+  onEnqueueAddProduct,
+  onEnqueueAddProductSeries,
   selectedItemId,
   onSelectItem,
   onPanelImageDrop,
   onApplyTextStyleGlobally,
+  onHistoryCommit,
   departmentLabel,
   zoom,
 }: {
@@ -140,10 +136,19 @@ export default function EditorCanvas({
   onCutoutErased?: (itemId: string, newPath: string) => void;
   replacementJobs?: ReplacementJob[];
   onCancelReplacementJob?: (jobId: string) => void;
+  onEnqueueAddProduct?: (
+    url: string,
+    options: { slotIndex?: number; cardId?: string; formMeta?: AddProductFormMeta },
+  ) => string;
+  onEnqueueAddProductSeries?: (
+    urls: string[],
+    options: { slotIndex?: number; cardId?: string; formMeta?: AddProductFormMeta },
+  ) => string;
   selectedItemId?: string | null;
   onSelectItem?: (id: string | null) => void;
   onPanelImageDrop?: PanelImageDropHandler;
   onApplyTextStyleGlobally?: (section: TextFieldSection, patch: Partial<CardDef>) => void;
+  onHistoryCommit?: (label: string, departments?: string[]) => void;
   departmentLabel?: string;
   zoom?: number;
 }) {
@@ -152,6 +157,7 @@ export default function EditorCanvas({
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   const [addImageModalSlot, setAddImageModalSlot] = useState<number | null>(null);
   const [addImageModalCardId, setAddImageModalCardId] = useState<string | null>(null);
+  const [addProductSessionItemIds, setAddProductSessionItemIds] = useState<Set<string>>(new Set());
   const [eraserItemId, setEraserItemId] = useState<string | null>(null);
   // load template config (only when template changes, not on every dept switch)
   useEffect(() => {
@@ -401,7 +407,6 @@ export default function EditorCanvas({
   } | null>(null);
 
   const [hoveredHMerge, setHoveredHMerge] = useState<number | null>(null);
-  const [hoveredVMerge, setHoveredVMerge] = useState<number | null>(null);
   /** Set by the divider mouseup handler when a tiny-movement "click" on the merge button is detected */
   const [pendingClickMerge, setPendingClickMerge] = useState<{ leftCardIds: string[]; rightCardIds: string[] } | null>(null);
 
@@ -411,7 +416,6 @@ export default function EditorCanvas({
     cardId: string;
     startX: number;
     startY: number;
-    timerId: ReturnType<typeof setTimeout>;
   } | null>(null);
   const [swapDrag, setSwapDrag] = useState<{
     cardId: string;
@@ -443,30 +447,58 @@ export default function EditorCanvas({
   // Card placements (for card-based departments)
   const layoutRows = useMemo(() => {
     if (!region || !isCardDepartment(region)) return undefined;
-    return rowCount ?? departmentArea?.rows ?? region.rows;
-  }, [region, rowCount, departmentArea]);
-
-  const cardPlacements = useMemo(() => {
-    if (!page || !region || !isCard || !cardLayout || cardLayout.length === 0) return [];
-    const cardRegion = (region as any).region;
-    return layoutCardRows({
-      cards: cardLayout,
-      region: cardRegion,
-      rows: layoutRows,
-      pageId: page.pageId,
-      regionId: department,
-    });
-  }, [page, region, isCard, cardLayout, department, layoutRows]);
+    return resolveLayoutRowsForRendering(
+      cardLayout ?? [],
+      rowCount,
+      departmentArea?.rows ?? region.rows,
+    );
+  }, [region, rowCount, departmentArea, cardLayout]);
 
   // Exposed so card backgrounds and region background can share the same reference
   const cardRegion: { x: number; y: number; width: number; height: number } | null =
     region && isCardDepartment(region) ? region.region : null;
 
+  // Apply uniform insets: padding from region edge = DEFAULT_CELL_GAP (all four sides equal, all departments).
+  const innerCardRegion = useMemo(() => {
+    if (!cardRegion) return null;
+    return {
+      x: cardRegion.x + DEFAULT_CELL_GAP,
+      y: cardRegion.y + DEFAULT_CELL_GAP,
+      width: Math.max(1, cardRegion.width - 2 * DEFAULT_CELL_GAP),
+      height: Math.max(1, cardRegion.height - 2 * DEFAULT_CELL_GAP),
+    };
+  }, [cardRegion]);
+
+  const innerCardCellGap = DEFAULT_CELL_GAP;
+
+  // Scale card widths proportionally when x-axis insets shrink the effective region
+  const innerCardLayout = useMemo(() => {
+    if (!cardLayout || !innerCardRegion || !cardRegion) return cardLayout;
+    if (innerCardRegion.width === cardRegion.width) return cardLayout;
+    const scale = innerCardRegion.width / cardRegion.width;
+    return cardLayout.map(card => ({
+      ...card,
+      widthPx: Math.max(1, Math.round(card.widthPx * scale)),
+    }));
+  }, [cardLayout, innerCardRegion, cardRegion]);
+
+  const cardPlacements = useMemo(() => {
+    if (!page || !region || !isCard || !innerCardLayout || innerCardLayout.length === 0) return [];
+    return layoutCardRows({
+      cards: innerCardLayout,
+      region: innerCardRegion!,
+      rows: layoutRows,
+      gap: innerCardCellGap,
+      pageId: page.pageId,
+      regionId: department,
+    });
+  }, [page, region, isCard, innerCardLayout, innerCardRegion, innerCardCellGap, department, layoutRows]);
+
   // Card rects (for rendering backgrounds of all cards including empty)
   const cardRects = useMemo(() => {
-    if (!region || !isCard || !cardLayout || cardLayout.length === 0) return [];
-    return computeCardRects({ cards: cardLayout, region: cardRegion!, rows: layoutRows });
-  }, [region, isCard, cardLayout, layoutRows, cardRegion]);
+    if (!region || !isCard || !innerCardLayout || innerCardLayout.length === 0) return [];
+    return computeCardRects({ cards: innerCardLayout, region: innerCardRegion!, rows: layoutRows, gap: innerCardCellGap });
+  }, [region, isCard, innerCardLayout, layoutRows, innerCardRegion, innerCardCellGap]);
   const cardRectsRef = useRef(cardRects);
   cardRectsRef.current = cardRects;
 
@@ -564,12 +596,16 @@ export default function EditorCanvas({
     const rightCard = cardLayout.find(c => c.id === rightCardId);
     if (!leftCard || !rightCard) return;
 
+    // Use rendered widths (from cardRects) as drag baseline so resize is accurate
+    const leftRect = cardRects.find(r => r.cardId === leftCardId);
+    const rightRect = cardRects.find(r => r.cardId === rightCardId);
+
     setDividerDrag({
       leftCardId,
       rightCardId,
       startX: e.clientX,
-      leftStartWidth: leftCard.widthPx,
-      rightStartWidth: rightCard.widthPx,
+      leftStartWidth: leftRect?.width ?? leftCard.widthPx,
+      rightStartWidth: rightRect?.width ?? rightCard.widthPx,
       originalLayout: cardLayout,
       mergeIds,
     });
@@ -745,6 +781,10 @@ export default function EditorCanvas({
     handleUpdateSelectedCard({ titleEffect: effect as CardDef["titleEffect"] });
   }, [handleUpdateSelectedCard]);
 
+  const handleSelectedTitleScaleChange = useCallback((scale: number) => {
+    handleUpdateSelectedCard({ titleScale: scale });
+  }, [handleUpdateSelectedCard]);
+
   const handleSelectedPriceBgChange = useCallback((color: string | undefined) => {
     handleUpdateSelectedCard({ priceBg: color });
   }, [handleUpdateSelectedCard]);
@@ -755,6 +795,10 @@ export default function EditorCanvas({
 
   const handleSelectedPriceEffectChange = useCallback((effect: string | undefined) => {
     handleUpdateSelectedCard({ priceEffect: effect as CardDef["priceEffect"] });
+  }, [handleUpdateSelectedCard]);
+
+  const handleSelectedPriceScaleChange = useCallback((scale: number) => {
+    handleUpdateSelectedCard({ priceScale: scale });
   }, [handleUpdateSelectedCard]);
 
   const handleSelectedPriceCompChange = useCallback((patch: Partial<PriceCompValues>) => {
@@ -790,8 +834,9 @@ export default function EditorCanvas({
     const source = cardLayout.find(c => c.itemId === selectedItemId);
     if (!source) return;
     const patch = textStylePatchFromCard(source, activeToolbarSection);
+    onHistoryCommit?.('Apply style to department');
     onCardLayoutChange(cardLayout.map(c => c.itemId ? applyTextStylePatch(c, patch) : c));
-  }, [selectedItemId, cardLayout, onCardLayoutChange, activeToolbarSection]);
+  }, [selectedItemId, cardLayout, onCardLayoutChange, activeToolbarSection, onHistoryCommit]);
 
   const handleApplyTextStyleGlobally = useCallback(() => {
     if (!selectedItemId || !cardLayout || !onApplyTextStyleGlobally || !activeToolbarSection) return;
@@ -1257,13 +1302,25 @@ export default function EditorCanvas({
   // Global swap drag mouse handlers (registered once — uses refs to avoid stale closures)
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      // Cancel hold if mouse moved too far before timer fired
+      // Activate swap drag immediately once pointer moves 8px while held
       if (holdPendingRef.current) {
         const dx = e.clientX - holdPendingRef.current.startX;
         const dy = e.clientY - holdPendingRef.current.startY;
         if (Math.hypot(dx, dy) > 8) {
-          clearTimeout(holdPendingRef.current.timerId);
+          const { cardId } = holdPendingRef.current;
           holdPendingRef.current = null;
+          if (!scaledCanvasRef.current) return;
+          const canvasRect2 = scaledCanvasRef.current.getBoundingClientRect();
+          const cx = (e.clientX - canvasRect2.left) / PREVIEW_SCALE;
+          const cy = (e.clientY - canvasRect2.top) / PREVIEW_SCALE;
+          let targetCardId: string | null = null;
+          let closestDist = Infinity;
+          for (const r of cardRectsRef.current) {
+            if (r.cardId === cardId) continue;
+            const d = Math.hypot(cx - (r.x + r.width / 2), cy - (r.y + r.height / 2));
+            if (d < closestDist) { closestDist = d; targetCardId = r.cardId; }
+          }
+          setSwapDrag({ cardId, x: e.clientX, y: e.clientY, targetCardId });
           return;
         }
       }
@@ -1287,7 +1344,6 @@ export default function EditorCanvas({
 
     const handleMouseUp = () => {
       if (holdPendingRef.current) {
-        clearTimeout(holdPendingRef.current.timerId);
         holdPendingRef.current = null;
       }
 
@@ -1378,12 +1434,32 @@ export default function EditorCanvas({
 
   // ---------- HANDLERS: Add/Replace Images ----------
   const handleAddImage = (slotIndex: number) => {
+    setAddProductSessionItemIds(new Set());
     setAddImageModalSlot(slotIndex);
   };
 
   const handleAddImageToCard = (cardId: string) => {
+    setAddProductSessionItemIds(new Set());
     setAddImageModalCardId(cardId);
   };
+
+  const closeAddImageModal = () => {
+    setAddImageModalSlot(null);
+    setAddImageModalCardId(null);
+  };
+
+  const getAddProductOptions = () => ({
+    slotIndex: addImageModalSlot != null && addImageModalSlot >= 0 ? addImageModalSlot : undefined,
+    cardId: addImageModalCardId ?? undefined,
+  });
+
+  const trackAddProductItemId = (itemId: string) => {
+    setAddProductSessionItemIds(prev => new Set([...prev, itemId]));
+  };
+
+  const addProductModalJobs = (replacementJobs ?? []).filter(j =>
+    addProductSessionItemIds.has(j.itemId)
+  );
 
   const handleModalLocalFile = async (slotIndex: number, filePath: string) => {
     if (!onEnqueue) return;
@@ -1397,23 +1473,22 @@ export default function EditorCanvas({
   const handleModalLocalFileForCard = async (cardId: string, filePath: string) => {
     if (!onEnqueue || !onCardLayoutChange || !cardLayout) return;
     try {
-      // Enqueue the image (no slotIndex needed for card-based)
       await onEnqueue([filePath]);
     } catch (err) {
       console.error("Failed to enqueue image for card:", err);
     }
   };
 
-  const handleModalItemReady = (item: IngestItem) => {
-    onAddItem?.(item);
+  const handleEnqueueAddProductUrl = (url: string, formMeta: AddProductFormMeta) => {
+    if (!onEnqueueAddProduct) return;
+    const itemId = onEnqueueAddProduct(url, { ...getAddProductOptions(), formMeta });
+    trackAddProductItemId(itemId);
+  };
 
-    // If we were adding to a specific card, link them
-    if (addImageModalCardId && cardLayout && onCardLayoutChange) {
-      const updated = cardLayout.map(c =>
-        c.id === addImageModalCardId ? { ...c, itemId: item.id } : c
-      );
-      onCardLayoutChange(updated);
-    }
+  const handleEnqueueAddProductSeries = (urls: string[], formMeta: AddProductFormMeta) => {
+    if (!onEnqueueAddProductSeries) return;
+    const itemId = onEnqueueAddProductSeries(urls, { ...getAddProductOptions(), formMeta });
+    trackAddProductItemId(itemId);
   };
 
   const handleReplaceImage = async (itemId: string) => {
@@ -1461,35 +1536,12 @@ export default function EditorCanvas({
 
     if (!hit) return;
 
-    // Cancel any in-flight hold
-    if (holdPendingRef.current) {
-      clearTimeout(holdPendingRef.current.timerId);
-    }
+    holdPendingRef.current = null;
 
     const { clientX: startX, clientY: startY } = e;
     const cardId = hit.cardId;
 
-    const timerId = setTimeout(() => {
-      if (!holdPendingRef.current) return; // cleared by mouseup or movement
-      holdPendingRef.current = null;
-
-      // Find closest card at current position
-      const canvasRectNow = scaledCanvasRef.current?.getBoundingClientRect();
-      let targetCardId: string | null = null;
-      if (canvasRectNow) {
-        const cx = (startX - canvasRectNow.left) / PREVIEW_SCALE;
-        const cy = (startY - canvasRectNow.top) / PREVIEW_SCALE;
-        let closestDist = Infinity;
-        for (const r of cardRectsRef.current) {
-          if (r.cardId === cardId) continue;
-          const d = Math.hypot(cx - (r.x + r.width / 2), cy - (r.y + r.height / 2));
-          if (d < closestDist) { closestDist = d; targetCardId = r.cardId; }
-        }
-      }
-      setSwapDrag({ cardId, x: startX, y: startY, targetCardId });
-    }, 350);
-
-    holdPendingRef.current = { cardId, startX, startY, timerId };
+    holdPendingRef.current = { cardId, startX, startY };
   };
 
   // Build group dividers — one per minimal matching boundary segment.
@@ -1500,9 +1552,7 @@ export default function EditorCanvas({
   const groupDividers: GroupDivider[] = [];
 
   if (isCard && cardRects.length > 0 && cardLayout) {
-    const cardRegion = (region as any).region;
-    const rowCount = resolveLayoutRows(cardLayout, layoutRows);
-    const rowHeight = (cardRegion.height - (rowCount - 1) * CARD_GAP) / rowCount;
+    const gap = innerCardCellGap;
 
     const getRectForCard = (cardId: string) => cardRects.find(r => r.cardId === cardId);
     const emitted = new Set<string>();
@@ -1513,15 +1563,14 @@ export default function EditorCanvas({
       emitted.add(key);
 
       const leftCards = leftIds.map(id => cardLayout.find(c => c.id === id)).filter(Boolean) as CardDef[];
-      const leftMinRow = Math.min(...leftCards.map(c => c.row));
-      const rangeSize = leftCards.reduce((sum, c) => sum + (c.rowSpan ?? 1), 0);
-
       const anyLeftRect = getRectForCard(leftCards[0].id);
       if (!anyLeftRect) return;
 
-      const y = cardRegion.y + leftMinRow * (rowHeight + CARD_GAP);
-      const height = rangeSize * rowHeight + (rangeSize - 1) * CARD_GAP;
-      const x = Math.round(anyLeftRect.x + anyLeftRect.width) + CARD_GAP / 2;
+      // Derive y/height from actual rendered rects — matches innerCardRegion geometry
+      const leftRects = leftCards.map(c => getRectForCard(c.id)).filter(Boolean) as typeof cardRects;
+      const y = Math.min(...leftRects.map(r => r.y));
+      const height = Math.max(...leftRects.map(r => r.y + r.height)) - y;
+      const x = Math.round(anyLeftRect.x + anyLeftRect.width) + gap / 2;
 
       groupDividers.push({ leftCardIds: leftIds, rightCardIds: rightIds, x, y, height });
     };
@@ -1537,7 +1586,7 @@ export default function EditorCanvas({
 
       const rightCardIds: string[] = [];
       for (const rect of cardRects) {
-        if (Math.abs(Math.round(rect.x) - (leftRightEdge + CARD_GAP)) > 1) continue;
+        if (Math.abs(Math.round(rect.x) - (leftRightEdge + gap)) > 2) continue;
         const card = cardLayout.find(c => c.id === rect.cardId);
         if (!card) continue;
         const cardMaxRow = card.row + (card.rowSpan ?? 1) - 1;
@@ -1567,7 +1616,7 @@ export default function EditorCanvas({
 
       const leftCardIds: string[] = [];
       for (const rect of cardRects) {
-        if (Math.abs(Math.round(rect.x + rect.width) - (rightLeftEdge - CARD_GAP)) > 1) continue;
+        if (Math.abs(Math.round(rect.x + rect.width) - (rightLeftEdge - gap)) > 2) continue;
         const card = cardLayout.find(c => c.id === rect.cardId);
         if (!card) continue;
         const cardMaxRow = card.row + (card.rowSpan ?? 1) - 1;
@@ -1587,94 +1636,6 @@ export default function EditorCanvas({
   }
 
   // Build group vertical dividers — minimal matching boundary segments (same 2-pass approach as horizontal)
-  const groupVDividers: GroupVDivider[] = [];
-
-  if (isCard && cardRects.length > 0 && cardLayout) {
-    const getVRect = (cardId: string) => cardRects.find(r => r.cardId === cardId);
-    const emittedV = new Set<string>();
-
-    const tryEmitV = (topIds: string[], bottomIds: string[]) => {
-      const key = [...topIds].sort().join(',') + '|' + [...bottomIds].sort().join(',');
-      if (emittedV.has(key)) return;
-      emittedV.add(key);
-
-      const topCards = topIds.map(id => cardLayout.find(c => c.id === id)).filter(Boolean) as CardDef[];
-      const topRects = topCards.map(c => getVRect(c.id)).filter(Boolean) as (typeof cardRects[0])[];
-      if (topRects.length === 0) return;
-
-      const xMin = Math.min(...topRects.map(r => r.x));
-      const xMax = Math.max(...topRects.map(r => r.x + r.width));
-      const anyTopRect = topRects[0];
-
-      groupVDividers.push({
-        topCardIds: topIds,
-        bottomCardIds: bottomIds,
-        x: xMin,
-        y: anyTopRect.y + anyTopRect.height + CARD_GAP / 2,
-        width: xMax - xMin,
-      });
-    };
-
-    // Pass 1: for each top card, find bottom cards fully within its x range
-    for (const topCard of cardLayout) {
-      const topRect = getVRect(topCard.id);
-      if (!topRect) continue;
-
-      const bottomRow = topCard.row + (topCard.rowSpan ?? 1);
-      const topXMin = Math.round(topRect.x);
-      const topXMax = Math.round(topRect.x + topRect.width);
-
-      const bottomCardIds: string[] = [];
-      for (const rect of cardRects) {
-        const card = cardLayout.find(c => c.id === rect.cardId);
-        if (!card || card.row !== bottomRow) continue;
-        const cardXMin = Math.round(rect.x);
-        const cardXMax = Math.round(rect.x + rect.width);
-        if (cardXMin < topXMin - 1 || cardXMax > topXMax + 1) continue;
-        bottomCardIds.push(rect.cardId);
-      }
-
-      if (bottomCardIds.length === 0) continue;
-
-      // Check that bottom cards together fill the top card's width
-      const bottomRects = bottomCardIds.map(id => getVRect(id)).filter(Boolean) as (typeof cardRects[0])[];
-      const totalBottomWidth = bottomRects.reduce((sum, r) => sum + r.width, 0)
-        + (bottomCardIds.length - 1) * CARD_GAP;
-      if (Math.abs(totalBottomWidth - topRect.width) > 2) continue;
-
-      tryEmitV([topCard.id], bottomCardIds);
-    }
-
-    // Pass 2: for each bottom card, find top cards fully within its x range
-    // (handles wide-bottom / multi-top cases not caught by Pass 1)
-    for (const bottomCard of cardLayout) {
-      const bottomRect = getVRect(bottomCard.id);
-      if (!bottomRect) continue;
-
-      const bottomXMin = Math.round(bottomRect.x);
-      const bottomXMax = Math.round(bottomRect.x + bottomRect.width);
-
-      const topCardIds: string[] = [];
-      for (const rect of cardRects) {
-        const card = cardLayout.find(c => c.id === rect.cardId);
-        if (!card || card.row + (card.rowSpan ?? 1) !== bottomCard.row) continue;
-        const cardXMin = Math.round(rect.x);
-        const cardXMax = Math.round(rect.x + rect.width);
-        if (cardXMin < bottomXMin - 1 || cardXMax > bottomXMax + 1) continue;
-        topCardIds.push(rect.cardId);
-      }
-
-      if (topCardIds.length === 0) continue;
-
-      const topRects2 = topCardIds.map(id => getVRect(id)).filter(Boolean) as (typeof cardRects[0])[];
-      const totalTopWidth = topRects2.reduce((sum, r) => sum + r.width, 0)
-        + (topCardIds.length - 1) * CARD_GAP;
-      if (Math.abs(totalTopWidth - bottomRect.width) > 2) continue;
-
-      tryEmitV(topCardIds, [bottomCard.id]);
-    }
-  }
-
   // ── Shared helpers ──
   const getTitle = (item: any) => {
     const title = item?.result?.title;
@@ -1767,10 +1728,10 @@ export default function EditorCanvas({
     // Anchor = topmost card in left group (preserves left column position)
     const anchor = [...leftCards].sort((a, b) => a.row - b.row || a.order - b.order)[0];
 
-    // New width = left column width + gap + right column width
-    const leftWidth = leftCards[0].widthPx;
-    const rightWidth = rightCards[0].widthPx;
-    anchor.widthPx = leftWidth + CARD_GAP + rightWidth;
+    // New width = left column rendered width + gap + right column rendered width
+    const leftRectW = cardRects.find(r => r.cardId === leftCards[0].id)?.width ?? leftCards[0].widthPx;
+    const rightRectW = cardRects.find(r => r.cardId === rightCards[0].id)?.width ?? rightCards[0].widthPx;
+    anchor.widthPx = leftRectW + innerCardCellGap + rightRectW;
 
     // rowSpan covers full combined row range
     const minRow = Math.min(...allCards.map(c => c.row));
@@ -1786,89 +1747,6 @@ export default function EditorCanvas({
 
     // Remove all cards in both groups except anchor
     const allIdSet = new Set([...leftCardIds, ...rightCardIds]);
-    updated = updated.filter(c => c.id === anchor.id || !allIdSet.has(c.id));
-
-    // Re-number order within all affected rows
-    const affectedRows = new Set(allCards.map(c => c.row));
-    for (const row of affectedRows) {
-      const rowCards = updated.filter(c => c.row === row).sort((a, b) => a.order - b.order);
-      rowCards.forEach((c, i) => { c.order = i; });
-    }
-
-    onCardLayoutChange(updated);
-    setMergeDialog(null);
-    droppedItemIds.forEach(id => onRemoveFromQueue?.(id));
-  };
-
-  // ── Group merge handler (vertical boundary, N:M cards) ──
-  const handleGroupVMergeClick = (topCardIds: string[], bottomCardIds: string[]) => {
-    if (!cardLayout || !onCardLayoutChange) return;
-
-    const allIds = [...topCardIds, ...bottomCardIds];
-    const allCards = allIds
-      .map(id => cardLayout.find(c => c.id === id))
-      .filter(Boolean) as CardDef[];
-    const withItems = allCards.filter(c => c.itemId);
-
-    if (withItems.length <= 1) {
-      executeGroupVMerge(topCardIds, bottomCardIds, withItems[0]?.itemId);
-      return;
-    }
-
-    const candidates: MergeCandidate[] = withItems.map(c => {
-      const item = items.find((it: any) => it.id === c.itemId);
-      return { cardId: c.id, itemId: c.itemId!, title: getTitle(item), cutoutPath: getCutout(item) };
-    });
-
-    setMergeDialog({
-      candidates,
-      onConfirm: (keepItemId) => executeGroupVMerge(topCardIds, bottomCardIds, keepItemId),
-    });
-  };
-
-  // ── Execute group vertical merge ──
-  const executeGroupVMerge = (
-    topCardIds: string[],
-    bottomCardIds: string[],
-    keepItemId?: string,
-  ) => {
-    if (!cardLayout || !onCardLayoutChange) return;
-
-    let updated = cardLayout.map(c => ({ ...c }));
-
-    const topCards = topCardIds
-      .map(id => updated.find(c => c.id === id))
-      .filter(Boolean) as CardDef[];
-    const bottomCards = bottomCardIds
-      .map(id => updated.find(c => c.id === id))
-      .filter(Boolean) as CardDef[];
-    const allCards = [...topCards, ...bottomCards];
-
-    // Anchor = topmost, leftmost card in top group
-    const anchor = [...topCards].sort((a, b) => a.row - b.row || a.order - b.order)[0];
-
-    // New rowSpan = top span + bottom span (all top cards share the same rowSpan, same for bottom)
-    const topRowSpan = topCards[0].rowSpan ?? 1;
-    const bottomRowSpan = bottomCards[0].rowSpan ?? 1;
-    anchor.rowSpan = topRowSpan + bottomRowSpan;
-
-    // If multiple top cards, widen anchor to cover full combined width
-    if (topCards.length > 1) {
-      const sortedTop = [...topCards].sort((a, b) => a.order - b.order);
-      anchor.widthPx = sortedTop.reduce((sum, c) => sum + c.widthPx, 0)
-        + (topCards.length - 1) * CARD_GAP;
-    }
-    // else: topCards.length === 1 — widthPx already covers full width
-
-    anchor.itemId = keepItemId;
-
-    // Dropped item IDs
-    const droppedItemIds = allCards
-      .filter(c => c.id !== anchor.id && c.itemId && c.itemId !== keepItemId)
-      .map(c => c.itemId!);
-
-    // Remove all cards in both groups except anchor
-    const allIdSet = new Set([...topCardIds, ...bottomCardIds]);
     updated = updated.filter(c => c.id === anchor.id || !allIdSet.has(c.id));
 
     // Re-number order within all affected rows
@@ -1902,8 +1780,10 @@ export default function EditorCanvas({
       ?? [cardA.itemId, cardB.itemId].find(id => id && id !== keepItemId);
 
     if (direction === "horizontal") {
-      // Add right card's width + gap to left card
-      cardA.widthPx = cardA.widthPx + CARD_GAP + cardB.widthPx;
+      // Add right card's rendered width + gap to left card
+      const rectA = cardRects.find(r => r.cardId === cardAId);
+      const rectB = cardRects.find(r => r.cardId === cardBId);
+      cardA.widthPx = (rectA?.width ?? cardA.widthPx) + innerCardCellGap + (rectB?.width ?? cardB.widthPx);
       cardA.itemId = keepItemId;
       // Remove right card
       updated = updated.filter(c => c.id !== cardBId);
@@ -1992,8 +1872,12 @@ export default function EditorCanvas({
       <AddImageModal
         slotIndex={addImageModalSlot}
         onLocalFile={handleModalLocalFile}
-        onItemReady={handleModalItemReady}
-        onClose={() => setAddImageModalSlot(null)}
+        onSelectDbProduct={onEnqueueAddProduct ? handleEnqueueAddProductUrl : undefined}
+        onDropImage={onEnqueueAddProduct ? handleEnqueueAddProductUrl : undefined}
+        onEnqueueSeries={onEnqueueAddProductSeries ? handleEnqueueAddProductSeries : undefined}
+        jobs={addProductModalJobs}
+        onCancelJob={onCancelReplacementJob}
+        onClose={closeAddImageModal}
       />
     )}
 
@@ -2002,8 +1886,12 @@ export default function EditorCanvas({
       <AddImageModal
         slotIndex={-1}
         onLocalFile={(_slot, filePath) => handleModalLocalFileForCard(addImageModalCardId!, filePath)}
-        onItemReady={handleModalItemReady}
-        onClose={() => setAddImageModalCardId(null)}
+        onSelectDbProduct={onEnqueueAddProduct ? handleEnqueueAddProductUrl : undefined}
+        onDropImage={onEnqueueAddProduct ? handleEnqueueAddProductUrl : undefined}
+        onEnqueueSeries={onEnqueueAddProductSeries ? handleEnqueueAddProductSeries : undefined}
+        jobs={addProductModalJobs}
+        onCancelJob={onCancelReplacementJob}
+        onClose={closeAddImageModal}
       />
     )}
 
@@ -2054,24 +1942,28 @@ export default function EditorCanvas({
           titleBg={activeCard?.titleBg}
           titleBgPad={activeCard?.titleBgPad ?? 2}
           titleEffect={activeCard?.titleEffect}
+          titleScale={activeCard?.titleScale ?? 1}
           priceFont={activeCard?.priceFontFamily}
           priceColor={activeCard?.priceColor ?? "#000000"}
           priceShowDollar={!!activeCard?.priceShowDollar}
           priceBg={activeCard?.priceBg}
           priceBgPad={activeCard?.priceBgPad ?? 2}
           priceEffect={activeCard?.priceEffect}
+          priceScale={activeCard?.priceScale ?? 1}
           onTitleFontChange={handleSelectedTitleFontChange}
           onTitleColorChange={handleSelectedTitleColorChange}
           onTitleItalicToggle={handleSelectedTitleItalicToggle}
           onTitleBgChange={handleSelectedTitleBgChange}
           onTitleBgPadChange={handleSelectedTitleBgPadChange}
           onTitleEffectChange={handleSelectedTitleEffectChange}
+          onTitleScaleChange={handleSelectedTitleScaleChange}
           onPriceFontChange={handleSelectedPriceFontChange}
           onPriceColorChange={handleSelectedPriceColorChange}
           onShowDollarToggle={handleSelectedShowDollarToggle}
           onPriceBgChange={handleSelectedPriceBgChange}
           onPriceBgPadChange={handleSelectedPriceBgPadChange}
           onPriceEffectChange={handleSelectedPriceEffectChange}
+          onPriceScaleChange={handleSelectedPriceScaleChange}
           onOpenComponentEditor={() => setShowTextCompDialog(true)}
           onApplyToDepartment={handleApplyTextStyleToDepartment}
           onApplyGlobally={onApplyTextStyleGlobally ? handleApplyTextStyleGlobally : undefined}
@@ -2206,6 +2098,36 @@ export default function EditorCanvas({
             }}
           />
 
+          {/* White bands covering gaps between department product regions.
+              Source flyer images baked into the underprint often have printed
+              divider lines between sections; these bands hide them. */}
+          {imageSize && page?.departmentAreas && page.departmentAreas.length > 1 && (() => {
+            const sorted = [...page.departmentAreas]
+              .filter(a => a.productRegion)
+              .sort((a, b) => a.productRegion.y - b.productRegion.y);
+            return sorted.slice(0, -1).map((area, i) => {
+              const above = area.productRegion;
+              const below = sorted[i + 1].productRegion;
+              const bandTop = above.y + above.height - 3;
+              const bandBottom = below.y + 3;
+              if (bandBottom <= bandTop) return null;
+              return (
+                <div
+                  key={`dept-gap-${i}`}
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: bandTop,
+                    width: imageSize.width,
+                    height: bandBottom - bandTop,
+                    background: page.backgroundColor ?? "#ffffff",
+                    pointerEvents: "none",
+                  }}
+                />
+              );
+            });
+          })()}
+
           {/* ═══ CARD-BASED DEPARTMENT ═══ */}
           {imageSize && isCard && cardClipStyle && (
             <div style={cardClipStyle}>
@@ -2328,72 +2250,46 @@ export default function EditorCanvas({
                 />
               ))}
 
-              {/* Divider drag handles + horizontal merge buttons — zIndex above card content (100) so handles stay clickable */}
-              {onCardLayoutChange && groupDividers.map((d, idx) => {
+              {/* Column merge dividers — rectangular bars filling the gap between horizontally adjacent cells */}
+              {!editMode && onCardLayoutChange && groupDividers.map((d, idx) => {
                 const is1to1 = d.leftCardIds.length === 1 && d.rightCardIds.length === 1;
+                const hovered = hoveredHMerge === idx;
+                const dragging = dividerDrag?.leftCardId === d.leftCardIds[0];
                 return (
                   <div
                     key={`divider-${idx}`}
                     onMouseEnter={() => setHoveredHMerge(idx)}
                     onMouseLeave={() => setHoveredHMerge(null)}
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      if (is1to1) {
+                        handleDividerDragStart(
+                          d.leftCardIds[0], d.rightCardIds[0], e,
+                          { leftCardIds: d.leftCardIds, rightCardIds: d.rightCardIds },
+                        );
+                      } else {
+                        handleGroupMergeClick(d.leftCardIds, d.rightCardIds);
+                      }
+                    }}
+                    title={is1to1 ? "Click to merge · Drag to resize" : "Merge cells"}
                     style={{
                       position: "absolute",
-                      left: d.x - 10,
+                      left: d.x - DEFAULT_CELL_GAP / 2,
                       top: d.y,
-                      width: 20,
+                      width: DEFAULT_CELL_GAP,
                       height: d.height,
                       zIndex: 150,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
+                      background: dragging
+                        ? "rgba(59,91,219,0.85)"
+                        : hovered
+                          ? "rgba(79,110,245,0.55)"
+                          : "rgba(148,163,184,0.18)",
+                      borderRadius: 4,
+                      cursor: is1to1 ? "col-resize" : "pointer",
                       pointerEvents: "auto",
+                      transition: "background 0.12s",
                     }}
-                  >
-                    {/* Merge button — click to merge, drag to resize width (1:1 boundaries only for resize) */}
-                    {hoveredHMerge === idx && (
-                      <button
-                        onMouseDown={(e) => {
-                          e.stopPropagation();
-                          if (is1to1) {
-                            // Start drag; mouseup handler decides merge vs resize based on displacement
-                            handleDividerDragStart(
-                              d.leftCardIds[0], d.rightCardIds[0], e,
-                              { leftCardIds: d.leftCardIds, rightCardIds: d.rightCardIds },
-                            );
-                          } else {
-                            // N:M boundary — no resize, just merge on release
-                            // Store mergeIds without activating drag machinery
-                            handleGroupMergeClick(d.leftCardIds, d.rightCardIds);
-                          }
-                        }}
-                        style={{
-                          position: "absolute",
-                          top: "50%",
-                          left: "50%",
-                          transform: "translate(-50%, -50%)",
-                          width: 32,
-                          height: 32,
-                          borderRadius: "50%",
-                          background: dividerDrag?.leftCardId === d.leftCardIds[0] ? "#3b5bdb" : "#4C6EF5",
-                          color: "#fff",
-                          border: "2px solid #fff",
-                          cursor: is1to1 ? "col-resize" : "pointer",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: 16,
-                          fontWeight: 700,
-                          boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
-                          zIndex: 60,
-                          padding: 0,
-                          lineHeight: 1,
-                        }}
-                        title={is1to1 ? "Click to merge · Drag to resize" : "Merge cells"}
-                      >
-                        ⟷
-                      </button>
-                    )}
-                  </div>
+                  />
                 );
               })}
 
@@ -2427,58 +2323,6 @@ export default function EditorCanvas({
                 );
               })()}
 
-              {/* Vertical merge buttons */}
-              {onCardLayoutChange && groupVDividers.map((vd, idx) => (
-                <div
-                  key={`vdivider-${idx}`}
-                  onMouseEnter={() => setHoveredVMerge(idx)}
-                  onMouseLeave={() => setHoveredVMerge(null)}
-                  style={{
-                    position: "absolute",
-                    left: vd.x,
-                    top: vd.y - 20,
-                    width: vd.width,
-                    height: 40,
-                    zIndex: 55,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    cursor: "pointer",
-                    pointerEvents: editMode ? 'none' : undefined,
-                  }}
-                >
-                  {hoveredVMerge === idx && (
-                    <button
-                      onMouseDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleGroupVMergeClick(vd.topCardIds, vd.bottomCardIds);
-                      }}
-                      style={{
-                        width: 32,
-                        height: 32,
-                        borderRadius: "50%",
-                        background: "#4C6EF5",
-                        color: "#fff",
-                        border: "2px solid #fff",
-                        cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontSize: 14,
-                        fontWeight: 700,
-                        boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
-                        zIndex: 60,
-                        padding: 0,
-                        lineHeight: 1,
-                      }}
-                      title="Merge cells vertically"
-                    >
-                      ⇕
-                    </button>
-                  )}
-                </div>
-              ))}
             </div>
           )}
 

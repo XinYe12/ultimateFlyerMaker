@@ -333,6 +333,7 @@ contextBridge.exposeInMainWorld("ufm", {
 
   // ---------- CONFIRM DIALOG ----------
   showConfirmDialog: (opts) => ipcRenderer.invoke("ufm:showConfirmDialog", opts),
+  debugLog: (payload) => ipcRenderer.invoke("ufm:debugLog", payload),
 
   // ---------- CANVAS ZOOM ----------
   onCanvasZoom: (callback) => {
@@ -354,4 +355,8 @@ contextBridge.exposeInMainWorld("ufm", {
     ipcRenderer.invoke("ufm:regenerateUnderprint", payload),
   persistTemplateAssets: (templateId, pages) =>
     ipcRenderer.invoke("ufm:persistTemplateAssets", templateId, pages),
+
+  // ---------- OPERATOR USER MANUAL ----------
+  openManualWindow: (chapterId) => ipcRenderer.invoke("ufm:openManualWindow", chapterId),
+  closeManualWindow: () => ipcRenderer.invoke("ufm:closeManualWindow"),
 });

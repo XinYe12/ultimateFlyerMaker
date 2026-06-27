@@ -1148,7 +1148,7 @@ function PlacementCard({
                           animation: "ufm-spin 0.75s linear infinite" }} />
             <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
                            color: "rgba(0,0,0,0.5)", textTransform: "uppercase", textAlign: "center" }}>
-              Replacing…
+              {!item?.result?.cutoutPath ? "Adding…" : "Replacing…"}
             </span>
             <div style={{ width: "100%", height: 3, borderRadius: 2, background: "rgba(0,0,0,0.1)", overflow: "hidden" }}>
               <div style={{ height: "100%", width: "30%", background: "#4C6EF5", borderRadius: 2,

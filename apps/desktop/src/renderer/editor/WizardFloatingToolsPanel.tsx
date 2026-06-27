@@ -110,7 +110,7 @@ export default function WizardFloatingToolsPanel({
         </span>
         <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>Drag to move</span>
       </div>
-      <div className="ufm-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "14px", display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "14px", display: "flex", flexDirection: "column", gap: 10 }}>
         {children}
       </div>
     </div>

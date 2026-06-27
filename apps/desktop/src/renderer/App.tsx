@@ -11,12 +11,13 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import RecoveryOverlay from "./components/RecoveryOverlay";
 
 import EditorSidebar from "./editor/EditorSidebar";
-import ProjectImagePanel, { PanelImageItem } from "./editor/ProjectImagePanel";
+import EditorLeftPanel, { type LeftPanelTab } from "./editor/EditorLeftPanel";
+import { PanelImageItem } from "./editor/ProjectImagePanel";
 import AddProductDialog, { AddProductData } from "./editor/AddProductDialog";
 
 import { useIngestQueue } from "./useIngestQueue";
 import { useJobQueue } from "./hooks/useJobQueue";
-import { IngestItem, FlyerJob, DepartmentId, CardLayout, CardDef, ReplacementJob } from "./types";
+import { IngestItem, FlyerJob, DepartmentId, CardLayout, CardDef, ReplacementJob, AddProductFormMeta } from "./types";
 import EditorCanvas from "./editor/EditorCanvas";
 import DbSearchModal from "./editor/DbSearchModal";
 import GoogleSearchModal from "./editor/GoogleSearchModal";
@@ -33,8 +34,10 @@ import DbUploadView from "./db-upload/DbUploadView";
 import TemplateSelectView from "./editor/TemplateSelectView";
 import ImportTemplateFromImagesDialog from "./editor/ImportTemplateFromImagesDialog";
 import { saveCustomTemplate, saveCustomTemplateWithAssets, upgradeTemplateUnderprintsIfNeeded } from "./editor/customTemplateStorage";
-import { captureSnapshot, applySnapshotToQueue, EditorSnapshot } from "./editor/editorHistory";
-import { reconcileCardLayoutForDepartment, defaultRowsForDepartment } from "./editor/templateDepartmentLayout";
+import { applySnapshotToQueue } from "./editor/editorHistory";
+import { useEditorHistory } from "./editor/useEditorHistory";
+import { reconcileCardLayoutForDepartment, reconcileRowCountsWithLayouts } from "./editor/templateDepartmentLayout";
+import { deriveRowCount, deriveActiveRowCount } from "../../../shared/flyer/layout/layoutCardRows";
 import { applyTextStylePatch, type TextFieldSection } from "./editor/textFieldStyle";
 import SettingsView from "./settings/SettingsView";
 import SetupView from "./settings/SetupView";
@@ -57,6 +60,64 @@ const DEPT_LABELS: Record<string, string> = {
   hot_sale: "Hot Sale",
   produce: "Produce",
 };
+
+function formatAddProductPriceDisplay(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  return trimmed.startsWith("$") ? trimmed : `$${trimmed}`;
+}
+
+function buildEnrichedResultFromForm(baseResult: any, formMeta: AddProductFormMeta) {
+  const enTitle = formMeta.enTitle?.trim() ?? "";
+  const zhTitle = formMeta.zhTitle?.trim() ?? "";
+  const size = formMeta.size?.trim() ?? "";
+  const salePrice = formMeta.salePrice?.trim() ?? "";
+  const regPrice = formMeta.regPrice?.trim() ?? "";
+  const priceDisplay = formatAddProductPriceDisplay(salePrice);
+  const hasFormData = enTitle || zhTitle || salePrice;
+  if (!hasFormData) return baseResult;
+  return {
+    ...baseResult,
+    title: {
+      ...(baseResult?.title ?? {}),
+      ...(enTitle && { en: enTitle }),
+      ...(zhTitle && { zh: zhTitle }),
+      ...(size && { size }),
+      ...(regPrice && { regularPrice: regPrice }),
+      confidence: (baseResult?.title as any)?.confidence ?? "high",
+      source: (baseResult?.title as any)?.source ?? "manual",
+    },
+    aiTitle: {
+      ...(baseResult?.aiTitle ?? {}),
+      ...(enTitle && { en: enTitle }),
+      ...(zhTitle && { zh: zhTitle }),
+      ...(size && { size }),
+      confidence: (baseResult?.aiTitle as any)?.confidence ?? "high",
+      source: (baseResult?.aiTitle as any)?.source ?? "manual",
+    },
+    discount: {
+      ...(baseResult?.discount ?? {}),
+      en: enTitle || (baseResult?.title as any)?.en || "",
+      zh: zhTitle || (baseResult?.title as any)?.zh || "",
+      size: size || (baseResult?.title as any)?.size || "",
+      ...(salePrice && { salePrice, price: { display: priceDisplay } }),
+      ...(regPrice && { regularPrice: regPrice }),
+    },
+  };
+}
+
+function buildAddProductPlaceholderResult(formMeta: AddProductFormMeta) {
+  const enTitle = formMeta.enTitle?.trim() ?? "";
+  const zhTitle = formMeta.zhTitle?.trim() ?? "";
+  return buildEnrichedResultFromForm({
+    inputPath: "",
+    cutoutPath: null,
+    layout: null,
+    title: { en: enTitle, zh: zhTitle, confidence: "high" as const, source: "manual" as const },
+    ocr: [],
+    llmResult: null,
+  }, formMeta);
+}
 
 export default function App() {
   // ---------------- VIEW STATE ----------------
@@ -85,7 +146,7 @@ export default function App() {
   const applyCutoutErrorRef = useRef(applyCutoutError);
   applyCutoutErrorRef.current = applyCutoutError;
   const jobQueueHook = useJobQueue();
-  const { jobs, deleteJob, syncJobFromEditorItems } = jobQueueHook;
+  const { jobs, deleteJob, deleteJobsForTemplate, syncJobFromEditorItems } = jobQueueHook;
   const [discountLabels, setDiscountLabels] = useState<{
     id: string;
     title?: { en: string; zh: string; size: string; regularPrice: string };
@@ -115,6 +176,7 @@ export default function App() {
   const prevCardItemIdsRef = useRef<Set<string>>(new Set());
   /** After explicit Clear Department, skip auto-creating an empty card grid until items are added. */
   const suppressEmptyCardLayoutRef = useRef(false);
+  const clearAllVerifyRef = useRef(false);
   const [batchUpload, setBatchUpload] = useState<{ total: number; processed: number; isActive: boolean } | null>(null);
   const [discountDetailsDialog, setDiscountDetailsDialog] = useState<{
     itemId: string;
@@ -133,7 +195,9 @@ export default function App() {
   const serperPromotionRef = useRef<Array<{ en: string; zh: string; size: string; cutoutPath: string }>>([]);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [imagePanelOpen, setImagePanelOpen] = useState(false);
+  const [leftPanelOpen, setLeftPanelOpen] = useState(false);
+  const [leftPanelTab, setLeftPanelTab] = useState<LeftPanelTab>("images");
+  const [leftPanelMenuOpen, setLeftPanelMenuOpen] = useState(false);
   const [showAddProductDialog, setShowAddProductDialog] = useState(false);
   const [editorImportActive, setEditorImportActive] = useState(false);
   const [editorImportProgress, setEditorImportProgress] = useState({ done: 0, total: 0 });
@@ -427,10 +491,29 @@ export default function App() {
   // Close transient editor UI while automation is running
   useEffect(() => {
     if (!isEditorAutomationActive) return;
-    setImagePanelOpen(false);
+    setLeftPanelOpen(false);
     setShowAddProductDialog(false);
     setEditMode(false);
   }, [isEditorAutomationActive]);
+
+  // Post-clear verification: log editor + job state on the render after handleClearAllDepartments
+  useEffect(() => {
+    if (!clearAllVerifyRef.current) return;
+    clearAllVerifyRef.current = false;
+    const templateJobCount = jobs.filter(j => j.templateId === templateId).length;
+    const payload = {
+      editorQueueLen: editorQueue.length,
+      templateJobCount,
+      viewingJobId: viewingJob?.id ?? null,
+      department,
+      cardLayoutItemIds: (cardLayouts[department] ?? []).filter(c => c.itemId).length,
+      discountLabelCount: discountLabels.length,
+    };
+    // #region agent log
+    (window as any).ufm?.debugLog?.({ sessionId: 'c3b215', location: 'App.tsx:postClearVerify', message: 'state after clear-all render', data: payload, hypothesisId: 'F', runId: 'post-fix-v3' });
+    fetch('http://127.0.0.1:7361/ingest/57de729c-1f3f-4911-afe7-7b1a23fd9ad6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c3b215'},body:JSON.stringify({sessionId:'c3b215',location:'App.tsx:postClearVerify',message:'state after clear-all render',data:payload,timestamp:Date.now(),hypothesisId:'F',runId:'post-fix-v3'})}).catch(()=>{});
+    // #endregion
+  }, [editorQueue, jobs, templateId, viewingJob, department, cardLayouts, discountLabels]);
 
   // Sync items from job state to editorQueue as they stream in
   useEffect(() => {
@@ -447,6 +530,12 @@ export default function App() {
     const newImages = jobImages.filter(
       (img: any) => img.status === "done" && img.result && !existingIds.has(img.id)
     );
+
+    if (newImages.length > 0) {
+      // #region agent log
+      (window as any).ufm?.debugLog?.({ sessionId: 'c3b215', location: 'App.tsx:jobStreamSync', message: 're-adding items from job stream', data: { newCount: newImages.length, viewingJobId: viewingJob.id, editorQueueLen: editorQueueRef.current.length }, hypothesisId: 'I', runId: 'post-fix-v3' });
+      // #endregion
+    }
 
     // Always process labels even when no new images — for XLSX jobs, labels arrive in
     // the final "complete" event after all items have already streamed in via itemComplete.
@@ -481,7 +570,7 @@ export default function App() {
           liveJob.department,
           uniqueIds,
           prev[liveJob.department],
-          { targetRows: userRowCounts[liveJob.department] ?? defaultRowsForDepartment(config, liveJob.department) }
+          { targetRows: userRowCounts[liveJob.department] }
         );
         if (layout === prev[liveJob.department]) return prev;
         return { ...prev, [liveJob.department]: layout };
@@ -546,15 +635,19 @@ export default function App() {
     const doneIds = items
       .filter((it: IngestItem) => it.status === "done" || it.status === "processing_cutout" || it.status === "cutout_error")
       .map(it => it.id);
-    const targetRows = userRowCounts[dept] ?? defaultRowsForDepartment(config, dept);
+    const savedLayout = jobCardLayouts?.[dept];
+    const occupiedRows = savedLayout?.length ? deriveActiveRowCount(savedLayout) : undefined;
+    const targetRows = occupiedRows ?? userRowCounts[dept];
 
-    setUserRowCounts(prev => (
-      prev[dept] != null ? prev : { ...prev, [dept]: targetRows }
-    ));
+    setUserRowCounts(prev => {
+      if (targetRows == null) return prev;
+      if (prev[dept] === targetRows) return prev;
+      return { ...prev, [dept]: targetRows };
+    });
 
     setCardLayouts(prev => {
       const base = jobCardLayouts ? { ...prev, ...jobCardLayouts } : prev;
-      const existing = jobCardLayouts?.[dept] ?? base[dept];
+      const existing = savedLayout ?? base[dept];
       const layout = reconcileCardLayoutForDepartment(
         config,
         dept,
@@ -571,96 +664,36 @@ export default function App() {
     });
   }, [userRowCounts]);
 
-  // ── Editor history (undo / redo) ──
-  const MAX_HISTORY = 50;
-  const [historyPast,   setHistoryPast]   = useState<EditorSnapshot[]>([]);
-  const [historyFuture, setHistoryFuture] = useState<EditorSnapshot[]>([]);
-  /** Last committed snapshot — the "before" for the next debounce push */
-  const historyPresentRef = useRef<EditorSnapshot | null>(null);
-  const debounceTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** True while undo/redo is being applied — suppresses the debounced snapshot */
-  const isRestoringRef = useRef(false);
+  // ── Editor history (undo / redo / timeline) ──
+  const cardLayoutsRef = useRef(cardLayouts);
+  cardLayoutsRef.current = cardLayouts;
+  const slotOverridesRef = useRef(slotOverrides);
+  slotOverridesRef.current = slotOverrides;
+  const userRowCountsRef = useRef(userRowCounts);
+  userRowCountsRef.current = userRowCounts;
 
-  // Reset history when a new job is opened
-  useEffect(() => {
-    if (view !== "editor" || !viewingJob) return;
-    setHistoryPast([]);
-    setHistoryFuture([]);
-    historyPresentRef.current = null;
-    isRestoringRef.current = false;
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-  }, [viewingJob?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const applyHistorySnapshot = useCallback((snapshot: import("./editor/editorHistory").EditorSnapshot, currentQueue: IngestItem[]) => {
+    setCardLayouts(snapshot.cardLayouts);
+    setSlotOverrides(snapshot.slotOverrides);
+    setUserRowCounts(snapshot.userRowCounts);
+    setDiscountLabels(snapshot.discountLabels ?? []);
+    loadItems(applySnapshotToQueue(snapshot, currentQueue));
+  }, [loadItems]);
 
-  // Debounced snapshot: 350 ms after the last change settles, push the previous
-  // stable state to historyPast so the user can undo back to it.
-  useEffect(() => {
-    if (view !== "editor" || !viewingJob) return;
-    if (isRestoringRef.current) return;
+  const editorHistory = useEditorHistory({
+    enabled: view === "editor" && !!viewingJob,
+    resetKey: viewingJob?.id,
+    getState: () => ({
+      cardLayouts: cardLayoutsRef.current,
+      slotOverrides: slotOverridesRef.current,
+      userRowCounts: userRowCountsRef.current,
+      editorQueue: editorQueueRef.current,
+      discountLabels: discountLabelsRef.current,
+    }),
+    applySnapshot: applyHistorySnapshot,
+  });
 
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    debounceTimerRef.current = setTimeout(() => {
-      if (isRestoringRef.current) return;
-      const current = captureSnapshot(cardLayouts, slotOverrides, userRowCounts, editorQueue);
-      if (!historyPresentRef.current) {
-        // First settle after job open — just record the baseline, don't push to past
-        historyPresentRef.current = current;
-        return;
-      }
-      setHistoryPast(prev => {
-        const next = [...prev, historyPresentRef.current!];
-        return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
-      });
-      setHistoryFuture([]);
-      historyPresentRef.current = current;
-    }, 350);
-
-    return () => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    };
-  }, [cardLayouts, slotOverrides, userRowCounts, editorQueue]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const undo = useCallback(() => {
-    if (historyPast.length === 0) return;
-    const target = historyPast[historyPast.length - 1];
-    const current = captureSnapshot(cardLayouts, slotOverrides, userRowCounts, editorQueue);
-
-    isRestoringRef.current = true;
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-
-    setCardLayouts(target.cardLayouts);
-    setSlotOverrides(target.slotOverrides);
-    setUserRowCounts(target.userRowCounts);
-    loadItems(applySnapshotToQueue(target, editorQueue));
-    historyPresentRef.current = target;
-
-    setHistoryPast(p => p.slice(0, -1));
-    setHistoryFuture(f => [current, ...f].slice(0, MAX_HISTORY));
-
-    setTimeout(() => { isRestoringRef.current = false; }, 500);
-  }, [historyPast, cardLayouts, slotOverrides, userRowCounts, editorQueue, loadItems]);
-
-  const redo = useCallback(() => {
-    if (historyFuture.length === 0) return;
-    const target = historyFuture[0];
-    const current = captureSnapshot(cardLayouts, slotOverrides, userRowCounts, editorQueue);
-
-    isRestoringRef.current = true;
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-
-    setCardLayouts(target.cardLayouts);
-    setSlotOverrides(target.slotOverrides);
-    setUserRowCounts(target.userRowCounts);
-    loadItems(applySnapshotToQueue(target, editorQueue));
-    historyPresentRef.current = target;
-
-    setHistoryPast(p => [...p, current].slice(-MAX_HISTORY));
-    setHistoryFuture(f => f.slice(1));
-
-    setTimeout(() => { isRestoringRef.current = false; }, 500);
-  }, [historyFuture, cardLayouts, slotOverrides, userRowCounts, editorQueue, loadItems]);
-
-  const canUndo = historyPast.length > 0;
-  const canRedo = historyFuture.length > 0;
+  const { commitNow, commitDebounced, undo, redo, jumpTo, canUndo, canRedo, entries: historyEntries, currentIndex: historyCurrentIndex } = editorHistory;
 
   // Refs so keyboard handler always calls the latest undo/redo without re-registering
   const undoRef = useRef(undo);
@@ -689,7 +722,16 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [view]);
 
+  // Close left panel dropdown when clicking outside
+  useEffect(() => {
+    if (!leftPanelMenuOpen) return;
+    const close = () => setLeftPanelMenuOpen(false);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [leftPanelMenuOpen]);
+
   const handleApplyTextStyleGlobally = useCallback((section: TextFieldSection, patch: Partial<CardDef>) => {
+    commitNow("Apply style to all departments", ["*"]);
     setCardLayouts(prev => {
       const next: Record<string, CardLayout> = { ...prev };
       for (const dept of Object.keys(next)) {
@@ -699,10 +741,11 @@ export default function App() {
       }
       return next;
     });
-  }, []);
+  }, [commitNow]);
 
   const handleRowCountChange = useCallback((newRows: number) => {
     if (newRows < 1) return;
+    commitNow("Change row count", [department]);
     const layout = cardLayouts[department];
     const sortedItemIds = [...(layout ?? [])]
       .sort((a, b) => a.row - b.row || a.order - b.order)
@@ -742,11 +785,21 @@ export default function App() {
 
     setUserRowCounts(prev => ({ ...prev, [department]: newRows }));
     setCardLayouts(prev => ({ ...prev, [department]: newLayoutWithScale }));
-  }, [department, cardLayouts]);
+  }, [department, cardLayouts, commitNow]);
+
+  const handleColCountChange = useCallback((newCols: number) => {
+    if (newCols < 1) return;
+    const layout = cardLayouts[department];
+    const itemCount = (layout ?? []).filter(c => c.itemId).length;
+    if (itemCount === 0) return;
+    const newRows = Math.max(1, Math.ceil(itemCount / newCols));
+    handleRowCountChange(newRows);
+  }, [department, cardLayouts, handleRowCountChange]);
 
   const handleFlipLayout = useCallback(() => {
     const layout = cardLayouts[department];
     if (!layout || layout.length === 0) return;
+    commitNow("Flip layout", [department]);
 
     const config = templateConfigRef.current;
     const page = config ? findPageForDepartment(config, department) : null;
@@ -803,7 +856,21 @@ export default function App() {
 
     setUserRowCounts(prev => ({ ...prev, [department]: newRows }));
     setCardLayouts(prev => ({ ...prev, [department]: newLayout }));
-  }, [department, cardLayouts]);
+  }, [department, cardLayouts, commitNow]);
+
+  const handleCardLayoutChange = useCallback((layout: CardLayout) => {
+    commitDebounced("Edit layout", [department]);
+    setCardLayouts(prev => ({ ...prev, [department]: layout }));
+  }, [department, commitDebounced]);
+
+  const handleSlotOverridesChange = useCallback((overrides: Record<number, { x: number; y: number; width: number; height: number }>) => {
+    commitDebounced("Move slot", [department]);
+    setSlotOverrides(overrides);
+  }, [department, commitDebounced]);
+
+  const handleHistoryCommit = useCallback((label: string, depts?: string[]) => {
+    commitNow(label, depts ?? [department]);
+  }, [department, commitNow]);
 
   // Check if current department is card-based
   const isDeptCardBased = useCallback(() => {
@@ -831,13 +898,12 @@ export default function App() {
           it.status === "done" || it.status === "processing_cutout" || it.status === "cutout_error"
         )
         .map(it => it.id);
-      const targetRows = userRowCounts[department] ?? defaultRowsForDepartment(templateConfig, department);
       const layout = reconcileCardLayoutForDepartment(
         templateConfig,
         department,
         doneIds,
         prev[department],
-        { targetRows }
+        { targetRows: userRowCounts[department] }
       );
 
       prevCardItemIdsRef.current = new Set(
@@ -871,23 +937,25 @@ export default function App() {
         department,
         doneIds,
         undefined,
-        { targetRows: userRowCounts[department] ?? defaultRowsForDepartment(config, department) }
+        { targetRows: userRowCounts[department] }
       );
       setCardLayouts(prev => ({ ...prev, [department]: layout }));
+      setUserRowCounts(prev => prev[department] != null ? prev : { ...prev, [department]: deriveActiveRowCount(layout) });
       return;
     }
 
-    // If items changed and layout is stale, rebuild
+    // If items changed and layout is stale, rebuild (also compacts inflated grids)
     if (doneIds.length > 0) {
       const layout = reconcileCardLayoutForDepartment(
         config,
         department,
         doneIds,
         existing,
-        { targetRows: userRowCounts[department] ?? defaultRowsForDepartment(config, department) }
+        { targetRows: userRowCounts[department] }
       );
       if (layout !== existing) {
         setCardLayouts(prev => ({ ...prev, [department]: layout }));
+        setUserRowCounts(prev => ({ ...prev, [department]: deriveActiveRowCount(layout) }));
       }
       return;
     }
@@ -901,7 +969,7 @@ export default function App() {
       const layout = autoLayoutCards({
         itemIds: [],
         regionWidth: deptDef.region.width,
-        defaultRows: deptDef.rows,
+        defaultRows: userRowCounts[department] ?? 1,
       });
       setCardLayouts(prev => ({ ...prev, [department]: layout }));
     }
@@ -957,9 +1025,10 @@ export default function App() {
         const newLayout = autoLayoutCards({
           itemIds: allIds,
           regionWidth: deptDef.region.width,
-          targetRows: userRowCounts[department],
+          targetRows: userRowCounts[department] ?? deriveActiveRowCount(layout),
         });
         setCardLayouts(prev => ({ ...prev, [department]: newLayout }));
+        setUserRowCounts(prev => ({ ...prev, [department]: deriveActiveRowCount(newLayout) }));
       }
     } else if (changed) {
       setCardLayouts(prev => ({ ...prev, [department]: updated }));
@@ -1061,7 +1130,7 @@ export default function App() {
     setDepartmentLocked(job.result?.departmentLocked ?? false);
 
     setSlotOverrides(job.slotOverrides ?? {});
-    setUserRowCounts(job.userRowCounts ?? {});
+    setUserRowCounts(reconcileRowCountsWithLayouts(job.userRowCounts ?? {}, job.cardLayouts));
     // When templateId is changing, templateConfigRef still holds the old config — using it
     // would produce card slots sized for the wrong template. Skip hydration; restore any
     // saved layout from the job directly, or clear so the "ensure card layout" effect
@@ -1157,7 +1226,7 @@ export default function App() {
     }
 
     setSlotOverrides(job.slotOverrides ?? {});
-    setUserRowCounts(job.userRowCounts ?? {});
+    setUserRowCounts(reconcileRowCountsWithLayouts(job.userRowCounts ?? {}, job.cardLayouts));
     // Same guard as handleViewFlyer: if templateId is changing, templateConfigRef still
     // has the old config. Avoid building a layout from wrong dimensions; let the
     // "ensure card layout" effect rebuild once the new config arrives.
@@ -1186,6 +1255,9 @@ export default function App() {
     );
     const jobToOpen = processingJob || draftingJobForDept || completedJob;
     if (jobToOpen) {
+      // #region agent log
+      (window as any).ufm?.debugLog?.({ sessionId: 'c3b215', location: 'App.tsx:deptChangeOpenDraft', message: 'opening job on department switch', data: { dept, jobId: jobToOpen.id, itemCount: jobToOpen.result?.processedImages?.length ?? 0 }, hypothesisId: 'G', runId: 'post-fix-v3' });
+      // #endregion
       handleOpenDraft(jobToOpen);
       return;
     }
@@ -1253,6 +1325,7 @@ export default function App() {
     meta?: { cardId?: string; sourceItemId?: string }
   ) => {
     if (!cutoutPath && !inputPath) return;
+    commitNow(targetItemId ? "Replace image" : "Assign image to card", [department]);
 
     const patchImagePaths = (itemId: string) => {
       const existing = editorQueue.find((it: any) => it.id === itemId);
@@ -1290,7 +1363,7 @@ export default function App() {
     });
 
     patchImagePaths(sourceItemId);
-  }, [editorQueue, updateItem, cardLayouts, department]);
+  }, [editorQueue, updateItem, cardLayouts, department, commitNow]);
 
   // ---------------- REPLACE IMAGE IN-PLACE ----------------
   const handleReplaceImage = async (itemId: string, targetFlavorIndex?: number) => {
@@ -1317,6 +1390,7 @@ export default function App() {
 
   // ---------------- REPLACE VIA SEARCH MODALS ----------------
   const handleSearchReplace = (itemId: string, data: { path: string; result: any }) => {
+    commitNow("Replace image", [department]);
     const existingItem = editorQueue.find(item => item.id === itemId);
 
     // Phase 2: record rejection signal if replacing a Serper-sourced image
@@ -1358,6 +1432,7 @@ export default function App() {
   };
 
   const replaceFlavorAtIndex = (itemId: string, data: { path: string; result: any }, targetIndex: number) => {
+    commitNow("Replace flavor image", [department]);
     const existingItem = editorQueueRef.current.find((i: any) => i.id === itemId);
     if (!existingItem) return;
     const oldPaths: string[] = existingItem.result?.cutoutPaths
@@ -1442,8 +1517,227 @@ export default function App() {
   };
 
   const cancelReplacementJob = (jobId: string) => {
-    (window as any).ufm.cancelReplacementJob(jobId);
-    setReplacementJobs(prev => prev.filter(j => j.id !== jobId));
+    const job = replacementJobs.find(j => j.id === jobId);
+    if (!job) return;
+    const relatedJobs = replacementJobs.filter(j => j.itemId === job.itemId);
+    for (const j of relatedJobs) {
+      (window as any).ufm.cancelReplacementJob(j.id);
+    }
+    setReplacementJobs(prev => prev.filter(j => j.itemId !== job.itemId));
+    const item = editorQueueRef.current.find(i => i.id === job.itemId);
+    if (item?.status === "processing_cutout" && !item.result?.cutoutPath) {
+      remove(job.itemId);
+      setDiscountLabels(prev => prev.filter(l => l.id !== job.itemId));
+      if (isDeptCardBased()) {
+        setCardLayouts(prev => {
+          const layout = prev[department];
+          if (!layout) return prev;
+          return {
+            ...prev,
+            [department]: layout.map(c =>
+              c.itemId === job.itemId ? { ...c, itemId: undefined } : c
+            ),
+          };
+        });
+      }
+    }
+  };
+
+  const linkAddProductToCard = (cardId: string, itemId: string) => {
+    setCardLayouts(prev => {
+      const layout = prev[department];
+      if (!layout) return prev;
+      return {
+        ...prev,
+        [department]: layout.map(c => c.id === cardId ? { ...c, itemId } : c),
+      };
+    });
+  };
+
+  const maybeGenerateDiscountLabel = async (item: IngestItem) => {
+    const disc = item.result?.discount as any;
+    if (disc?.price?.display || disc?.salePrice) {
+      try {
+        const labels = await window.ufm.exportDiscountImages([item]);
+        if (labels?.[0]) setDiscountLabels((prev: any[]) => [...prev, labels[0]]);
+      } catch { /* label render failed */ }
+    }
+  };
+
+  const enqueueAddProductFromUrl = (
+    url: string,
+    options: { slotIndex?: number; cardId?: string; formMeta?: AddProductFormMeta },
+  ): string => {
+    const itemId = uuidv4();
+    const jobId = uuidv4();
+    const formMeta = options.formMeta ?? {};
+    commitNow("Add product", [department]);
+
+    addItem({
+      id: itemId,
+      path: "",
+      status: "processing_cutout",
+      slotIndex: options.slotIndex,
+      result: buildAddProductPlaceholderResult(formMeta),
+    });
+
+    if (options.cardId) {
+      linkAddProductToCard(options.cardId, itemId);
+    }
+
+    setReplacementJobs(prev => [...prev, { id: jobId, itemId, url, status: "processing" }]);
+
+    void (async () => {
+      try {
+        const data = await window.ufm.downloadAndIngestFromUrl(jobId, url.trim());
+        const enriched = buildEnrichedResultFromForm(data.result, formMeta);
+        const finalItem: IngestItem = {
+          id: itemId,
+          path: data.path,
+          status: "done",
+          slotIndex: options.slotIndex,
+          result: enriched,
+        };
+        updateItem(itemId, finalItem);
+        await maybeGenerateDiscountLabel(finalItem);
+        setReplacementJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: "done" } : j));
+        setTimeout(() => setReplacementJobs(prev => prev.filter(j => j.id !== jobId)), 2000);
+      } catch (err: any) {
+        if (err?.name === "AbortError" || err?.message === "Cancelled by user") {
+          remove(itemId);
+          setDiscountLabels(prev => prev.filter(l => l.id !== itemId));
+          if (options.cardId && isDeptCardBased()) {
+            setCardLayouts(prev => {
+              const layout = prev[department];
+              if (!layout) return prev;
+              return {
+                ...prev,
+                [department]: layout.map(c =>
+                  c.itemId === itemId ? { ...c, itemId: undefined } : c
+                ),
+              };
+            });
+          }
+          setReplacementJobs(prev => prev.filter(j => j.id !== jobId));
+          return;
+        }
+        updateItem(itemId, { status: "cutout_error" });
+        setReplacementJobs(prev => prev.map(j =>
+          j.id === jobId ? { ...j, status: "error", errorMessage: err?.message ?? String(err) } : j
+        ));
+        setTimeout(() => setReplacementJobs(prev => prev.filter(j => j.id !== jobId)), 10000);
+      }
+    })();
+
+    return itemId;
+  };
+
+  const enqueueAddProductSeries = (
+    urls: string[],
+    options: { slotIndex?: number; cardId?: string; formMeta?: AddProductFormMeta },
+  ): string => {
+    const itemId = uuidv4();
+    const formMeta = options.formMeta ?? {};
+    commitNow("Add product", [department]);
+
+    addItem({
+      id: itemId,
+      path: "",
+      status: "processing_cutout",
+      slotIndex: options.slotIndex,
+      result: buildAddProductPlaceholderResult(formMeta),
+    });
+
+    if (options.cardId) {
+      linkAddProductToCard(options.cardId, itemId);
+    }
+
+    const results: Array<{ path: string; result: any } | null> = new Array(urls.length).fill(null);
+    let finished = 0;
+    let failed = false;
+
+    const tryFinalize = async () => {
+      if (failed || finished < urls.length) return;
+      const valid = results.filter((r): r is { path: string; result: any } => r != null);
+      if (valid.length === 0) {
+        remove(itemId);
+        if (options.cardId && isDeptCardBased()) {
+          setCardLayouts(prev => {
+            const layout = prev[department];
+            if (!layout) return prev;
+            return {
+              ...prev,
+              [department]: layout.map(c =>
+                c.itemId === itemId ? { ...c, itemId: undefined } : c
+              ),
+            };
+          });
+        }
+        return;
+      }
+      const cutoutPaths = valid.map(r => r.result?.cutoutPath || r.path);
+      const enriched = buildEnrichedResultFromForm(valid[0].result, formMeta);
+      const finalItem: IngestItem = {
+        id: itemId,
+        path: valid[0].path,
+        status: "done",
+        slotIndex: options.slotIndex,
+        result: {
+          ...enriched,
+          cutoutPath: cutoutPaths[0],
+          cutoutPaths: cutoutPaths.length > 1 ? cutoutPaths : undefined,
+          allFlavorPaths: cutoutPaths,
+          pendingFlavorSelection: cutoutPaths.length > 1 ? true : undefined,
+        },
+      };
+      updateItem(itemId, finalItem);
+      await maybeGenerateDiscountLabel(finalItem);
+    };
+
+    urls.forEach((url, idx) => {
+      const jobId = uuidv4();
+      setReplacementJobs(prev => [...prev, { id: jobId, itemId, url, status: "processing" }]);
+
+      void (async () => {
+        try {
+          const data = await window.ufm.downloadAndIngestFromUrl(jobId, url.trim());
+          results[idx] = data;
+          setReplacementJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: "done" } : j));
+          setTimeout(() => setReplacementJobs(prev => prev.filter(j => j.id !== jobId)), 2000);
+        } catch (err: any) {
+          if (err?.name === "AbortError" || err?.message === "Cancelled by user") {
+            failed = true;
+            remove(itemId);
+            setDiscountLabels(prev => prev.filter(l => l.id !== itemId));
+            if (options.cardId && isDeptCardBased()) {
+              setCardLayouts(prev => {
+                const layout = prev[department];
+                if (!layout) return prev;
+                return {
+                  ...prev,
+                  [department]: layout.map(c =>
+                    c.itemId === itemId ? { ...c, itemId: undefined } : c
+                  ),
+                };
+              });
+            }
+            setReplacementJobs(prev => prev.filter(j => j.itemId !== itemId));
+            return;
+          }
+          failed = true;
+          updateItem(itemId, { status: "cutout_error" });
+          setReplacementJobs(prev => prev.map(j =>
+            j.id === jobId ? { ...j, status: "error", errorMessage: err?.message ?? String(err) } : j
+          ));
+          setTimeout(() => setReplacementJobs(prev => prev.filter(j => j.id !== jobId)), 10000);
+        } finally {
+          finished++;
+          void tryFinalize();
+        }
+      })();
+    });
+
+    return itemId;
   };
 
   const handleChooseDatabaseResults = (itemId: string) => {
@@ -1533,6 +1827,7 @@ export default function App() {
     regularPrice: string,
     salePrice: string
   ) => {
+    commitNow("Edit title/price text", [department]);
     const item = editorQueue.find((i) => i.id === itemId);
     if (!item?.result) return;
     const priceDisplay = salePrice.trim()
@@ -1582,6 +1877,7 @@ export default function App() {
   };
 
   const handleSaveBannerDays = (itemId: string, days: string[]) => {
+    commitNow("Edit banner days", [department]);
     setDiscountLabels(prev => prev.map(l =>
       l.id === itemId ? { ...l, price: { ...l.price, display: l.price?.display ?? "", days } } : l
     ));
@@ -1590,6 +1886,7 @@ export default function App() {
 
   // ---------------- ADD ITEM FROM MODAL (generates label if discount data present) ----------------
   const handleAddItemFromModal = async (item: IngestItem) => {
+    commitNow("Add product", [department]);
     addItem(item);
     const disc = (item.result?.discount as any);
     if (disc?.price?.display || disc?.salePrice) {
@@ -1602,6 +1899,7 @@ export default function App() {
 
   // ---------------- REMOVE SINGLE ITEM FROM SLOT/CARD ----------------
   const handleRemoveItem = (id: string) => {
+    commitNow("Remove item", [department]);
     // For card-based departments: unlink item from its card
     if (isDeptCardBased()) {
       setCardLayouts(prev => {
@@ -1873,6 +2171,7 @@ export default function App() {
 
   // ---------------- CLEAR DEPARTMENT (wipe all products) ----------------
   const handleClearDepartment = () => {
+    commitNow("Clear department", [department]);
     if (viewingJob && (viewingJob.status === "processing" || viewingJob.status === "queued")) {
       window.ufm.cancelJob(viewingJob.id);
     }
@@ -1898,10 +2197,36 @@ export default function App() {
 
   // ---------------- CLEAR ALL DEPARTMENTS ----------------
   const handleClearAllDepartments = () => {
+    const jobsToDelete = jobs.filter(j => j.templateId === templateId);
+    // #region agent log
+    const debugPayload = { editorQueueLen: editorQueue.length, jobsToDeleteLen: jobsToDelete.length, templateId, viewingJobId: viewingJob?.id ?? null, replacementJobsLen: replacementJobs.length };
+    (window as any).ufm?.debugLog?.({ sessionId: 'c3b215', location: 'App.tsx:handleClearAllDepartments', message: 'handler invoked', data: debugPayload, hypothesisId: 'B', runId: 'post-fix-v3' });
+    fetch('http://127.0.0.1:7361/ingest/57de729c-1f3f-4911-afe7-7b1a23fd9ad6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c3b215'},body:JSON.stringify({sessionId:'c3b215',location:'App.tsx:handleClearAllDepartments',message:'handler invoked',data:debugPayload,timestamp:Date.now(),hypothesisId:'B',runId:'post-fix-v3'})}).catch(()=>{});
+    // #endregion
+
+    // Cancel in-flight background work before wiping state
+    for (const j of replacementJobs) {
+      (window as any).ufm?.cancelReplacementJob?.(j.id);
+    }
+    if (editorImportJobIdRef.current) {
+      window.ufm.cancelJob(editorImportJobIdRef.current).catch(() => {});
+    }
+    jobsToDelete.forEach(j => {
+      if (j.status === "processing" || j.status === "queued") {
+        window.ufm.cancelJob(j.id);
+      }
+    });
+
+    // Stop editor→job sync before wiping state
+    setViewingJob(null);
+    editorImportJobIdRef.current = null;
+    setEditorImportActive(false);
+    setEditorImportProgress({ done: 0, total: 0 });
     suppressEmptyCardLayoutRef.current = true;
     xlsxItemsLoadedRef.current = true;
     prevCardItemIdsRef.current = new Set();
     setSelectedItemId(null);
+    loadItems([]);
     setDiscountLabels([]);
     setOriginalDiscounts([]);
     setVerificationDone(false);
@@ -1909,17 +2234,16 @@ export default function App() {
     setDepartmentLocked(false);
     setSlotOverrides({});
     setCardLayouts({});
-    // Clear persisted drafts for every available department
+    setUserRowCounts({});
+    setReplacementJobs([]);
     availableDepartments.forEach(dept => clearDepartmentDraft(templateId, dept));
-    // Abort any running jobs and remove all jobs for this template from the queue
-    jobs.filter(j => j.templateId === templateId).forEach(j => {
-      if (j.status === "processing" || j.status === "queued") {
-        window.ufm.cancelJob(j.id);
-      }
-      deleteJob(j.id);
-    });
-    // Clear the viewing job reference so the processing banner disappears
-    setViewingJob(null);
+    deleteJobsForTemplate(templateId);
+    commitNow("Clear all departments", ["*"]);
+    setCanvasKey(k => k + 1);
+    clearAllVerifyRef.current = true;
+    // #region agent log
+    (window as any).ufm?.debugLog?.({ sessionId: 'c3b215', location: 'App.tsx:handleClearAllDepartments:end', message: 'handler finished', data: { deletedJobs: jobsToDelete.length, templateId }, hypothesisId: 'D', runId: 'post-fix-v3' });
+    // #endregion
   };
 
   const handleToggleLock = async () => {
@@ -2013,6 +2337,22 @@ export default function App() {
   };
 
   const [triggerExport, setTriggerExport] = useState(false);
+
+  const handleOpenManual = useCallback((chapterId?: string) => {
+    window.ufm.openManualWindow(chapterId);
+  }, []);
+
+  const handleWorkflowHelp = useCallback(() => {
+    let chapter = "overview";
+    if (view === "queue") {
+      chapter = workflowStep >= 3 ? "export" : "upload";
+    } else if (view === "editor") {
+      if (departmentLocked) chapter = "lock";
+      else if (verificationDone) chapter = "verify";
+      else chapter = "editor";
+    }
+    handleOpenManual(chapter);
+  }, [view, workflowStep, departmentLocked, verificationDone, handleOpenManual]);
 
   const handleWorkflowNavigate = (step: number) => {
     if (step === 3 /* editor */) {
@@ -2111,6 +2451,7 @@ export default function App() {
                 currentStep={workflowStep}
                 onNavigate={handleWorkflowNavigate}
                 onExportClick={allVerified ? handleProgressBarExport : undefined}
+                onHelpClick={handleWorkflowHelp}
               />
             )}
           </>
@@ -2198,6 +2539,24 @@ export default function App() {
 
             {/* Utility buttons — smaller and visually distinct from the main cards */}
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button
+                onClick={() => handleOpenManual()}
+                title="Open the operator user manual"
+                style={{
+                  display: "flex", alignItems: "center", gap: 6,
+                  padding: "6px 12px", borderRadius: 6,
+                  border: "1px solid #d1d5db", background: "#fff",
+                  color: "#6b7280", fontSize: 12, fontWeight: 500,
+                  cursor: "pointer", transition: "border-color 150ms, color 150ms",
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#4C6EF5"; (e.currentTarget as HTMLButtonElement).style.color = "#4C6EF5"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#d1d5db"; (e.currentTarget as HTMLButtonElement).style.color = "#6b7280"; }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+                User Manual
+              </button>
               <button
                 onClick={() => window.ufm.openLogFile()}
                 title="Open the application log file"
@@ -2300,7 +2659,7 @@ export default function App() {
           visible={toastState.visible}
           message={toastState.message}
           variant={toastState.variant}
-          duration={toastState.variant === "error" ? 5000 : 2500}
+          duration={toastState.variant === "error" ? 5000 : 12500}
           onHide={() => setToastState(prev => ({ ...prev, visible: false }))}
           canUndo={view === "editor" && canUndo}
           onUndo={view === "editor" ? undo : undefined}
@@ -2343,21 +2702,71 @@ export default function App() {
                   {/* Separator */}
                   <div style={{ width: 1, height: 20, background: "var(--color-border)", margin: "0 6px" }} />
 
-                  {/* Image library toggle */}
-                  <button
-                    onClick={() => setImagePanelOpen(o => !o)}
-                    title="Image library — retrieve any project image"
-                    style={{
-                      ...toolbarBtnBase,
-                      background: imagePanelOpen ? "#eff6ff" : "transparent",
-                      border: imagePanelOpen ? "1px solid #93c5fd" : "1px solid transparent",
-                      color: imagePanelOpen ? "#2563eb" : "#6b7280",
-                    }}
-                    onMouseEnter={(e) => { if (!imagePanelOpen) e.currentTarget.style.background = "#f3f4f6"; }}
-                    onMouseLeave={(e) => { if (!imagePanelOpen) e.currentTarget.style.background = "transparent"; }}
-                  >
-                    ▤ Images
-                  </button>
+                  {/* Left panel toggle (Images / History) */}
+                  <div style={{ position: "relative", display: "flex", alignItems: "stretch" }}>
+                    <button
+                      onClick={() => setLeftPanelOpen(o => !o)}
+                      title={leftPanelTab === "images" ? "Image library" : "Edit history"}
+                      style={{
+                        ...toolbarBtnBase,
+                        borderTopRightRadius: 0,
+                        borderBottomRightRadius: 0,
+                        background: leftPanelOpen ? "#eff6ff" : "transparent",
+                        border: leftPanelOpen ? "1px solid #93c5fd" : "1px solid transparent",
+                        borderRight: leftPanelOpen ? "none" : undefined,
+                        color: leftPanelOpen ? "#2563eb" : "#6b7280",
+                      }}
+                      onMouseEnter={(e) => { if (!leftPanelOpen) e.currentTarget.style.background = "#f3f4f6"; }}
+                      onMouseLeave={(e) => { if (!leftPanelOpen) e.currentTarget.style.background = leftPanelOpen ? "#eff6ff" : "transparent"; }}
+                    >
+                      ▤ {leftPanelTab === "images" ? "Images" : "History"}
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setLeftPanelMenuOpen(o => !o); }}
+                      title="Choose panel"
+                      style={{
+                        ...toolbarBtnBase,
+                        padding: "0 6px",
+                        borderTopLeftRadius: 0,
+                        borderBottomLeftRadius: 0,
+                        background: leftPanelOpen ? "#eff6ff" : "transparent",
+                        border: leftPanelOpen ? "1px solid #93c5fd" : "1px solid transparent",
+                        color: leftPanelOpen ? "#2563eb" : "#6b7280",
+                        fontSize: 10,
+                      }}
+                    >
+                      ▾
+                    </button>
+                    {leftPanelMenuOpen && (
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                        position: "absolute", top: "100%", left: 0, marginTop: 4,
+                        background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8,
+                        boxShadow: "0 4px 12px rgba(0,0,0,0.12)", zIndex: 100, minWidth: 120,
+                        overflow: "hidden",
+                      }}>
+                        {(["images", "history"] as const).map(t => (
+                          <button
+                            key={t}
+                            onClick={() => {
+                              setLeftPanelTab(t);
+                              setLeftPanelOpen(true);
+                              setLeftPanelMenuOpen(false);
+                            }}
+                            style={{
+                              display: "block", width: "100%", textAlign: "left",
+                              padding: "8px 12px", border: "none", background: leftPanelTab === t ? "#eff6ff" : "#fff",
+                              cursor: "pointer", fontSize: 13, color: "#374151",
+                              fontWeight: leftPanelTab === t ? 600 : 400,
+                            }}
+                          >
+                            {t === "images" ? "Images" : "History"}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
                   {/* Action buttons */}
                   {!departmentLocked && <div style={{ width: 1, height: 20, background: "var(--color-border)", margin: "0 6px" }} />}
@@ -2469,6 +2878,11 @@ export default function App() {
                       <span style={{ minWidth: 18, textAlign: "center", fontSize: 13, fontWeight: 600 }}>{effectiveRowCount}</span>
                       <button onClick={() => handleRowCountChange(effectiveRowCount + 1)} style={rowBtnStyle}>+</button>
                       <div style={{ width: 1, height: 20, background: "var(--color-border)", margin: "0 4px" }} />
+                      <span style={{ fontSize: 13, color: "#555", whiteSpace: "nowrap" }}>Cols:</span>
+                      <button onClick={() => handleColCountChange(Math.max(1, effectiveColCount - 1))} style={rowBtnStyle}>−</button>
+                      <span style={{ minWidth: 18, textAlign: "center", fontSize: 13, fontWeight: 600 }}>{effectiveColCount}</span>
+                      <button onClick={() => handleColCountChange(effectiveColCount + 1)} style={rowBtnStyle}>+</button>
+                      <div style={{ width: 1, height: 20, background: "var(--color-border)", margin: "0 4px" }} />
                       <button
                         onClick={handleFlipLayout}
                         disabled={effectiveRowCount === effectiveColCount}
@@ -2525,17 +2939,22 @@ export default function App() {
                 >
                   {/* Left sidebar — collapses by shrinking width, no overlay */}
                   <div style={{
-                    width: imagePanelOpen ? 220 : 0,
+                    width: leftPanelOpen ? 220 : 0,
                     flexShrink: 0,
                     overflow: "hidden",
                     transition: "width 0.22s ease",
-                    borderRight: imagePanelOpen ? "1px solid var(--color-border)" : "none",
+                    borderRight: leftPanelOpen ? "1px solid var(--color-border)" : "none",
                   }}>
                     <div style={{ width: 220, height: "100%" }}>
-                      <ProjectImagePanel
-                        items={allPanelItems}
+                      <EditorLeftPanel
+                        tab={leftPanelTab}
+                        onTabChange={setLeftPanelTab}
+                        onClose={() => setLeftPanelOpen(false)}
                         activeDepartment={department}
-                        onClose={() => setImagePanelOpen(false)}
+                        imageItems={allPanelItems}
+                        historyEntries={historyEntries}
+                        historyCurrentIndex={historyCurrentIndex}
+                        onHistoryJumpTo={jumpTo}
                       />
                     </div>
                   </div>
@@ -2567,9 +2986,9 @@ export default function App() {
                   onAddItem={departmentLocked ? undefined : handleAddItemFromModal}
                   editMode={editMode}
                   slotOverrides={slotOverrides}
-                  onSlotOverridesChange={departmentLocked ? undefined : setSlotOverrides}
+                  onSlotOverridesChange={departmentLocked ? undefined : handleSlotOverridesChange}
                   cardLayout={currentCardLayout}
-                  onCardLayoutChange={departmentLocked ? undefined : (layout) => setCardLayouts(prev => ({ ...prev, [department]: layout }))}
+                  onCardLayoutChange={departmentLocked ? undefined : handleCardLayoutChange}
                   onRemoveFromQueue={departmentLocked ? undefined : removeItemFromQueue}
                   rowCount={userRowCounts[department]}
                   onRowCountChange={departmentLocked ? undefined : handleRowCountChange}
@@ -2578,10 +2997,13 @@ export default function App() {
                   onCutoutErased={departmentLocked ? undefined : (id, newPath) => applyCutoutPatch(id, { cutoutPath: newPath })}
                   replacementJobs={replacementJobs}
                   onCancelReplacementJob={cancelReplacementJob}
+                  onEnqueueAddProduct={departmentLocked ? undefined : enqueueAddProductFromUrl}
+                  onEnqueueAddProductSeries={departmentLocked ? undefined : enqueueAddProductSeries}
                   selectedItemId={selectedItemId}
                   onSelectItem={departmentLocked ? undefined : setSelectedItemId}
                   onPanelImageDrop={departmentLocked ? undefined : handlePanelImageDrop}
                   onApplyTextStyleGlobally={departmentLocked ? undefined : handleApplyTextStyleGlobally}
+                  onHistoryCommit={departmentLocked ? undefined : handleHistoryCommit}
                   departmentLabel={DEPT_LABELS[department] ?? department.replace(/_/g, " ")}
                   zoom={canvasZoom}
                 />

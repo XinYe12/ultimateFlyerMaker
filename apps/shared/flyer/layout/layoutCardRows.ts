@@ -1,6 +1,8 @@
 import { FlyerPlacement } from "../models/FlyerPlacement"
 
 export const CARD_GAP = 6;
+/** Uniform cell-to-cell gap and region inset applied to all departments. */
+export const DEFAULT_CELL_GAP = 12;
 export const CARD_BG = '#e8e8e8';
 
 export type CardDef = {
@@ -64,6 +66,24 @@ export function deriveRowCount(cards: CardDef[]): number {
   return Math.max(...cards.map(c => c.row)) + 1;
 }
 
+/**
+ * Row count for sizing/placement when products only occupy the top rows of an
+ * oversized template grid (trailing rows are empty placeholder cards).
+ */
+export function deriveActiveRowCount(cards: CardDef[]): number {
+  if (cards.length === 0) return 1;
+  const filled = cards.filter(c => c.itemId);
+  if (!filled.length) return deriveRowCount(cards);
+  const maxFilledRow = Math.max(...filled.map(c => c.row));
+  const layoutRows = deriveRowCount(cards);
+  if (layoutRows <= maxFilledRow + 1) return layoutRows;
+  const trailing = cards.filter(c => c.row > maxFilledRow);
+  if (trailing.length > 0 && trailing.every(c => !c.itemId)) {
+    return maxFilledRow + 1;
+  }
+  return layoutRows;
+}
+
 /** Use template row budget when set; otherwise derive from card layout. */
 export function resolveLayoutRows(cards: CardDef[], templateRows?: number): number {
   if (templateRows != null && templateRows >= 1) {
@@ -73,14 +93,39 @@ export function resolveLayoutRows(cards: CardDef[], templateRows?: number): numb
 }
 
 /**
- * Build a map of x-offsets for each card (accounting for spanning cards from above).
+ * Row budget for rendering card rects/placements in the editor and export.
+ * When a layout exists, its occupied rows are authoritative — saved toolbar/template
+ * counts can be inflated and must not stretch cells into unused space below products.
+ */
+export function resolveLayoutRowsForRendering(
+  cards: CardDef[],
+  explicitRows?: number,
+  templateRows?: number,
+): number {
+  if (cards.length > 0) {
+    return deriveActiveRowCount(cards);
+  }
+  if (explicitRows != null && explicitRows >= 1) {
+    return Math.max(1, Math.round(explicitRows));
+  }
+  return resolveLayoutRows(cards, templateRows);
+}
+
+/**
+ * Compute x-offsets and widths for each card, derived from actual region width and gap.
+ *
+ * Widths are computed fresh from regionWidth/gap so that cards always fill the region
+ * exactly, regardless of the gap value baked into card.widthPx.
+ * The last card in each row absorbs any rounding remainder.
  *
  * When a card in row R has rowSpan > 1, it occupies its x-range in rows R+1 … R+span-1.
  * Cards in those lower rows must skip over that occupied space.
- *
- * Returns a Map from card.id → x offset (relative to region left edge).
  */
-function computeCardXPositions(cards: CardDef[]): Map<string, number> {
+function computeCardXPositions(
+  cards: CardDef[],
+  regionWidth: number,
+  gap: number = CARD_GAP,
+): Map<string, { x: number; width: number }> {
   const effectiveRows = deriveRowCount(cards);
   const byRow = new Map<number, CardDef[]>();
   for (const card of cards) {
@@ -89,45 +134,55 @@ function computeCardXPositions(cards: CardDef[]): Map<string, number> {
     byRow.set(card.row, list);
   }
 
-  // First pass: compute x positions for each card in row order.
-  // Track "occupied spans" that bleed into later rows.
-  // Each span = { xStart, width } in a given row.
   const occupiedByRow = new Map<number, Array<{ xStart: number; width: number }>>();
-  const positions = new Map<string, number>();
+  const result = new Map<string, { x: number; width: number }>();
 
   for (let row = 0; row < effectiveRows; row++) {
     const rowCards = (byRow.get(row) || []).slice().sort((a, b) => a.order - b.order);
     const occupied = (occupiedByRow.get(row) || []).slice().sort((a, b) => a.xStart - b.xStart);
 
+    const occupiedW = occupied.reduce((s, o) => s + o.width + gap, 0);
+    const available = Math.max(0, regionWidth - occupiedW);
+    const cols = rowCards.length;
+    const usable = Math.max(0, available - (cols - 1) * gap);
+    // Use widthPx as proportional weights: equal by default, respects drag-resize ratios.
+    const totalWeight = rowCards.reduce((s, c) => s + Math.max(1, c.widthPx), 0);
+
     let cursorX = 0;
     let occIdx = 0;
 
-    for (const card of rowCards) {
+    for (let ci = 0; ci < rowCards.length; ci++) {
+      const card = rowCards[ci];
+
       // Skip past any occupied spans at the current cursor position
       while (occIdx < occupied.length && occupied[occIdx].xStart <= cursorX + 0.5) {
         const occ = occupied[occIdx];
-        // Jump cursor past this occupied span
-        cursorX = occ.xStart + occ.width + CARD_GAP;
+        cursorX = occ.xStart + occ.width + gap;
         occIdx++;
       }
 
-      positions.set(card.id, cursorX);
+      const x = cursorX;
+      // Last card absorbs rounding so all cards exactly fill the region
+      const width = ci === rowCards.length - 1
+        ? Math.max(1, regionWidth - x)
+        : Math.max(1, Math.round(usable * Math.max(1, card.widthPx) / totalWeight));
 
-      // If this card spans multiple rows, mark its space as occupied in lower rows
+      result.set(card.id, { x, width });
+
       const span = card.rowSpan ?? 1;
       if (span > 1) {
         for (let sr = row + 1; sr < row + span && sr < effectiveRows; sr++) {
           const list = occupiedByRow.get(sr) || [];
-          list.push({ xStart: cursorX, width: card.widthPx });
+          list.push({ xStart: x, width });
           occupiedByRow.set(sr, list);
         }
       }
 
-      cursorX += card.widthPx + CARD_GAP;
+      cursorX += width + gap;
     }
   }
 
-  return positions;
+  return result;
 }
 
 /**
@@ -141,35 +196,38 @@ export function layoutCardRows({
   cards,
   region,
   rows,
+  gap = CARD_GAP,
   pageId,
   regionId,
 }: {
   cards: CardDef[];
   region: { x: number; y: number; width: number; height: number };
   rows?: number;
+  /** Cell gap in px; defaults to CARD_GAP (6). Pass departmentArea.gridLayout.cellGap when available. */
+  gap?: number;
   pageId: string;
   regionId: string;
 }): FlyerPlacement[] {
   const effectiveRows = rows != null ? resolveLayoutRows(cards, rows) : deriveRowCount(cards);
-  const rowHeight = (region.height - (effectiveRows - 1) * CARD_GAP) / effectiveRows;
+  const rowHeight = (region.height - (effectiveRows - 1) * gap) / effectiveRows;
   const placements: FlyerPlacement[] = [];
-  const xPositions = computeCardXPositions(cards);
+  const cardPos = computeCardXPositions(cards, region.width, gap);
 
   for (const card of cards) {
     if (!card.itemId) continue;
 
     const span = card.rowSpan ?? 1;
-    const cardHeight = span * rowHeight + (span - 1) * CARD_GAP;
-    const x = xPositions.get(card.id) ?? 0;
+    const cardHeight = span * rowHeight + (span - 1) * gap;
+    const pos = cardPos.get(card.id);
 
     placements.push({
       itemId: card.itemId,
       pageId,
       regionId,
       cardSize: "SMALL",
-      x: region.x + x,
-      y: region.y + card.row * (rowHeight + CARD_GAP),
-      width: card.widthPx,
+      x: region.x + (pos?.x ?? 0),
+      y: region.y + card.row * (rowHeight + gap),
+      width: pos?.width ?? card.widthPx,
       height: cardHeight,
       contentScale: card.contentScale,
       imageScale: card.imageScale,
@@ -229,26 +287,29 @@ export function computeCardRects({
   cards,
   region,
   rows,
+  gap = CARD_GAP,
 }: {
   cards: CardDef[];
   region: { x: number; y: number; width: number; height: number };
   rows?: number;
+  /** Cell gap in px; defaults to CARD_GAP (6). Pass departmentArea.gridLayout.cellGap when available. */
+  gap?: number;
 }): Array<{ cardId: string; x: number; y: number; width: number; height: number; itemId?: string }> {
   const effectiveRows = rows != null ? resolveLayoutRows(cards, rows) : deriveRowCount(cards);
-  const rowHeight = (region.height - (effectiveRows - 1) * CARD_GAP) / effectiveRows;
+  const rowHeight = (region.height - (effectiveRows - 1) * gap) / effectiveRows;
   const rects: Array<{ cardId: string; x: number; y: number; width: number; height: number; itemId?: string }> = [];
-  const xPositions = computeCardXPositions(cards);
+  const cardPos = computeCardXPositions(cards, region.width, gap);
 
   for (const card of cards) {
     const span = card.rowSpan ?? 1;
-    const cardHeight = span * rowHeight + (span - 1) * CARD_GAP;
-    const x = xPositions.get(card.id) ?? 0;
+    const cardHeight = span * rowHeight + (span - 1) * gap;
+    const pos = cardPos.get(card.id);
 
     rects.push({
       cardId: card.id,
-      x: region.x + x,
-      y: region.y + card.row * (rowHeight + CARD_GAP),
-      width: card.widthPx,
+      x: region.x + (pos?.x ?? 0),
+      y: region.y + card.row * (rowHeight + gap),
+      width: pos?.width ?? card.widthPx,
       height: cardHeight,
       itemId: card.itemId,
     });

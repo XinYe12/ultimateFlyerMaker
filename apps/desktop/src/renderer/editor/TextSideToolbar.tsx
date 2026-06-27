@@ -36,18 +36,22 @@ export interface TextSideToolbarProps {
   priceBg?: string;
   priceBgPad?: number;
   priceEffect?: TextEffect;
+  titleScale?: number;
+  priceScale?: number;
   onTitleFontChange: (v: string) => void;
   onTitleColorChange: (v: string) => void;
   onTitleItalicToggle: () => void;
   onTitleBgChange: (v: string | undefined) => void;
   onTitleBgPadChange: (v: number) => void;
   onTitleEffectChange: (v: TextEffect | undefined) => void;
+  onTitleScaleChange: (v: number) => void;
   onPriceFontChange: (v: string) => void;
   onPriceColorChange: (v: string) => void;
   onShowDollarToggle: () => void;
   onPriceBgChange: (v: string | undefined) => void;
   onPriceBgPadChange: (v: number) => void;
   onPriceEffectChange: (v: TextEffect | undefined) => void;
+  onPriceScaleChange: (v: number) => void;
   onOpenComponentEditor: () => void;
   onApplyToDepartment?: () => void;
   onApplyGlobally?: () => void;
@@ -146,13 +150,13 @@ export default function TextSideToolbar({
   activeSection,
   itemId,
   titleFont, titleColor = '#000000', titleItalic,
-  titleBg, titleBgPad = 2, titleEffect,
+  titleBg, titleBgPad = 2, titleEffect, titleScale,
   priceFont, priceColor = '#000000', priceShowDollar,
-  priceBg, priceBgPad = 2, priceEffect,
+  priceBg, priceBgPad = 2, priceEffect, priceScale,
   onTitleFontChange, onTitleColorChange, onTitleItalicToggle,
-  onTitleBgChange, onTitleBgPadChange, onTitleEffectChange,
+  onTitleBgChange, onTitleBgPadChange, onTitleEffectChange, onTitleScaleChange,
   onPriceFontChange, onPriceColorChange, onShowDollarToggle,
-  onPriceBgChange, onPriceBgPadChange, onPriceEffectChange,
+  onPriceBgChange, onPriceBgPadChange, onPriceEffectChange, onPriceScaleChange,
   onOpenComponentEditor,
   onApplyToDepartment,
   onApplyGlobally,
@@ -195,11 +199,13 @@ export default function TextSideToolbar({
   const effect = isTitle ? titleEffect : priceEffect;
   const effectColor = isTitle ? titleBg : priceBg;
   const effectSize = isTitle ? titleBgPad : priceBgPad;
+  const scale = isTitle ? (titleScale ?? 1) : (priceScale ?? 1);
   const onFontChange = isTitle ? onTitleFontChange : onPriceFontChange;
   const onColorChange = isTitle ? onTitleColorChange : onPriceColorChange;
   const onEffectChange = isTitle ? onTitleEffectChange : onPriceEffectChange;
   const onEffectColorChange = isTitle ? onTitleBgChange : onPriceBgChange;
   const onEffectSizeChange = isTitle ? onTitleBgPadChange : onPriceBgPadChange;
+  const onScaleChange = isTitle ? onTitleScaleChange : onPriceScaleChange;
 
   const activeFontLabel =
     FONT_OPTIONS.find(o => o.value === '' ? !font : font === o.value)?.label ?? 'Default';
@@ -238,7 +244,7 @@ export default function TextSideToolbar({
               <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8 }}>
                 {isTitle ? 'Title Font' : 'Price Font'}
               </div>
-              <div style={{ maxHeight: 280, overflowY: 'auto', borderRadius: 6, border: '1px solid #e5e7eb' }}>
+              <div style={{ maxHeight: 220, overflowY: 'auto', borderRadius: 6, border: '1px solid #e5e7eb' }}>
                 {FONT_OPTIONS.map(opt => {
                   const isActive = opt.value === '' ? !font : font === opt.value;
                   return (
@@ -262,6 +268,31 @@ export default function TextSideToolbar({
                     </button>
                   );
                 })}
+              </div>
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, paddingTop: 8, borderTop: '1px solid #f3f4f6' }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#374151', flexShrink: 0 }}>Size</span>
+                <button
+                  onMouseDown={e => e.stopPropagation()}
+                  onClick={() => onScaleChange(Math.max(0.2, Math.round((scale - 0.05) * 100) / 100))}
+                  style={{ width: 22, height: 22, border: '1px solid #d1d5db', borderRadius: 4, background: '#f9fafb', cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                >−</button>
+                <input
+                  type="number"
+                  min={20} max={300} step={5}
+                  value={Math.round(scale * 100)}
+                  onMouseDown={e => e.stopPropagation()}
+                  onChange={e => {
+                    const pct = Math.min(300, Math.max(20, Number(e.target.value)));
+                    onScaleChange(pct / 100);
+                  }}
+                  style={{ width: 52, height: 24, border: '1px solid #d1d5db', borderRadius: 6, fontSize: 12, textAlign: 'center', padding: '0 4px' }}
+                />
+                <span style={{ fontSize: 11, color: '#6b7280' }}>%</span>
+                <button
+                  onMouseDown={e => e.stopPropagation()}
+                  onClick={() => onScaleChange(Math.min(3.0, Math.round((scale + 0.05) * 100) / 100))}
+                  style={{ width: 22, height: 22, border: '1px solid #d1d5db', borderRadius: 4, background: '#f9fafb', cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                >+</button>
               </div>
             </>
           )}
@@ -339,7 +370,7 @@ export default function TextSideToolbar({
                 Apply {isTitle ? 'title' : 'price'} style
               </div>
               <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 10, lineHeight: 1.4 }}>
-                Copy the selected card&apos;s current style to other text fields.
+                Copy font, color, size &amp; effects to other text fields.
               </div>
               {onApplyToDepartment && (
                 <button

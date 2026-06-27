@@ -154,7 +154,7 @@ export type DepartmentAreaDef = {
 };
 
 /** Version of the underprint generation algorithm. Bump to force re-generation. */
-export const UNDERPRINT_SCHEMA_VERSION = 2;
+export const UNDERPRINT_SCHEMA_VERSION = 5;
 
 export type CustomTemplatePage = {
   pageId: string;
@@ -245,6 +245,19 @@ function expandSqueezedRegion(
   };
 }
 
+/** Reset row/col counts that were inflated by the (now-removed) cell-size controls.
+ *  Only resets when the stale targetCellWidth/targetCellHeight fields are present — the
+ *  telltale sign those values were computed from the removed feature. */
+function sanitizeRowsCols(
+  rows: number,
+  cols: number | undefined,
+  gridLayout?: GridLayoutDef,
+): { rows: number; cols: number | undefined } {
+  const fromCellSizeControl = !!(gridLayout?.targetCellWidth && gridLayout?.targetCellHeight);
+  if (!fromCellSizeControl) return { rows, cols };
+  return { rows: Math.min(rows, 3), cols: cols != null ? Math.min(cols, 6) : cols };
+}
+
 function buildDepartments(page: CustomTemplatePage): Record<string, DepartmentDef> {
   if (page.departmentAreas?.length) {
     const cw = page.canvasWidth;
@@ -252,12 +265,13 @@ function buildDepartments(page: CustomTemplatePage): Record<string, DepartmentDe
     return Object.fromEntries(
       page.departmentAreas.map(d => {
         const region = expandSqueezedRegion(d.productRegion, cw, ch, page.departmentAreas);
+        const { rows, cols } = sanitizeRowsCols(d.rows, d.cols, d.gridLayout);
         return [
           d.departmentKey,
           {
             region,
-            rows: d.rows,
-            ...(d.cols != null ? { cols: d.cols } : {}),
+            rows,
+            ...(cols != null ? { cols } : {}),
           } as CardDepartmentDef,
         ];
       })
@@ -269,17 +283,23 @@ function buildDepartments(page: CustomTemplatePage): Record<string, DepartmentDe
 function hydrateCustomTemplate(c: CustomFlyerTemplateConfig): FlyerTemplateConfig {
   return {
     templateId: c.templateId,
-    pages: c.pages.map(p => ({
-      pageId: p.pageId,
-      imagePath: p.backgroundImage ?? undefined,
-      canvasWidth: p.canvasWidth,
-      canvasHeight: p.canvasHeight,
-      boxes: p.boxes,
-      departments: buildDepartments(p),
-      departmentAreas: p.departmentAreas,
-      backgroundColor: p.backgroundColor,
-      backgroundImage: p.backgroundImage,
-    })),
+    pages: c.pages.map(p => {
+      const sanitizedAreas = p.departmentAreas?.map(d => {
+        const { rows, cols } = sanitizeRowsCols(d.rows, d.cols, d.gridLayout);
+        return { ...d, rows, cols };
+      });
+      return {
+        pageId: p.pageId,
+        imagePath: p.backgroundImage ?? undefined,
+        canvasWidth: p.canvasWidth,
+        canvasHeight: p.canvasHeight,
+        boxes: p.boxes,
+        departments: buildDepartments({ ...p, departmentAreas: sanitizedAreas }),
+        departmentAreas: sanitizedAreas,
+        backgroundColor: p.backgroundColor,
+        backgroundImage: p.backgroundImage,
+      };
+    }),
   };
 }
 

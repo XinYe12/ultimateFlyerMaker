@@ -11,6 +11,9 @@ import argparse
 import sys
 import uvicorn
 
+# Eager import so PyInstaller bundles src/cutout_service (uvicorn also loads it by string).
+import cutout_service.server  # noqa: F401
+
 
 def main():
     parser = argparse.ArgumentParser(description="UFM cutout service")

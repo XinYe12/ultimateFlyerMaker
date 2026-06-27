@@ -145,7 +145,6 @@ export default function EditorSidebar({
               {onClear && (itemCount ?? 0) > 0 && (
                 <button
                   onClick={async () => {
-                    onToggle();
                     const label = DEPARTMENT_LABELS[activeDepartment] || activeDepartment;
                     const confirmed = await (window as any).ufm.showConfirmDialog({
                       message: `Clear all products from "${label}"?`,
@@ -154,6 +153,7 @@ export default function EditorSidebar({
                       cancelLabel: "Cancel",
                     });
                     if (confirmed) {
+                      onToggle();
                       onClear!();
                     }
                   }}
@@ -179,14 +179,20 @@ export default function EditorSidebar({
               {onClearAll && (
                 <button
                   onClick={async () => {
-                    onToggle();
+                    // #region agent log
+                    (window as any).ufm?.debugLog?.({ sessionId: 'c3b215', location: 'EditorSidebar.tsx:clearAllClick', message: 'Clear All clicked', data: { itemCount }, hypothesisId: 'E' });
+                    // #endregion
                     const confirmed = await (window as any).ufm.showConfirmDialog({
                       message: "Clear ALL departments?",
                       detail: "This will remove all products and price labels from every department. This cannot be undone.",
                       confirmLabel: "Clear All",
                       cancelLabel: "Cancel",
                     });
+                    // #region agent log
+                    (window as any).ufm?.debugLog?.({ sessionId: 'c3b215', location: 'EditorSidebar.tsx:clearAllConfirm', message: 'confirm result', data: { confirmed }, hypothesisId: 'A' });
+                    // #endregion
                     if (confirmed) {
+                      onToggle();
                       onClearAll();
                     }
                   }}

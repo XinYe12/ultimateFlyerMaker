@@ -1,8 +1,8 @@
 import React from "react";
 
 const LAYERS = [
-  { id: "flyer", label: "Flyer photo", active: false },
-  { id: "department", label: "Department area", active: false },
+  { id: "flyer", label: "Flyer photo", active: true },
+  { id: "department", label: "Department area", active: true },
   { id: "cells", label: "Product cells", active: true },
   { id: "fields", label: "Text fields", hint: "next step", active: false },
 ] as const;

@@ -58,37 +58,23 @@ export function autoLayoutCards({
   // Dynamic row count: ceil(N / 3), or use targetRows if specified
   const rows = targetRows ?? Math.ceil(itemIds.length / DEFAULT_CARDS_PER_ROW);
 
-  // Distribute items evenly across rows
+  // Uniform column count across ALL rows — enables vertical merge buttons between any two rows
+  const colsPerRow = Math.max(2, Math.ceil(itemIds.length / rows));
+  const cardWidth = (regionWidth - (colsPerRow - 1) * CARD_GAP) / colsPerRow;
+
   let itemIndex = 0;
-
   for (let r = 0; r < rows; r++) {
-    const remaining = itemIds.length - itemIndex;
-    const remainingRows = rows - r;
-    const rowItemCount = Math.ceil(remaining / remainingRows);
-
-    // Ensure at least 2 cards per row (no full-width cards)
-    const totalCardsInRow = Math.max(2, rowItemCount);
-    const cardWidth = (regionWidth - (totalCardsInRow - 1) * CARD_GAP) / totalCardsInRow;
-
-    for (let c = 0; c < totalCardsInRow; c++) {
-      if (c < rowItemCount && itemIndex < itemIds.length) {
-        cards.push({
-          id: generateId(),
-          row: r,
-          order: c,
-          widthPx: Math.round(cardWidth),
-          itemId: itemIds[itemIndex],
-        });
-        itemIndex++;
-      } else {
-        // Empty padding card
-        cards.push({
-          id: generateId(),
-          row: r,
-          order: c,
-          widthPx: Math.round(cardWidth),
-        });
+    for (let c = 0; c < colsPerRow; c++) {
+      const entry: CardDef = {
+        id: generateId(),
+        row: r,
+        order: c,
+        widthPx: Math.round(cardWidth),
+      };
+      if (itemIndex < itemIds.length) {
+        entry.itemId = itemIds[itemIndex++];
       }
+      cards.push(entry);
     }
   }
 

@@ -7,7 +7,7 @@ import { FlyerTemplateConfig, CustomBoxDef } from "../editor/loadFlyerTemplateCo
 import RenderFlyerPlacements from "../editor/RenderFlyerPlacements";
 import { layoutFlyer, layoutFlyerSlots } from "../../../../shared/flyer/layout/layoutFlyer";
 import { isSlottedDepartment, isCardDepartment } from "../editor/loadFlyerTemplateConfig";
-import { layoutCardRows, computeCardRects, CARD_BG } from "../../../../shared/flyer/layout/layoutCardRows";
+import { layoutCardRows, computeCardRects, resolveLayoutRowsForRendering, CARD_BG, DEFAULT_CELL_GAP } from "../../../../shared/flyer/layout/layoutCardRows";
 import { buildDynamicContextFromJobs, resolveEditableBoxContent } from "../editor/dynamicData";
 
 type Props = {
@@ -237,20 +237,43 @@ export default function FlyerExportRenderer({
                 const deptArea = (page as any).departmentAreas?.find(
                   (a: { departmentKey: string }) => a.departmentKey === deptId
                 );
-                const layoutRows = deptArea?.rows ?? deptDef.rows;
+                const layoutRows = resolveLayoutRowsForRendering(
+                  cardLayout,
+                  job.userRowCounts?.[deptId],
+                  deptArea?.rows ?? deptDef.rows,
+                );
+
+                // Uniform insets: DEFAULT_CELL_GAP on all four sides (same for all departments).
+                const cellGap = DEFAULT_CELL_GAP;
+                const innerRegion = {
+                  x: cardRegion.x + cellGap,
+                  y: cardRegion.y + cellGap,
+                  width: Math.max(1, cardRegion.width - 2 * cellGap),
+                  height: Math.max(1, cardRegion.height - 2 * cellGap),
+                };
+                const xScale = innerRegion.width / cardRegion.width;
+                const innerCardLayout =
+                  xScale !== 1
+                    ? cardLayout.map(c => ({
+                        ...c,
+                        widthPx: Math.max(1, Math.round(c.widthPx * xScale)),
+                      }))
+                    : cardLayout;
 
                 const placements = layoutCardRows({
-                  cards: cardLayout,
-                  region: cardRegion,
+                  cards: innerCardLayout,
+                  region: innerRegion,
                   rows: layoutRows,
+                  gap: cellGap,
                   pageId: page.pageId,
                   regionId: deptId,
                 });
 
                 const cardRects = computeCardRects({
-                  cards: cardLayout,
-                  region: cardRegion,
+                  cards: innerCardLayout,
+                  region: innerRegion,
                   rows: layoutRows,
+                  gap: cellGap,
                 });
 
                 return (

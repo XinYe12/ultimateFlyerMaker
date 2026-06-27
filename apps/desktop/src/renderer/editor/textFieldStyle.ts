@@ -11,6 +11,8 @@ export function titleStylePatchFromCard(card: CardDef): Partial<CardDef> {
     titleBgPad: card.titleBgPad,
     titleEffect: card.titleEffect,
     titleScale: card.titleScale,
+    titleOffsetX: card.titleOffsetX,
+    titleOffsetY: card.titleOffsetY,
     titleCompMetaScale: card.titleCompMetaScale,
     titleCompMetaOffsetY: card.titleCompMetaOffsetY,
   };
@@ -25,6 +27,8 @@ export function priceStylePatchFromCard(card: CardDef): Partial<CardDef> {
     priceBgPad: card.priceBgPad,
     priceEffect: card.priceEffect,
     priceScale: card.priceScale,
+    priceOffsetX: card.priceOffsetX,
+    priceOffsetY: card.priceOffsetY,
     priceCompDollarRatio: card.priceCompDollarRatio,
     priceCompDollarOffsetY: card.priceCompDollarOffsetY,
     priceCompQtyRatio: card.priceCompQtyRatio,

@@ -11,6 +11,14 @@ export type ReplacementJob = {
   errorMessage?: string;
 };
 
+export type AddProductFormMeta = {
+  enTitle?: string;
+  zhTitle?: string;
+  size?: string;
+  salePrice?: string;
+  regPrice?: string;
+};
+
 // Shape produced by parseDiscountText and parseDiscountXlsx
 export type ParsedDiscount = {
   en: string;

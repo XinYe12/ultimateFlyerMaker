@@ -94,6 +94,54 @@ async function waitForVite(host = "127.0.0.1", port = 5173, maxAttempts = 60, in
   throw new Error(`Vite dev server at ${url} did not become ready after ${maxAttempts} attempts`);
 }
 
+function packagedRendererPath(page) {
+  return path.join(__dirname, "../../dist/renderer", page);
+}
+
+function loadRendererPage(win, page, hash) {
+  if (app.isPackaged) {
+    const opts = hash ? { hash } : undefined;
+    win.loadFile(packagedRendererPath(page), opts);
+    return;
+  }
+  const devPath = page === "index.html" ? "http://localhost:5173/" : `http://localhost:5173/${page}`;
+  const hashPart = hash ? `#${hash}` : "";
+  win.loadURL(`${devPath}${hashPart}`);
+}
+
+function createOrFocusManualWindow(chapterId) {
+  const hash = chapterId ? String(chapterId).trim() : "";
+
+  if (manualWindow && !manualWindow.isDestroyed()) {
+    if (hash) {
+      manualWindow.webContents.executeJavaScript(
+        `window.location.hash = ${JSON.stringify(hash)}`
+      ).catch(() => {});
+    }
+    manualWindow.show();
+    manualWindow.focus();
+    return;
+  }
+
+  manualWindow = new BrowserWindow({
+    width: 900,
+    height: 700,
+    autoHideMenuBar: true,
+    title: "Ultimate Flyer Maker — User Manual",
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: true,
+    },
+  });
+
+  loadRendererPage(manualWindow, "manual.html", hash || undefined);
+
+  manualWindow.on("closed", () => {
+    manualWindow = null;
+  });
+}
+
 /* ---------- Safe IPC send helper ---------- */
 function safeSend(channel, data) {
   try {
@@ -156,6 +204,7 @@ function notifyJobComplete(jobId, result) {
 let mainWindow = null;
 let splashWindow = null;
 let googleSearchWindow = null;
+let manualWindow = null;
 let forceQuit = false;
 
 function createSplashWindow() {
@@ -212,7 +261,11 @@ function createWindow() {
     }
   });
 
-  mainWindow.loadURL("http://localhost:5173");
+  if (app.isPackaged) {
+    loadRendererPage(mainWindow, "index.html");
+  } else {
+    mainWindow.loadURL("http://localhost:5173");
+  }
   if (!app.isPackaged) mainWindow.webContents.openDevTools();
 
   // Zoom shortcuts. We own all three (in/out/reset) so Chromium's native zoom
@@ -802,6 +855,17 @@ ipcMain.handle("ufm:openGoogleSearchWindow", async (_, query) => {
   });
 });
 
+/* ---------- IPC: operator user manual window ---------- */
+ipcMain.handle("ufm:openManualWindow", async (_, chapterId) => {
+  createOrFocusManualWindow(chapterId);
+});
+
+ipcMain.handle("ufm:closeManualWindow", async () => {
+  if (manualWindow && !manualWindow.isDestroyed()) {
+    manualWindow.close();
+  }
+});
+
 // Track AbortControllers for in-flight downloadAndIngest calls, keyed by jobId.
 const activeDownloadControllers = new Map();
 
@@ -930,6 +994,18 @@ ipcMain.handle("ufm:showConfirmDialog", async (_, { message, detail, confirmLabe
     detail: detail || "",
   });
   return response === 0;
+});
+
+/* ---------- IPC: debug log (agent instrumentation) ---------- */
+const DEBUG_LOG_PATH = path.join(__dirname, "../../../../../debug-c3b215.log");
+ipcMain.handle("ufm:debugLog", async (_, payload) => {
+  try {
+    const line = JSON.stringify({ ...payload, timestamp: payload?.timestamp ?? Date.now() }) + "\n";
+    await fs.promises.appendFile(DEBUG_LOG_PATH, line, "utf8");
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
 });
 
 /* ---------- IPC: file picker dialog ---------- */
@@ -1491,7 +1567,9 @@ app.whenReady().then(async () => {
 
     // 5️⃣ Wait for Vite dev server then create window (avoids ERR_CONNECTION_REFUSED when run with npm run dev)
     updateSplash("Loading interface…");
-    await waitForVite("127.0.0.1", 5173, 60, 500);
+    if (!app.isPackaged) {
+      await waitForVite("127.0.0.1", 5173, 60, 500);
+    }
     phases.viteReady = Date.now() - PROCESS_T0;
     createWindow();
     phases.windowCreated = Date.now() - PROCESS_T0;

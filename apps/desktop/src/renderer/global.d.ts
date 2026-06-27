@@ -261,6 +261,7 @@ declare global {
       onContextMenuAction: (cb: (data: { itemId: string; action: string }) => void) => () => void;
 
       showConfirmDialog: (opts: { message: string; detail?: string; confirmLabel?: string; cancelLabel?: string }) => Promise<boolean>;
+      debugLog: (payload: Record<string, unknown>) => Promise<{ ok: boolean; error?: string }>;
 
       onCanvasZoom: (cb: (data: { delta?: number; reset?: boolean }) => void) => () => void;
       setWindowZoom: (factor: number) => Promise<void>;
@@ -308,6 +309,9 @@ declare global {
         departmentAreas: import("./editor/loadFlyerTemplateConfig").DepartmentAreaDef[];
       }) => Promise<string>;
       persistTemplateAssets: (templateId: string, pages: unknown[]) => Promise<{ ok: boolean }>;
+
+      openManualWindow: (chapterId?: string) => Promise<void>;
+      closeManualWindow: () => Promise<void>;
     };
   }
 }

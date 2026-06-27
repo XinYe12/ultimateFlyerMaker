@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { extractImageUrl } from "./extractImageUrl";
 import { ReplacementJob } from "../types";
+import IngestJobQueuePanel from "./IngestJobQueuePanel";
 
 type Props = {
   itemId: string;
@@ -93,9 +94,6 @@ export default function GoogleSearchModal({ itemId, initialQuery, currentImageSr
       handleSelectUrlFallback(url);
     }
   };
-
-  const activeJobs = jobs.filter(j => j.status === "processing");
-  const doneJobs = jobs.filter(j => j.status === "done");
 
   const dropHint = selectedFlavorIdx != null
     ? `Drop image → replace Flavor ${selectedFlavorIdx + 1}`
@@ -356,68 +354,7 @@ export default function GoogleSearchModal({ itemId, initialQuery, currentImageSr
             </div>
 
             {/* Processing queue */}
-            {jobs.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#868E96", textTransform: "uppercase", letterSpacing: 0.5 }}>
-                  Queue ({doneJobs.length}/{jobs.length})
-                </div>
-                {jobs.map((job) => (
-                  <div
-                    key={job.id}
-                    style={{ background: "#F8F9FA", borderRadius: 8, padding: "8px 10px" }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
-                      {job.status === "processing" && (
-                        <div style={{
-                          width: 12, height: 12,
-                          border: "2px solid #dee2e6",
-                          borderTopColor: "#4C6EF5",
-                          borderRadius: "50%",
-                          animation: "ufm-spin 0.75s linear infinite",
-                          flexShrink: 0,
-                        }} />
-                      )}
-                      {job.status === "done" && (
-                        <span style={{ color: "#2f9e44", fontSize: 13, lineHeight: 1, flexShrink: 0 }}>✓</span>
-                      )}
-                      {job.status === "error" && (
-                        <span style={{ color: "#e03131", fontSize: 13, lineHeight: 1, flexShrink: 0 }}>✕</span>
-                      )}
-                      <span style={{ fontSize: 11, color: "#495057" }}>
-                        {job.status === "processing" ? "Processing…"
-                          : job.status === "done" ? "Done"
-                          : "Failed"}
-                      </span>
-                    </div>
-
-                    {/* Progress bar track */}
-                    <div style={{ height: 3, borderRadius: 2, background: "#dee2e6", overflow: "hidden" }}>
-                      {job.status === "processing" && (
-                        <div style={{
-                          height: "100%",
-                          width: "30%",
-                          borderRadius: 2,
-                          background: "#4C6EF5",
-                          animation: "ufm-progress-pulse 1.4s ease-in-out infinite",
-                        }} />
-                      )}
-                      {job.status === "done" && (
-                        <div style={{ height: "100%", width: "100%", borderRadius: 2, background: "#2f9e44" }} />
-                      )}
-                      {job.status === "error" && (
-                        <div style={{ height: "100%", width: "100%", borderRadius: 2, background: "#fa5252" }} />
-                      )}
-                    </div>
-
-                    {job.status === "error" && job.errorMessage && (
-                      <div style={{ fontSize: 10, color: "#e03131", marginTop: 4, lineHeight: 1.35 }}>
-                        {job.errorMessage}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+            <IngestJobQueuePanel jobs={jobs} />
 
             {/* Fallback processing indicator (when onDropImage is not provided) */}
             {processing && (
