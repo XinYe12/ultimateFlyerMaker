@@ -342,7 +342,7 @@ ${ocrText}
 
 /* ---------- Gemini embed ---------- */
 
-const EMBED_MODEL = "gemini-embedding-2";
+const EMBED_MODEL = "text-embedding-004";
 const EMBED_TIMEOUT_MS = 30_000;
 
 async function geminiEmbed(text) {
@@ -551,12 +551,12 @@ export async function testGeminiConnection() {
   // --- Embed ---
   try {
     const res = await net.fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:embedContent?key=${apiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "models/gemini-embedding-2",
+          model: `models/${EMBED_MODEL}`,
           content: { parts: [{ text: "test" }] },
           outputDimensionality: 8,
         }),

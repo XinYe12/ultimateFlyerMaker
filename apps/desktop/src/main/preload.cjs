@@ -359,4 +359,9 @@ contextBridge.exposeInMainWorld("ufm", {
   // ---------- OPERATOR USER MANUAL ----------
   openManualWindow: (chapterId) => ipcRenderer.invoke("ufm:openManualWindow", chapterId),
   closeManualWindow: () => ipcRenderer.invoke("ufm:closeManualWindow"),
+
+  // ---------- FLIPP UPLOAD ----------
+  openPdfDialog: () => ipcRenderer.invoke("ufm:openPdfDialog"),
+  uploadFlyerPDF: (base64) =>
+    ipcRenderer.invoke("ufm:uploadFlyerPDF", { base64 }),
 });

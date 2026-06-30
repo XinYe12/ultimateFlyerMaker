@@ -13,6 +13,8 @@ import {
 import Modal from "../components/ui/Modal";
 import Button from "../components/ui/Button";
 
+type UploadState = "idle" | "uploading" | "done" | "error";
+
 type Props = {
   templateConfig: FlyerTemplateConfig;
   jobs: FlyerJob[];
@@ -31,6 +33,10 @@ export default function ExportModal({
   const [progress, setProgress] = useState<ExportProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [pdfBase64, setPdfBase64] = useState<string | null>(null);
+  const [uploadState, setUploadState] = useState<UploadState>("idle");
+  const [uploadResult, setUploadResult] = useState<{ fileUrl: string; liveUrl: string } | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const handleExport = async () => {
     setExporting(true);
@@ -39,11 +45,12 @@ export default function ExportModal({
     try {
       const filename = generateExportFilename(templateConfig.templateId);
 
-      await exportFlyerToPDF({
+      const result = await exportFlyerToPDF({
         filename,
         onProgress: (prog) => setProgress(prog),
       });
 
+      setPdfBase64(result.pdfBase64);
       setSuccess(true);
       onSuccess?.();
     } catch (err) {
@@ -51,6 +58,20 @@ export default function ExportModal({
       setError(err instanceof Error ? err.message : "Export failed");
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!pdfBase64) return;
+    setUploadState("uploading");
+    setUploadError(null);
+    try {
+      const result = await (window as any).ufm.uploadFlyerPDF(pdfBase64);
+      setUploadResult(result);
+      setUploadState("done");
+    } catch (err: any) {
+      setUploadError(err?.message ?? "Upload failed");
+      setUploadState("error");
     }
   };
 
@@ -160,42 +181,109 @@ export default function ExportModal({
         )}
 
         {success && (
-          <div style={{ textAlign: "center", padding: "40px 0" }}>
-            <div
-              style={{
-                width: 64,
-                height: 64,
-                borderRadius: "50%",
-                background: "#D3F9D8",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                margin: "0 auto 16px",
-              }}
-            >
-              <span style={{ fontSize: 32, color: "var(--color-success)" }}>
-                ✓
-              </span>
+          <div style={{ padding: "32px 0 8px" }}>
+            {/* Export success row */}
+            <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 28 }}>
+              <div style={{
+                width: 48, height: 48, borderRadius: "50%", background: "#D3F9D8",
+                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+              }}>
+                <span style={{ fontSize: 24, color: "var(--color-success)" }}>✓</span>
+              </div>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: "var(--font-semibold)", color: "var(--color-text)" }}>
+                  PDF saved to your computer
+                </div>
+                <div style={{ fontSize: 13, color: "var(--color-text-muted)", marginTop: 2 }}>
+                  Flyer exported successfully.
+                </div>
+              </div>
             </div>
-            <h3
-              style={{
-                margin: "0 0 8px",
-                fontSize: 20,
-                fontWeight: "var(--font-semibold)",
-                color: "var(--color-text)",
-              }}
-            >
-              Export Complete!
-            </h3>
-            <p
-              style={{
-                margin: 0,
-                color: "var(--color-text-muted)",
-                fontSize: 15,
-              }}
-            >
-              Your flyer has been saved successfully.
+
+            {/* Divider */}
+            <div style={{ borderTop: "1px solid var(--color-border, #e2e8f0)", marginBottom: 24 }} />
+
+            {/* Upload to Flipp section */}
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 12 }}>
+              Step 2 — Publish to Website
+            </div>
+            <p style={{ margin: "0 0 16px", fontSize: 14, color: "var(--color-text-muted)", lineHeight: 1.6 }}>
+              Upload the PDF to your website so Flipp can fetch the latest flyer.
             </p>
+
+            {uploadState === "idle" && (
+              <Button variant="primary" onClick={handleUpload}>
+                Upload to Website
+              </Button>
+            )}
+
+            {uploadState === "uploading" && (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--color-text-muted)", fontSize: 14 }}>
+                <div style={{
+                  width: 20, height: 20, border: "3px solid #f3f3f3",
+                  borderTop: "3px solid var(--color-primary)", borderRadius: "50%",
+                  animation: "ufm-spin 1s linear infinite", flexShrink: 0,
+                }} />
+                Committing PDF to GitHub...
+              </div>
+            )}
+
+            {uploadState === "done" && uploadResult && (
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+                  <div style={{
+                    width: 28, height: 28, borderRadius: "50%", background: "#D3F9D8",
+                    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                  }}>
+                    <span style={{ fontSize: 14, color: "var(--color-success)" }}>✓</span>
+                  </div>
+                  <span style={{ fontSize: 14, fontWeight: 600, color: "var(--color-text)" }}>
+                    Committed to GitHub — Flipp will pick it up shortly.
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 6 }}>Live URL (may take ~1 min for GitHub Pages to deploy):</div>
+                <div style={{
+                  background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8,
+                  padding: "10px 12px", fontSize: 12, fontFamily: "monospace",
+                  color: "#475569", wordBreak: "break-all", marginBottom: 8,
+                }}>
+                  {uploadResult.liveUrl}
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={() => { void navigator.clipboard.writeText(uploadResult.liveUrl); }}
+                    style={{
+                      padding: "6px 14px", borderRadius: 6,
+                      border: "1px solid #e2e8f0", background: "#fff",
+                      fontSize: 12, color: "#475569", cursor: "pointer",
+                    }}
+                  >
+                    Copy URL
+                  </button>
+                  <button
+                    onClick={() => { (window as any).ufm?.openExternal?.(uploadResult.fileUrl); }}
+                    style={{
+                      padding: "6px 14px", borderRadius: 6,
+                      border: "1px solid #e2e8f0", background: "#fff",
+                      fontSize: 12, color: "#475569", cursor: "pointer",
+                    }}
+                  >
+                    View commit on GitHub ↗
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {uploadState === "error" && (
+              <div>
+                <div style={{ color: "var(--color-error)", fontSize: 14, marginBottom: 10 }}>
+                  Upload failed: {uploadError}
+                </div>
+                <Button variant="secondary" onClick={handleUpload}>
+                  Retry Upload
+                </Button>
+              </div>
+            )}
           </div>
         )}
 
@@ -254,13 +342,16 @@ export default function ExportModal({
         )}
       </Modal>
 
-      {/* Hidden renderer - renders flyer pages off-screen */}
+      {/* Hidden renderer - positioned at left:0 so html2canvas captures the full width.
+          z-index:-1 places it behind the modal backdrop (z-index:10000) and the main UI. */}
       <div
         style={{
           position: "fixed",
-          left: "-9999px",
+          left: 0,
           top: 0,
           width: "1650px",
+          zIndex: -1,
+          pointerEvents: "none",
         }}
       >
         <FlyerExportRenderer

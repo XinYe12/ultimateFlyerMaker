@@ -6,6 +6,7 @@ import fetch from "node-fetch";
 import FormData from "form-data";
 import { fileURLToPath } from "url";
 import "./loadEnv.js";
+import { debugIngest } from "./debugIngest.js";
 
 import { processFlyerImage } from "./imagePipeline.js";
 import { ingestPhoto, ingestPhotoPhase1, ingestPhotoPhase2 } from "./ingestion/ingestPhoto.js";
@@ -1057,6 +1058,17 @@ ipcMain.handle("ufm:openFolderDialog", async () => {
   return allImages;
 });
 
+ipcMain.handle("ufm:openPdfDialog", async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openFile"],
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  const filePath = result.filePaths[0];
+  const base64 = fs.readFileSync(filePath).toString("base64");
+  return { filePath, base64 };
+});
+
 ipcMain.handle("ufm:openXlsxDialog", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ["openFile"],
@@ -1162,19 +1174,13 @@ let _getDbStatsInflight = null;
 ipcMain.handle("ufm:getDbStats", async () => {
   if (_getDbStatsInflight) {
     // #region agent log
-    fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
-      body: JSON.stringify({
-        sessionId: "2e2f6c",
+    debugIngest({
         location: "main.js:ufm:getDbStats",
         message: "IPC deduped to in-flight request",
         data: {},
         hypothesisId: "B",
-        timestamp: Date.now(),
         runId: "post-fix",
-      }),
-    }).catch(() => {});
+      });
     // #endregion
     return _getDbStatsInflight;
   }
@@ -1183,19 +1189,13 @@ ipcMain.handle("ufm:getDbStats", async () => {
   const ipcId = `ipc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   // #region agent log
   const { debugFirestoreInFlight } = await import("./ingestion/firebase.js");
-  fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
-    body: JSON.stringify({
-      sessionId: "2e2f6c",
+  debugIngest({
       location: "main.js:ufm:getDbStats",
       message: "IPC handler start",
       data: { ipcId, firestoreInFlight: debugFirestoreInFlight },
       hypothesisId: "B",
-      timestamp: Date.now(),
       runId: "post-fix",
-    }),
-  }).catch(() => {});
+    });
   // #endregion
   LOG("1", "IPC received.");
 
@@ -1432,6 +1432,61 @@ ipcMain.handle("ufm:showItemInFolder", (_event, rawPath) => {
   shell.showItemInFolder(filePath);
 });
 
+/* ---------- Flipp PDF upload (GitHub Pages) ---------- */
+ipcMain.handle("ufm:uploadFlyerPDF", async (_, { base64 }) => {
+  const token    = process.env.GITHUB_TOKEN;
+  const owner    = process.env.GITHUB_OWNER;
+  const repo     = process.env.GITHUB_REPO;
+  const branch   = process.env.GITHUB_BRANCH || "main";
+  const repoPath = process.env.GITHUB_FLYER_PATH || "flyer/london.pdf";
+  if (!token || !owner || !repo) {
+    throw new Error("GitHub not configured. Add GITHUB_TOKEN, GITHUB_OWNER, and GITHUB_REPO to your .env settings.");
+  }
+
+  const apiBase = `https://api.github.com/repos/${owner}/${repo}/contents/${repoPath}`;
+  const headers = {
+    Authorization: `token ${token}`,
+    Accept: "application/vnd.github+json",
+    "User-Agent": "UltimateFlyerMaker/1.0",
+    "Content-Type": "application/json",
+  };
+
+  // Fetch existing file SHA (required by GitHub API to overwrite)
+  let sha;
+  try {
+    const getRes = await fetch(`${apiBase}?ref=${branch}`, { headers });
+    if (getRes.ok) {
+      const data = await getRes.json();
+      sha = data.sha;
+    } else if (getRes.status !== 404) {
+      throw new Error(`GitHub GET failed: ${getRes.status} ${getRes.statusText}`);
+    }
+  } catch (e) {
+    if (!e.message?.startsWith("GitHub")) throw e;
+    throw e;
+  }
+
+  const body = JSON.stringify({
+    message: `Update weekly flyer — ${new Date().toLocaleDateString("en-CA")}`,
+    content: base64,
+    branch,
+    ...(sha ? { sha } : {}),
+  });
+
+  const putRes = await fetch(apiBase, { method: "PUT", headers, body });
+  if (!putRes.ok) {
+    const text = await putRes.text();
+    throw new Error(`GitHub upload failed (${putRes.status}): ${text}`);
+  }
+  const data = await putRes.json();
+  const fileUrl = data.content?.html_url ?? `https://github.com/${owner}/${repo}/blob/${branch}/${repoPath}`;
+  const domain = process.env.GITHUB_SITE_DOMAIN
+    ? process.env.GITHUB_SITE_DOMAIN.replace(/\/$/, "")
+    : `https://${owner.toLowerCase()}.github.io/${repo}`;
+  const liveUrl = `${domain}/${repoPath}`;
+  return { fileUrl, liveUrl };
+});
+
 /* ---------- Native context menu ---------- */
 ipcMain.on("ufm:showContextMenu", (event, { itemId, actions }) => {
   const template = actions.map((action) => ({
@@ -1455,6 +1510,12 @@ const OPTIONAL_KEYS = [
   { key: "GEMINI_API_KEY", label: "Gemini API Key", description: "Required for DB ingestion vision/embeddings", url: "https://aistudio.google.com/apikey" },
   { key: "GEMINI_MODEL", label: "Gemini Vision Model", description: "Gemini model for DB ingestion vision. Auto-detected if blank; set to e.g. gemini-2.0-flash if auto-detection fails.", url: "https://ai.google.dev/gemini-api/docs/models" },
   { key: "DEEPSEEK_MODEL", label: "DeepSeek Model", description: "DeepSeek model for product parsing", url: "https://api-docs.deepseek.com/" },
+  { key: "GITHUB_TOKEN", label: "GitHub Token", description: "Personal access token for publishing the weekly flyer PDF to your website repo", url: "https://github.com/settings/tokens/new?scopes=contents&description=UltimateFlyerMaker" },
+  { key: "GITHUB_OWNER", label: "GitHub Owner", description: "Your GitHub username or organization (e.g. unitedsupermarkets)", url: "https://github.com" },
+  { key: "GITHUB_REPO", label: "GitHub Repo", description: "Repository name that hosts your website (e.g. unitedsupermarkets.ca)", url: "https://github.com" },
+  { key: "GITHUB_FLYER_PATH", label: "Flyer File Path in Repo", description: "Path to the PDF inside the repo (e.g. flyer/london.pdf)", url: "https://github.com" },
+  { key: "GITHUB_BRANCH", label: "GitHub Branch", description: "Branch to commit to (leave blank to use main)", url: "https://github.com" },
+  { key: "GITHUB_SITE_DOMAIN", label: "Website Domain", description: "Your live site domain (e.g. https://unitedsupermarkets.ca) — used to show the live PDF URL after upload", url: "https://github.com" },
 ];
 
 function getMissingRequiredKeys() {
@@ -1524,35 +1585,23 @@ app.whenReady().then(async () => {
         .then((snap) => {
           console.log("[firebase] [post-init] ✅ Test query OK. Sample size:", snap.size);
           // #region agent log
-          fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
-            body: JSON.stringify({
-              sessionId: "2e2f6c",
+          debugIngest({
               location: "main.js:post-init",
               message: "admin.firestore test ok",
               data: { ms: Date.now() - adminT0, client: "admin.firestore" },
               hypothesisId: "A",
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
+              });
           // #endregion
         })
         .catch((err) => {
           console.warn("[firebase] [post-init] ❌ Test query failed:", err?.message?.slice(0, 100));
           // #region agent log
-          fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
-            body: JSON.stringify({
-              sessionId: "2e2f6c",
+          debugIngest({
               location: "main.js:post-init",
               message: "admin.firestore test fail",
               data: { ms: Date.now() - adminT0, err: String(err?.message || err).slice(0, 120) },
               hypothesisId: "A",
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
+              });
           // #endregion
         });
 

@@ -16,10 +16,15 @@ export type ExportOptions = {
   filename?: string;
 };
 
+export type ExportResult = {
+  pdfBase64: string;
+  filename: string;
+};
+
 /**
  * Export rendered flyer pages to PDF
  */
-export async function exportFlyerToPDF(options: ExportOptions = {}): Promise<void> {
+export async function exportFlyerToPDF(options: ExportOptions = {}): Promise<ExportResult> {
   const { onProgress, filename = "flyer.pdf" } = options;
 
   try {
@@ -57,13 +62,18 @@ export async function exportFlyerToPDF(options: ExportOptions = {}): Promise<voi
         message: `Capturing page ${i + 1} of ${totalPages}...`,
       });
 
-      // Use html2canvas to capture the page
+      // Use html2canvas to capture the page.
+      // windowWidth must be >= page width so html2canvas doesn't clip horizontally.
       const canvas = await html2canvas(pageElement, {
         scale: 2, // Higher resolution
         useCORS: true,
         allowTaint: true,
         backgroundColor: "#ffffff",
         logging: false,
+        windowWidth: Math.max(pageElement.scrollWidth, 1650),
+        windowHeight: pageElement.scrollHeight,
+        scrollX: 0,
+        scrollY: 0,
       });
 
       canvases.push(canvas);
@@ -76,31 +86,28 @@ export async function exportFlyerToPDF(options: ExportOptions = {}): Promise<voi
       message: "Generating PDF...",
     });
 
-    // Create PDF
-    // Calculate PDF dimensions to match flyer aspect ratio exactly
-    const firstCanvas = canvases[0];
-    const canvasAspectRatio = firstCanvas.height / firstCanvas.width;
+    // Create PDF — each page uses its own aspect ratio so multi-page flyers render correctly.
+    const pdfWidthIn = 8.5; // standard letter width in inches
 
-    // Use 8.5 inches as base width (standard letter width)
-    // Calculate height to match the canvas aspect ratio
-    const pdfWidth = 8.5;
-    const pdfHeight = pdfWidth * canvasAspectRatio;
-
-    // Determine orientation
-    const orientation = canvasAspectRatio > 1 ? "portrait" : "landscape";
+    const pageDims = canvases.map(c => {
+      const ratio = c.height / c.width;
+      const h = pdfWidthIn * ratio;
+      const orientation: "portrait" | "landscape" = ratio > 1 ? "portrait" : "landscape";
+      return { w: pdfWidthIn, h, orientation };
+    });
 
     const pdf = new jsPDF({
-      orientation,
+      orientation: pageDims[0].orientation,
       unit: "in",
-      format: [pdfWidth, pdfHeight],
+      format: [pageDims[0].w, pageDims[0].h],
     });
 
     // Add each page to PDF
     for (let i = 0; i < canvases.length; i++) {
       const canvas = canvases[i];
+      const { w: pdfWidth, h: pdfHeight, orientation } = pageDims[i];
 
       if (i > 0) {
-        // Add new page with same dimensions
         pdf.addPage([pdfWidth, pdfHeight], orientation);
       }
 
@@ -125,7 +132,8 @@ export async function exportFlyerToPDF(options: ExportOptions = {}): Promise<voi
       message: "Saving PDF...",
     });
 
-    // Save PDF
+    // Save local copy and capture base64 for upload
+    const pdfBase64 = pdf.output("datauristring").split(",")[1];
     pdf.save(filename);
 
     onProgress?.({
@@ -134,6 +142,8 @@ export async function exportFlyerToPDF(options: ExportOptions = {}): Promise<voi
       totalPages,
       message: "Export complete!",
     });
+
+    return { pdfBase64, filename };
   } catch (error) {
     console.error("Export failed:", error);
     throw error;

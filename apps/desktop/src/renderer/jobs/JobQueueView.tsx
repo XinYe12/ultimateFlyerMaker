@@ -11,6 +11,7 @@ import DepartmentOverview from "./DepartmentOverview";
 import JobCreationPanel from "./JobCreationPanel";
 import ExportWarningDialog from "../export/ExportWarningDialog";
 import ExportModal from "../export/ExportModal";
+import PublishPDFDialog from "../export/PublishPDFDialog";
 import { checkExportReadiness, ExportReadinessCheck } from "../export/exportUtils";
 
 type Props = {
@@ -45,6 +46,7 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
   const [availableDepartments, setAvailableDepartments] = useState<string[]>(["grocery"]);
   const [templateConfig, setTemplateConfig] = useState<FlyerTemplateConfig | null>(null);
   const [showExportWarning, setShowExportWarning] = useState(false);
+  const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [exportReadiness, setExportReadiness] = useState<ExportReadinessCheck | null>(null);
   const [showExportModal, setShowExportModal] = useState(false);
   const draftPanelRef = useRef<HTMLDivElement | null>(null);
@@ -435,19 +437,64 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
                   : `${flyerStatus.readyCount} of ${flyerStatus.departments.length} departments ready`}
               </div>
             </div>
-            <button
-              onClick={handleExportClick}
-              style={{
-                padding: "8px 18px", fontSize: 13, fontWeight: 700,
-                background: "#3b82f6", border: "none", borderRadius: 8,
-                cursor: "pointer", color: "#fff", whiteSpace: "nowrap",
-              }}
-              onMouseEnter={e => { e.currentTarget.style.background = "#2563eb"; }}
-              onMouseLeave={e => { e.currentTarget.style.background = "#3b82f6"; }}
-            >
-              Export Ready Departments →
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => setShowPublishDialog(true)}
+                style={{
+                  padding: "8px 18px", fontSize: 13, fontWeight: 700,
+                  background: "#fff", border: "1px solid #cbd5e1", borderRadius: 8,
+                  cursor: "pointer", color: "#475569", whiteSpace: "nowrap",
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = "#f1f5f9"; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "#fff"; }}
+              >
+                Publish PDF…
+              </button>
+              <button
+                onClick={handleExportClick}
+                style={{
+                  padding: "8px 18px", fontSize: 13, fontWeight: 700,
+                  background: "#3b82f6", border: "none", borderRadius: 8,
+                  cursor: "pointer", color: "#fff", whiteSpace: "nowrap",
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = "#2563eb"; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "#3b82f6"; }}
+              >
+                Export Ready Departments →
+              </button>
+            </div>
           </div>
+        </div>
+      )}
+
+      {/* ── Publish PDF (always visible when Flyer Status panel is hidden) ── */}
+      {!flyerStatus?.canExport && (
+        <div style={{
+          marginTop: 24,
+          background: "#f8fafc",
+          border: "1px solid #e2e8f0",
+          borderRadius: 12,
+          padding: "14px 20px",
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+        }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 15, color: "#1e293b" }}>Publish to Website</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+              Upload a local PDF directly to your website for Flipp to fetch
+            </div>
+          </div>
+          <button
+            onClick={() => setShowPublishDialog(true)}
+            style={{
+              padding: "8px 18px", fontSize: 13, fontWeight: 700,
+              background: "#fff", border: "1px solid #cbd5e1", borderRadius: 8,
+              cursor: "pointer", color: "#475569", whiteSpace: "nowrap",
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = "#f1f5f9"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "#fff"; }}
+          >
+            Publish PDF…
+          </button>
         </div>
       )}
 
@@ -523,6 +570,11 @@ export default function JobQueueView({ templateId, onBack, onViewFlyer, onOpenDr
           onClose={handleExportModalClose}
           onSuccess={onExportDone}
         />
+      )}
+
+      {/* Publish PDF Dialog */}
+      {showPublishDialog && (
+        <PublishPDFDialog onClose={() => setShowPublishDialog(false)} />
       )}
     </div>
   );
