@@ -37,6 +37,7 @@ export default function ExportModal({
   const [uploadState, setUploadState] = useState<UploadState>("idle");
   const [uploadResult, setUploadResult] = useState<{ fileUrl: string; liveUrl: string } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [testMode, setTestMode] = useState(false);
 
   const handleExport = async () => {
     setExporting(true);
@@ -66,7 +67,7 @@ export default function ExportModal({
     setUploadState("uploading");
     setUploadError(null);
     try {
-      const result = await (window as any).ufm.uploadFlyerPDF(pdfBase64);
+      const result = await (window as any).ufm.uploadFlyerPDF(pdfBase64, testMode);
       setUploadResult(result);
       setUploadState("done");
     } catch (err: any) {
@@ -212,9 +213,37 @@ export default function ExportModal({
             </p>
 
             {uploadState === "idle" && (
-              <Button variant="primary" onClick={handleUpload}>
-                Upload to Website
-              </Button>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                  <div style={{ display: "flex", background: "#f1f5f9", borderRadius: 8, padding: 3, gap: 2 }}>
+                    {(["Test", "Live"] as const).map(mode => {
+                      const active = (mode === "Test") === testMode;
+                      return (
+                        <button
+                          key={mode}
+                          onClick={() => setTestMode(mode === "Test")}
+                          style={{
+                            padding: "4px 14px", borderRadius: 6, border: "none", fontSize: 13, fontWeight: 600,
+                            cursor: "pointer",
+                            background: active ? "#fff" : "transparent",
+                            color: active ? (mode === "Live" ? "#16a34a" : "#2563eb") : "#94a3b8",
+                            boxShadow: active ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                            transition: "all 120ms",
+                          }}
+                        >
+                          {mode}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                    {testMode ? "→ flyer/test-upload.pdf" : "→ flyer/london.pdf"}
+                  </span>
+                </div>
+                <Button variant="primary" onClick={handleUpload}>
+                  {testMode ? "Upload as Test" : "Publish Live"}
+                </Button>
+              </div>
             )}
 
             {uploadState === "uploading" && (

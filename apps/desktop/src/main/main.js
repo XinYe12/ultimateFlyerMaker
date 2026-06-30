@@ -1433,12 +1433,14 @@ ipcMain.handle("ufm:showItemInFolder", (_event, rawPath) => {
 });
 
 /* ---------- Flipp PDF upload (GitHub Pages) ---------- */
-ipcMain.handle("ufm:uploadFlyerPDF", async (_, { base64 }) => {
+ipcMain.handle("ufm:uploadFlyerPDF", async (_, { base64, testMode }) => {
   const token    = process.env.GITHUB_TOKEN;
   const owner    = process.env.GITHUB_OWNER;
   const repo     = process.env.GITHUB_REPO;
   const branch   = process.env.GITHUB_BRANCH || "main";
-  const repoPath = process.env.GITHUB_FLYER_PATH || "flyer/london.pdf";
+  const repoPath = testMode
+    ? "flyer/test-upload.pdf"
+    : (process.env.GITHUB_FLYER_PATH || "flyer/london.pdf");
   if (!token || !owner || !repo) {
     throw new Error("GitHub not configured. Add GITHUB_TOKEN, GITHUB_OWNER, and GITHUB_REPO to your .env settings.");
   }

@@ -362,6 +362,6 @@ contextBridge.exposeInMainWorld("ufm", {
 
   // ---------- FLIPP UPLOAD ----------
   openPdfDialog: () => ipcRenderer.invoke("ufm:openPdfDialog"),
-  uploadFlyerPDF: (base64) =>
-    ipcRenderer.invoke("ufm:uploadFlyerPDF", { base64 }),
+  uploadFlyerPDF: (base64, testMode) =>
+    ipcRenderer.invoke("ufm:uploadFlyerPDF", { base64, testMode }),
 });

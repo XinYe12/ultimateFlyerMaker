@@ -16,6 +16,7 @@ export default function PublishPDFDialog({ onClose }: Props) {
   const [uploadState, setUploadState] = useState<UploadState>("idle");
   const [uploadResult, setUploadResult] = useState<{ fileUrl: string; liveUrl: string } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [testMode, setTestMode] = useState(false);
 
   const handleChoose = async () => {
     const result = await (window as any).ufm.openPdfDialog();
@@ -32,7 +33,7 @@ export default function PublishPDFDialog({ onClose }: Props) {
     setUploadState("uploading");
     setUploadError(null);
     try {
-      const result = await (window as any).ufm.uploadFlyerPDF(base64);
+      const result = await (window as any).ufm.uploadFlyerPDF(base64, testMode);
       setUploadResult(result);
       setUploadState("done");
     } catch (err: any) {
@@ -139,6 +140,38 @@ export default function PublishPDFDialog({ onClose }: Props) {
         </div>
       )}
 
+      {/* Test / Live toggle */}
+      {uploadState !== "done" && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+          <span style={{ fontSize: 13, color: "#64748b" }}>Upload as:</span>
+          <div style={{ display: "flex", background: "#f1f5f9", borderRadius: 8, padding: 3, gap: 2 }}>
+            {(["Test", "Live"] as const).map(mode => {
+              const active = (mode === "Test") === testMode;
+              return (
+                <button
+                  key={mode}
+                  onClick={() => { setTestMode(mode === "Test"); setUploadResult(null); setUploadError(null); setUploadState("idle"); }}
+                  disabled={busy}
+                  style={{
+                    padding: "4px 14px", borderRadius: 6, border: "none", fontSize: 13, fontWeight: 600,
+                    cursor: busy ? "default" : "pointer",
+                    background: active ? "#fff" : "transparent",
+                    color: active ? (mode === "Live" ? "#16a34a" : "#2563eb") : "#94a3b8",
+                    boxShadow: active ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                    transition: "all 120ms",
+                  }}
+                >
+                  {mode}
+                </button>
+              );
+            })}
+          </div>
+          <span style={{ fontSize: 12, color: "#94a3b8" }}>
+            {testMode ? "→ flyer/test-upload.pdf" : "→ flyer/london.pdf"}
+          </span>
+        </div>
+      )}
+
       {/* Actions */}
       <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
         <Button variant="secondary" onClick={onClose} disabled={busy}>
@@ -146,7 +179,7 @@ export default function PublishPDFDialog({ onClose }: Props) {
         </Button>
         {base64 && uploadState !== "done" && (
           <Button variant="primary" onClick={handleUpload} disabled={busy}>
-            {uploadState === "uploading" ? "Uploading…" : uploadState === "error" ? "Retry" : "Publish to Website"}
+            {uploadState === "uploading" ? "Uploading…" : uploadState === "error" ? "Retry" : testMode ? "Upload as Test" : "Publish Live"}
           </Button>
         )}
       </div>
