@@ -23,6 +23,8 @@ import {
 } from "./importWizardCellHelpers";
 import ImportWizardCanvas from "./ImportWizardCanvas";
 import FontPickerList from "./FontPickerList";
+import FontWeightPicker from "./FontWeightPicker";
+import { resolveBoxFontWeight } from "./boxFontWeight";
 import DynamicDataPicker from "./DynamicDataPicker";
 import { previewDynamicContext, resolveEditableBoxContent } from "./dynamicData";
 import WizardFloatingToolsPanel from "./WizardFloatingToolsPanel";
@@ -37,10 +39,17 @@ import {
 } from "./sampleFlyerColor";
 import { isFontMatchConfident, matchFontFromFlyerRegion } from "./matchFontFromImage";
 import {
+  EditableBoxResizeHandle,
+  MIN_REGION_SIZE,
+  resizeEditableBoxRect,
+} from "./editableBoxResize";
+import {
   nextUnderprintPresetIdx,
   UNDERPRINT_OPACITY_CYCLE,
   WizardViewMode,
 } from "./importWizardViewState";
+import { nextCanvasZoom } from "./canvasZoomUtils";
+import { useCanvasZoomWheel } from "./useCanvasZoomWheel";
 
 type ElectronFile = File & { path: string };
 
@@ -129,12 +138,12 @@ type AreaDragState =
 
 type BoxDragState =
   | { type: "move"; id: string; startMouseX: number; startMouseY: number; startX: number; startY: number }
-  | { type: "resize"; id: string; corner: "tl" | "tr" | "bl" | "br"; startMouseX: number; startMouseY: number; startX: number; startY: number; startW: number; startH: number };
+  | { type: "resize"; id: string; handle: EditableBoxResizeHandle; startMouseX: number; startMouseY: number; startX: number; startY: number; startW: number; startH: number };
 
 const SNAP = 1;
-const MIN_SIZE = 80;
 const SIDEBAR_WIDTH = 300;
 const CANVAS_HANDLE_MARGIN = 7;
+const BOX_PASTE_OFFSET = 20;
 
 function snap(v: number) { return Math.round(v / SNAP) * SNAP; }
 
@@ -358,10 +367,25 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   const liveDrawRectRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const pagesRef = useRef(pages);
   pagesRef.current = pages;
+
+  /** Keep pagesRef in sync immediately so save/step transitions never read stale box data. */
+  const commitPages = useCallback((updater: React.SetStateAction<PageDraft[]>) => {
+    setPages(prev => {
+      const next = typeof updater === "function"
+        ? (updater as (p: PageDraft[]) => PageDraft[])(prev)
+        : updater;
+      pagesRef.current = next;
+      return next;
+    });
+  }, []);
+
   const stepRef = useRef(step);
   stepRef.current = step;
   const pageIdxRef = useRef(pageIdx);
   pageIdxRef.current = pageIdx;
+  const selectedBoxIdRef = useRef(selectedBoxId);
+  selectedBoxIdRef.current = selectedBoxId;
+  const copiedBoxRef = useRef<BoxDraft | null>(null);
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
   const underprintDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -387,20 +411,22 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   }, []);
 
   const goToStep = useCallback((next: Step) => {
-    if (next === "cellStyle") {
-      setPages(prev => prev.map(pg => ({
+    const current = stepRef.current;
+    // Only initialize cell-style defaults when entering step 2 from step 1 (not when backing out of step 3).
+    if (next === "cellStyle" && current === "regions") {
+      commitPages(prev => prev.map(pg => ({
         ...pg,
         areas: pg.areas.map(a => initializeAreaDraft(a)),
       })));
     }
     setStep(next);
-    setPageIdx(0);
+    if (current === "regions" && next === "cellStyle") setPageIdx(0);
     setSelectedAreaId(null);
     setSelectedBoxId(null);
     setColorPickerMode(null);
     setFontMatchMessage(null);
     if (next !== "cellStyle") setGridPreviewActive(false);
-  }, [initializeAreaDraft]);
+  }, [initializeAreaDraft, commitPages]);
 
   const goToPage = useCallback((idx: number) => {
     setPageIdx(idx);
@@ -409,17 +435,21 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     setColorPickerMode(null);
   }, []);
 
-  const pushToHistoryNow = useCallback(() => {
+  const flushWizardHistoryDebounce = useCallback(() => {
     if (wizardHistoryDebounceRef.current) {
       clearTimeout(wizardHistoryDebounceRef.current);
       wizardHistoryDebounceRef.current = null;
       wizardPendingSnapshotRef.current = null;
     }
+  }, []);
+
+  const pushToHistoryNow = useCallback(() => {
+    flushWizardHistoryDebounce();
     wizardPastRef.current = [...wizardPastRef.current.slice(-(MAX_WIZARD_HISTORY - 1)), pagesRef.current];
     wizardFutureRef.current = [];
     setWizardCanUndo(true);
     setWizardCanRedo(false);
-  }, []);
+  }, [flushWizardHistoryDebounce]);
 
   const pushToHistoryDebounced = useCallback(() => {
     if (!wizardPendingSnapshotRef.current) {
@@ -443,24 +473,24 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     const prev = wizardPastRef.current[wizardPastRef.current.length - 1];
     wizardFutureRef.current = [pagesRef.current, ...wizardFutureRef.current.slice(0, MAX_WIZARD_HISTORY - 1)];
     wizardPastRef.current = wizardPastRef.current.slice(0, -1);
-    setPages(prev);
+    commitPages(prev);
     setSelectedAreaId(null);
     setSelectedBoxId(null);
     setWizardCanUndo(wizardPastRef.current.length > 0);
     setWizardCanRedo(true);
-  }, []);
+  }, [commitPages]);
 
   const wizardRedo = useCallback(() => {
     if (wizardFutureRef.current.length === 0) return;
     const next = wizardFutureRef.current[0];
     wizardPastRef.current = [...wizardPastRef.current.slice(-(MAX_WIZARD_HISTORY - 1)), pagesRef.current];
     wizardFutureRef.current = wizardFutureRef.current.slice(1);
-    setPages(next);
+    commitPages(next);
     setSelectedAreaId(null);
     setSelectedBoxId(null);
     setWizardCanUndo(true);
     setWizardCanRedo(wizardFutureRef.current.length > 0);
-  }, []);
+  }, [commitPages]);
 
   const page = pages[pageIdx];
   const underprintPreset = UNDERPRINT_OPACITY_CYCLE[underprintPresetIdx] ?? UNDERPRINT_OPACITY_CYCLE[0];
@@ -550,7 +580,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
         }),
       };
     });
-    setPages(drafts);
+    commitPages(drafts);
     setTemplateName(initialConfig.name ?? "Imported Template");
     setParsedTemplateId(initialConfig.templateId);
     const hasEditableFields = drafts.some(pg => pg.boxes.some(b => b.isEditable));
@@ -590,7 +620,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
         };
       });
 
-      setPages(drafts);
+      commitPages(drafts);
       goToStep("regions");
     } catch (err: unknown) {
       setLoadError(formatIpcError(err));
@@ -627,33 +657,64 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     return () => window.removeEventListener("resize", updateScale);
   }, [step, page, pageIdx, viewMode]);
 
-  // Canvas-only zoom (Ctrl+/-/0) — same shortcuts as the editor view.
+  // Canvas-only zoom (Ctrl+/-/0 and Ctrl+wheel) — same shortcuts as the editor view.
   useEffect(() => {
     const unsub = window.ufm.onCanvasZoom(({ delta, reset }: { delta?: number; reset?: boolean }) => {
-      setCanvasZoom(prev => {
-        if (reset) return 1.0;
-        return Math.min(3.0, Math.max(0.3, Math.round((prev + (delta ?? 0)) * 10) / 10));
-      });
+      setCanvasZoom(prev => nextCanvasZoom(prev, { delta, reset }));
     });
     return unsub;
   }, []);
 
-  // Keyboard shortcuts: Ctrl+Z = undo, Ctrl+Shift+Z or Ctrl+Y = redo
+  useCanvasZoomWheel(step !== "upload" && !!page, setCanvasZoom, containerRef);
+
+  // Keyboard shortcuts: Ctrl+Z = undo, Ctrl+Shift+Z or Ctrl+Y = redo; Ctrl+C/V = duplicate field (components step)
   useEffect(() => {
     if (step === "upload") return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      const inTextField = tag === "input" || tag === "textarea" || (e.target as HTMLElement)?.isContentEditable;
+
       if (e.key === "z" && !e.shiftKey) {
         e.preventDefault();
         wizardUndo();
       } else if ((e.key === "z" && e.shiftKey) || e.key === "y") {
         e.preventDefault();
         wizardRedo();
+      } else if (stepRef.current === "components" && !inTextField) {
+        if (e.key === "c" || e.key === "C") {
+          const pg = pagesRef.current[pageIdxRef.current];
+          const boxId = selectedBoxIdRef.current;
+          const box = boxId ? pg?.boxes.find(b => b.id === boxId) : null;
+          if (box?.isEditable) {
+            e.preventDefault();
+            copiedBoxRef.current = { ...box };
+          }
+        } else if (e.key === "v" || e.key === "V") {
+          const source = copiedBoxRef.current;
+          if (!source) return;
+          const pageIndex = pageIdxRef.current;
+          const pg = pagesRef.current[pageIndex];
+          if (!pg) return;
+          e.preventDefault();
+          pushToHistoryNow();
+          const id = uuidv4();
+          let x = snap(source.x + BOX_PASTE_OFFSET);
+          let y = snap(source.y + BOX_PASTE_OFFSET);
+          x = Math.max(0, Math.min(x, pg.canvasWidth - source.width));
+          y = Math.max(0, Math.min(y, pg.canvasHeight - source.height));
+          const newBox: BoxDraft = { ...source, id, x, y };
+          commitPages(prev => prev.map((p, i) =>
+            i === pageIndex ? { ...p, boxes: [...p.boxes, newBox] } : p
+          ));
+          setSelectedBoxId(id);
+          setOutlineOnly(false);
+        }
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [step, wizardUndo, wizardRedo]);
+  }, [step, wizardUndo, wizardRedo, pushToHistoryNow, commitPages]);
 
   useEffect(() => {
     return () => {
@@ -669,7 +730,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     const dx = (e.clientX - d.startMouseX) / scale;
     const dy = (e.clientY - d.startMouseY) / scale;
 
-    setPages(prev => prev.map((pg, i) => {
+    commitPages(prev => prev.map((pg, i) => {
       if (i !== pageIdx) return pg;
       return {
         ...pg,
@@ -689,24 +750,24 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
           const { startX: sx, startY: sy, startW: sw, startH: sh } = d;
           let { x, y, width, height } = { x: sx, y: sy, width: sw, height: sh };
           if (d.corner === "tl") {
-            const nx = snap(Math.min(sx + dx, sx + sw - MIN_SIZE));
-            const ny = snap(Math.min(sy + dy, sy + sh - MIN_SIZE));
-            width = snap(Math.max(MIN_SIZE, width - (nx - sx)));
-            height = snap(Math.max(MIN_SIZE, height - (ny - sy)));
+            const nx = snap(Math.min(sx + dx, sx + sw - MIN_REGION_SIZE));
+            const ny = snap(Math.min(sy + dy, sy + sh - MIN_REGION_SIZE));
+            width = snap(Math.max(MIN_REGION_SIZE, width - (nx - sx)));
+            height = snap(Math.max(MIN_REGION_SIZE, height - (ny - sy)));
             x = nx; y = ny;
           } else if (d.corner === "tr") {
-            const ny = snap(Math.min(sy + dy, sy + sh - MIN_SIZE));
-            height = snap(Math.max(MIN_SIZE, height - (ny - sy)));
-            width = snap(Math.max(MIN_SIZE, width + dx));
+            const ny = snap(Math.min(sy + dy, sy + sh - MIN_REGION_SIZE));
+            height = snap(Math.max(MIN_REGION_SIZE, height - (ny - sy)));
+            width = snap(Math.max(MIN_REGION_SIZE, width + dx));
             y = ny;
           } else if (d.corner === "bl") {
-            const nx = snap(Math.min(sx + dx, sx + sw - MIN_SIZE));
-            width = snap(Math.max(MIN_SIZE, width - (nx - sx)));
-            height = snap(Math.max(MIN_SIZE, height + dy));
+            const nx = snap(Math.min(sx + dx, sx + sw - MIN_REGION_SIZE));
+            width = snap(Math.max(MIN_REGION_SIZE, width - (nx - sx)));
+            height = snap(Math.max(MIN_REGION_SIZE, height + dy));
             x = nx;
           } else {
-            width = snap(Math.max(MIN_SIZE, width + dx));
-            height = snap(Math.max(MIN_SIZE, height + dy));
+            width = snap(Math.max(MIN_REGION_SIZE, width + dx));
+            height = snap(Math.max(MIN_REGION_SIZE, height + dy));
           }
           x = Math.max(0, x); y = Math.max(0, y);
           width = Math.min(width, pg.canvasWidth - x);
@@ -725,7 +786,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     const dx = (e.clientX - d.startMouseX) / scale;
     const dy = (e.clientY - d.startMouseY) / scale;
 
-    setPages(prev => prev.map((pg, i) => {
+    commitPages(prev => prev.map((pg, i) => {
       if (i !== pageIdx) return pg;
       return {
         ...pg,
@@ -739,31 +800,8 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
             };
           }
           const { startX: sx, startY: sy, startW: sw, startH: sh } = d;
-          let { x, y, width, height } = { x: sx, y: sy, width: sw, height: sh };
-          if (d.corner === "tl") {
-            const nx = snap(Math.min(sx + dx, sx + sw - MIN_SIZE));
-            const ny = snap(Math.min(sy + dy, sy + sh - MIN_SIZE));
-            width = snap(Math.max(MIN_SIZE, width - (nx - sx)));
-            height = snap(Math.max(MIN_SIZE, height - (ny - sy)));
-            x = nx; y = ny;
-          } else if (d.corner === "tr") {
-            const ny = snap(Math.min(sy + dy, sy + sh - MIN_SIZE));
-            height = snap(Math.max(MIN_SIZE, height - (ny - sy)));
-            width = snap(Math.max(MIN_SIZE, width + dx));
-            y = ny;
-          } else if (d.corner === "bl") {
-            const nx = snap(Math.min(sx + dx, sx + sw - MIN_SIZE));
-            width = snap(Math.max(MIN_SIZE, width - (nx - sx)));
-            height = snap(Math.max(MIN_SIZE, height + dy));
-            x = nx;
-          } else {
-            width = snap(Math.max(MIN_SIZE, width + dx));
-            height = snap(Math.max(MIN_SIZE, height + dy));
-          }
-          x = Math.max(0, x); y = Math.max(0, y);
-          width = Math.min(width, pg.canvasWidth - x);
-          height = Math.min(height, pg.canvasHeight - y);
-          return { ...b, x, y, width, height };
+          const rect = resizeEditableBoxRect(sx, sy, sw, sh, dx, dy, d.handle, pg.canvasWidth, pg.canvasHeight, snap);
+          return { ...b, ...rect };
         }),
       };
     }));
@@ -790,7 +828,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
       },
     };
     pushToHistoryNow();
-    setPages(prev => prev.map((p, i) =>
+    commitPages(prev => prev.map((p, i) =>
       i === pageIdxRef.current ? { ...p, areas: [...p.areas, newArea] } : p
     ));
     setSelectedAreaId(id);
@@ -812,7 +850,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
       const rect = liveDrawRectRef.current;
       liveDrawRectRef.current = null;
       setLiveDrawRect(null);
-      if (rect && rect.width >= MIN_SIZE && rect.height >= MIN_SIZE) {
+      if (rect && rect.width >= MIN_REGION_SIZE && rect.height >= MIN_REGION_SIZE) {
         addAreaFromRect(rect);
       }
     }
@@ -864,7 +902,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
         height: snap(page.canvasHeight * 0.3),
       },
     };
-    setPages(prev => prev.map((pg, i) =>
+    commitPages(prev => prev.map((pg, i) =>
       i === pageIdx ? { ...pg, areas: [...pg.areas, newArea] } : pg
     ));
     setSelectedAreaId(id);
@@ -872,7 +910,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
 
   const deleteArea = (id: string) => {
     pushToHistoryNow();
-    setPages(prev => prev.map((pg, i) =>
+    commitPages(prev => prev.map((pg, i) =>
       i === pageIdx ? { ...pg, areas: pg.areas.filter(a => a.id !== id) } : pg
     ));
     setSelectedAreaId(null);
@@ -888,7 +926,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
         regionStyle: patch.regionStyle ?? defaultRegionStyle(patch.departmentKey),
       };
     }
-    setPages(prev => prev.map((pg, i) =>
+    commitPages(prev => prev.map((pg, i) =>
       i === pageIdx ? {
         ...pg,
         areas: pg.areas.map(a => a.id === id ? { ...a, ...normalized } : a),
@@ -898,7 +936,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
 
   const updateRegionStyle = (areaId: string, patch: Partial<RegionStyleDef>) => {
     pushToHistoryDebounced();
-    setPages(prev => prev.map((pg, i) => {
+    commitPages(prev => prev.map((pg, i) => {
       if (i !== pageIdx) return pg;
       return {
         ...pg,
@@ -912,7 +950,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
 
   const updateCardStyle = (areaId: string, patch: Partial<CardStyleDef>) => {
     pushToHistoryDebounced();
-    setPages(prev => prev.map((pg, i) => {
+    commitPages(prev => prev.map((pg, i) => {
       if (i !== pageIdx) return pg;
       return {
         ...pg,
@@ -927,7 +965,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   const updateAreaRows = (areaId: string, rows: number) => {
     pushToHistoryNow();
     const nextRows = Math.max(1, Math.min(20, rows));
-    setPages(prev => prev.map((pg, i) => {
+    commitPages(prev => prev.map((pg, i) => {
       if (i !== pageIdx) return pg;
       return {
         ...pg,
@@ -945,7 +983,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   const updateAreaCols = (areaId: string, cols: number) => {
     pushToHistoryNow();
     const nextCols = Math.max(1, Math.min(12, cols));
-    setPages(prev => prev.map((pg, i) => {
+    commitPages(prev => prev.map((pg, i) => {
       if (i !== pageIdx) return pg;
       return {
         ...pg,
@@ -962,29 +1000,22 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
 
   // ── Box CRUD ──────────────────────────────────────────────────────────────
 
-  const addBox = async () => {
-    if (!page) return;
+  const addBox = () => {
+    const pageIndex = pageIdxRef.current;
+    const pg = pagesRef.current[pageIndex];
+    if (!pg) return;
     pushToHistoryNow();
     const id = uuidv4();
-    const x = snap(page.canvasWidth * 0.1);
-    const y = snap(page.canvasHeight * 0.05);
-    const width = snap(page.canvasWidth * 0.8);
+    const x = snap(pg.canvasWidth * 0.1);
+    const y = snap(pg.canvasHeight * 0.05);
+    const width = snap(pg.canvasWidth * 0.8);
     const height = snap(80);
-    let color = page.backgroundColor ?? "#ffffff";
-    let textColor = "#111111";
-    try {
-      color = await sampleRegionColor(page.fileUrl, { x, y, width, height });
-      const sampledText = await sampleTextColorFromRegion(page.fileUrl, { x, y, width, height }, color);
-      if (sampledText) textColor = sampledText;
-    } catch {
-      // keep defaults
-    }
     const newBox: BoxDraft = {
       id,
       label: "New Editable Field",
       departmentKey: "_header",
-      color,
-      textColor,
+      color: pg.backgroundColor ?? "#ffffff",
+      textColor: "#111111",
       x,
       y,
       width,
@@ -993,32 +1024,41 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
       boxType: "text",
       content: "{{days_count}}\n{{dates}}",
       fontSize: 24,
+      fontWeight: "normal",
       isEditable: true,
       fieldKind: "date_range",
     };
-    setPages(prev => prev.map((pg, i) =>
-      i === pageIdx ? { ...pg, boxes: [...pg.boxes, newBox] } : pg
+    commitPages(prev => prev.map((p, i) =>
+      i === pageIndex ? { ...p, boxes: [...p.boxes, newBox] } : p
     ));
     setSelectedBoxId(id);
     setOutlineOnly(false);
+    void (async () => {
+      try {
+        const color = await sampleRegionColor(pg.fileUrl, { x, y, width, height });
+        const sampledText = await sampleTextColorFromRegion(pg.fileUrl, { x, y, width, height }, color);
+        updateBox(id, { color, ...(sampledText ? { textColor: sampledText } : {}) });
+      } catch {
+        // keep default colors
+      }
+    })();
   };
 
   const deleteBox = (id: string) => {
     pushToHistoryNow();
-    setPages(prev => prev.map((pg, i) =>
-      i === pageIdx ? { ...pg, boxes: pg.boxes.filter(b => b.id !== id) } : pg
-    ));
+    commitPages(prev => prev.map(pg => ({
+      ...pg,
+      boxes: pg.boxes.filter(b => b.id !== id),
+    })));
     setSelectedBoxId(null);
   };
 
   const updateBox = (id: string, patch: Partial<BoxDraft>) => {
     pushToHistoryDebounced();
-    setPages(prev => prev.map((pg, i) =>
-      i === pageIdx ? {
-        ...pg,
-        boxes: pg.boxes.map(b => b.id === id ? { ...b, ...patch } : b),
-      } : pg
-    ));
+    commitPages(prev => prev.map(pg => ({
+      ...pg,
+      boxes: pg.boxes.map(b => b.id === id ? { ...b, ...patch } : b),
+    })));
   };
 
   const boxRegion = (box: BoxDraft) => ({
@@ -1132,7 +1172,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   };
 
   const syncAutomationGridForPage = useCallback((pageIndex: number) => {
-    setPages(prev => prev.map((pg, i) => {
+    commitPages(prev => prev.map((pg, i) => {
       if (i !== pageIndex) return pg;
       return {
         ...pg,
@@ -1151,7 +1191,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
 
   const updatePage = (patch: Partial<PageDraft>) => {
     pushToHistoryDebounced();
-    setPages(prev => prev.map((pg, i) =>
+    commitPages(prev => prev.map((pg, i) =>
       i === pageIdx ? { ...pg, ...patch } : pg
     ));
   };
@@ -1195,7 +1235,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
     e: React.MouseEvent,
     boxId: string,
     dragMode: "move" | "resize",
-    corner?: "tl" | "tr" | "bl" | "br",
+    handle?: EditableBoxResizeHandle,
     box?: { x: number; y: number; width: number; height: number }
   ) => {
     if (!box) return;
@@ -1211,11 +1251,11 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
         startX: box.x,
         startY: box.y,
       };
-    } else if (corner) {
+    } else if (handle) {
       boxDragRef.current = {
         type: "resize",
         id: boxId,
-        corner,
+        handle,
         startMouseX: e.clientX,
         startMouseY: e.clientY,
         startX: box.x,
@@ -1240,7 +1280,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
         canvasHeight: pg.canvasHeight,
         departmentAreas: pg.areas,
       });
-      setPages(prev => prev.map((p, i) => i === pageIndex ? {
+      commitPages(prev => prev.map((p, i) => i === pageIndex ? {
         ...p,
         underprintPath: outputPath,
         underprintUrl: toFileUrl(outputPath),
@@ -1310,15 +1350,15 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
 
   // ── Confirm → build config ────────────────────────────────────────────────
 
-  function buildConfigPages(): CustomTemplatePage[] {
-    return pages.map((pg, pgIdx) => ({
+  function buildConfigPages(sourcePages: PageDraft[] = pagesRef.current): CustomTemplatePage[] {
+    return sourcePages.map((pg, pgIdx) => ({
       pageId: `p${pgIdx + 1}`,
       canvasWidth: pg.canvasWidth,
       canvasHeight: pg.canvasHeight,
       backgroundImage: pg.underprintPath,
       sourceImagePath: pg.sourceImagePath ?? pg.imgPath,
       backgroundColor: pg.backgroundColor,
-      boxes: pg.boxes.filter(b => !!b.isEditable),
+      boxes: pg.boxes.filter(b => b.isEditable !== false),
       departmentAreas: pg.areas.map(a => {
         const normalized = a.cardStyle ? withAutomationGridDefaults(a) : a;
         const gridLayout = normalized.gridLayout ?? (normalized.cardStyle ? defaultGridPadding(normalized.productRegion) : undefined);
@@ -1338,6 +1378,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   }
 
   const saveProgress = async () => {
+    flushWizardHistoryDebounce();
     const tid = parsedTemplateId || `imported_${Date.now()}`;
     if (!parsedTemplateId) setParsedTemplateId(tid);
     const config: CustomFlyerTemplateConfig = {
@@ -1356,6 +1397,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
   };
 
   const confirm = () => {
+    flushWizardHistoryDebounce();
     onParsed({
       templateId: parsedTemplateId || `imported_${Date.now()}`,
       isCustom: true,
@@ -1970,11 +2012,12 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                             color: selectedBox.textColor,
                             fontFamily: selectedBox.fontFamily || undefined,
                             fontSize: Math.min(20, selectedBox.fontSize ?? 24),
-                            fontWeight: 600,
+                            fontWeight: resolveBoxFontWeight(selectedBox),
                             textAlign: selectedBox.textAlign ?? "left",
                             lineHeight: 1.2,
                             border: "1px solid #334155",
                             whiteSpace: "pre-wrap",
+                            textTransform: selectedBox.textTransform ?? undefined,
                           }}
                         >
                           {resolveEditableBoxContent(selectedBox, wizardDynamicPreviewCtx).slice(0, 120) || selectedBox.label}
@@ -2032,6 +2075,11 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                           onChange={v => updateBox(selectedBox.id, { zhFontFamily: v || undefined })}
                           theme="dark"
                         />
+                        <FontWeightPicker
+                          value={selectedBox.fontWeight ?? "normal"}
+                          onChange={v => updateBox(selectedBox.id, { fontWeight: v })}
+                          theme="dark"
+                        />
                         <button
                           type="button"
                           disabled={matchingFont}
@@ -2069,6 +2117,42 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                             <option value="bottom">Bottom</option>
                           </select>
                         </label>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          <span style={{ fontSize: 11, color: "#64748b" }}>Text case</span>
+                          <div style={{ display: "flex", gap: 0, borderRadius: 4, overflow: "hidden", border: "1px solid #475569" }}>
+                            {([
+                              { value: "none", label: "Aa  Mixed" },
+                              { value: "uppercase", label: "AA  All caps" },
+                            ] as const).map(opt => {
+                              const active = (selectedBox.textTransform ?? "none") === opt.value;
+                              return (
+                                <button
+                                  key={opt.value}
+                                  type="button"
+                                  onClick={() => updateBox(selectedBox.id, { textTransform: opt.value })}
+                                  style={{
+                                    flex: 1,
+                                    padding: "6px 0",
+                                    fontSize: 12,
+                                    fontWeight: active ? 700 : 400,
+                                    background: active ? "#3b82f6" : "#0f172a",
+                                    color: active ? "#fff" : "#94a3b8",
+                                    border: "none",
+                                    cursor: "pointer",
+                                    letterSpacing: opt.value === "uppercase" ? "0.04em" : undefined,
+                                  }}
+                                >
+                                  {opt.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {(selectedBox.textTransform ?? "none") === "none" && ["Bebas Neue", "Anton", "Impact"].some(f => selectedBox.fontFamily?.includes(f)) && (
+                            <p style={{ fontSize: 10, color: "#f59e0b", margin: 0, lineHeight: 1.4 }}>
+                              "{selectedBox.fontFamily}" only has uppercase glyphs. Switch to Inter, Barlow, or Oswald to show mixed case.
+                            </p>
+                          )}
+                        </div>
                         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                           <span style={{ fontSize: 11, color: "#64748b" }}>Field Kind</span>
                           <select value={selectedBox.fieldKind ?? "date_range"} onChange={e => updateBox(selectedBox.id, { fieldKind: e.target.value as BoxDraft["fieldKind"] })}
@@ -2235,7 +2319,7 @@ export default function ImportTemplateFromImagesDialog({ onParsed, onClose, init
                       ← Back to Regions
                     </button>
                     <p style={{ fontSize: 10, color: "#64748b", margin: 0, lineHeight: 1.4, textAlign: "center" }}>
-                      Style cells on every page before continuing. Step 3 opens on page 1.
+                      Style cells on every page before continuing. Your current page is kept when you continue.
                     </p>
                     <button
                       onClick={() => goToStep("components")}

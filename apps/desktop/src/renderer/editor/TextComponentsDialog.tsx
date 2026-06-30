@@ -2,22 +2,9 @@
 // Modal dialog for fine-tuning individual sub-component sizes and offsets of price/title labels.
 
 import React from 'react';
+import { parsePriceDisplay } from '../utils/priceFormat';
 
 type TextEffect = 'stroke' | 'glow' | 'shadow';
-
-function parsePriceDisplay(display: string) {
-  const multiBuyMatch = display.match(/^(\d+)\s+FOR\s+\$?([\d.]+)/i);
-  if (multiBuyMatch) {
-    const [intPart, decPart = ""] = multiBuyMatch[2].split(".");
-    return { type: "MULTI" as const, quantity: multiBuyMatch[1], integer: intPart, decimal: decPart, unit: "" };
-  }
-  const singleMatch = display.match(/\$?([\d.]+)(?:\/(\w+))?/i);
-  if (singleMatch) {
-    const [intPart, decPart = ""] = singleMatch[1].split(".");
-    return { type: "SINGLE" as const, quantity: null, integer: intPart, decimal: decPart, unit: singleMatch[2] || "" };
-  }
-  return null;
-}
 
 function buildEffect(effect: TextEffect | undefined, color: string | undefined, size: number): React.CSSProperties {
   if (!effect || !color) return {};
@@ -156,6 +143,9 @@ interface Props {
   titleFont?: string;
   titleColor?: string;
   titleItalic?: boolean;
+  titleEffect?: TextEffect;
+  titleEffectColor?: string;
+  titleEffectSize?: number;
   titleCompValues: TitleCompValues;
   onTitleCompChange: (patch: Partial<TitleCompValues>) => void;
   onClose: () => void;
@@ -177,6 +167,9 @@ export default function TextComponentsDialog({
   titleFont,
   titleColor = '#000000',
   titleItalic,
+  titleEffect,
+  titleEffectColor,
+  titleEffectSize = 2,
   titleCompValues: tv,
   onTitleCompChange,
   onClose,
@@ -292,6 +285,8 @@ export default function TextComponentsDialog({
                 <div className="ufm-title-meta" style={{
                   ...(titleFont ? { fontFamily: titleFont } : {}),
                   fontSize: prevMetaSize, color: titleColor,
+                  fontStyle: titleItalic ? 'italic' : undefined,
+                  ...buildEffect(titleEffect, titleEffectColor, titleEffectSize),
                   marginTop: 2 + tv.metaOffsetY * 0.4,
                 }}>{titleSampleMeta}</div>
               )}

@@ -4,6 +4,17 @@
 import { useState, useEffect, useRef, CSSProperties } from "react";
 import DbSearchModal from "./DbSearchModal";
 import GoogleSearchModal from "./GoogleSearchModal";
+import { ReplacementJob } from "../types";
+import { validateSalePrice, SALE_PRICE_PLACEHOLDER, SALE_PRICE_FORMAT_HINT, MULTI_BUY_RE, PER_UNIT_RE } from "../utils/priceFormat";
+
+/** Convert any stored price display string to the canonical form expected by the input UI. */
+function toCanonicalDisplay(raw: string): string {
+  if (!raw) return "";
+  const legacyMulti = raw.match(/^(\d+)\s+FOR\s+\$?([\d.]+)/i);
+  if (legacyMulti) return `${legacyMulti[1]}/${legacyMulti[2]}`;
+  if (MULTI_BUY_RE.test(raw) || PER_UNIT_RE.test(raw)) return raw;
+  return raw.replace(/^\$/, "");
+}
 
 type Step = "title" | "image" | "price";
 
@@ -32,6 +43,8 @@ type CheckingPanelProps = {
   onSearchReplace?: (itemId: string, data: { path: string; result: any }) => void;
   onDbSelectProduct?: (itemId: string, publicUrl: string, targetFlavorIndex?: number) => void;
   onSaveDiscountDetails?: (itemId: string, en: string, regularPrice: string, salePrice: string) => void;
+  replacementJobs?: ReplacementJob[];
+  onEnqueueGoogleReplace?: (itemId: string, url: string, query: string, isMultiFlavor: boolean, targetFlavorIndex?: number) => void;
 };
 
 const STEPS: Step[] = ["title", "image", "price"];
@@ -101,6 +114,8 @@ export default function CheckingPanel({
   onSearchReplace,
   onDbSelectProduct,
   onSaveDiscountDetails,
+  replacementJobs,
+  onEnqueueGoogleReplace,
 }: CheckingPanelProps) {
   const [currentIdx, setCurrentIdx] = useState<number>(() => initialProgress?.currentIdx ?? 0);
   const [step, setStep] = useState<Step>(() => initialProgress?.step ?? "title");
@@ -120,6 +135,7 @@ export default function CheckingPanel({
   const [editTitle, setEditTitle] = useState<{ en: string; zh: string; size: string; regularPrice: string } | null>(null);
   const [editSalePrice, setEditSalePrice] = useState<string>("");
   const [editRegularPrice, setEditRegularPrice] = useState<string>("");
+  const [salePriceTouched, setSalePriceTouched] = useState(false);
   const [checkFlavorIdx, setCheckFlavorIdx] = useState<number>(0);
 
   // Reset flavor index when navigating to a different item
@@ -149,7 +165,9 @@ export default function CheckingPanel({
         regularPrice: label?.title?.regularPrice ?? label?.price?.regular ?? item?.result?.title?.regularPrice ?? item?.result?.discount?.regularPrice ?? "",
       });
     } else if (step === "price") {
-      const priceDisplay = label?.price?.display ?? item?.result?.discount?.salePrice ?? "";
+      const priceDisplay = toCanonicalDisplay(
+        label?.price?.display ?? (item?.result?.discount as any)?.salePrice ?? ""
+      );
       setEditSalePrice(priceDisplay);
       setEditRegularPrice(
         label?.title?.regularPrice
@@ -158,6 +176,7 @@ export default function CheckingPanel({
         ?? item?.result?.discount?.regularPrice
         ?? ""
       );
+      setSalePriceTouched(false);
     }
   }, [currentIdx, step]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -310,17 +329,22 @@ export default function CheckingPanel({
 
   const handleSaveTitle = () => {
     if (!editTitle || !item) return;
-    const existingSalePrice = label?.price?.display ?? item?.result?.discount?.salePrice ?? "";
+    const existingSalePrice = toCanonicalDisplay(
+      label?.price?.display ?? (item?.result?.discount as any)?.salePrice ?? ""
+    );
     onSaveDiscountDetails?.(item.id, editTitle.en, editTitle.regularPrice, existingSalePrice);
   };
 
-  // Price save: check if anything changed
-  const originalSalePrice = label?.price?.display ?? item?.result?.discount?.salePrice ?? "";
+  // Price save: check if anything changed and format is valid
+  const originalSalePrice = toCanonicalDisplay(
+    label?.price?.display ?? (item?.result?.discount as any)?.salePrice ?? ""
+  );
   const originalRegularPrice = label?.title?.regularPrice ?? label?.price?.regular ?? item?.result?.title?.regularPrice ?? item?.result?.discount?.regularPrice ?? "";
   const priceChanged = editSalePrice !== originalSalePrice || editRegularPrice !== originalRegularPrice;
+  const salePriceFormatError = validateSalePrice(editSalePrice);
 
   const handleSavePrice = () => {
-    if (!item) return;
+    if (!item || salePriceFormatError) return;
     const existingEn = label?.title?.en ?? item?.result?.title?.en ?? "";
     onSaveDiscountDetails?.(item.id, existingEn, editRegularPrice, editSalePrice);
   };
@@ -357,6 +381,7 @@ export default function CheckingPanel({
             const isActive = i === currentIdx;
             const isFlagged = flags.has(i);
             const isDone = (approved.get(i) ?? new Set()).size === STEPS.length;
+            const isReplacing = (replacementJobs ?? []).some((j) => j.itemId === it.id && j.status === "processing");
             const name = (lbl?.title?.en ?? it?.result?.title?.en ?? originalDiscounts[i]?.en ?? "—").slice(0, 14);
             return (
               <button
@@ -367,8 +392,8 @@ export default function CheckingPanel({
                   display: "flex", alignItems: "center", gap: 5,
                   padding: "4px 10px",
                   borderRadius: 20,
-                  border: isActive ? "1.5px solid #6d28d9" : "1.5px solid #e2e8f0",
-                  background: isActive ? "#ede9fe" : "#fff",
+                  border: isActive ? "1.5px solid #6d28d9" : isReplacing ? "1.5px solid #4C6EF5" : "1.5px solid #e2e8f0",
+                  background: isActive ? "#ede9fe" : isReplacing ? "#EDF2FF" : "#fff",
                   cursor: "pointer", flexShrink: 0,
                   fontSize: 11, fontWeight: isActive ? 700 : 500,
                   color: isActive ? "#5b21b6" : "#334155",
@@ -376,12 +401,23 @@ export default function CheckingPanel({
                   boxShadow: isActive ? "0 0 0 2px #c4b5fd55" : "none",
                 }}
               >
-                <span style={{
-                  width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
-                  background: isFlagged ? "#d97706" : isDone ? "#16a34a" : isActive ? "#7c3aed" : "#cbd5e1",
-                }} />
+                {isReplacing ? (
+                  <span style={{
+                    width: 9, height: 9, flexShrink: 0, borderRadius: "50%",
+                    border: "1.5px solid rgba(76,110,245,0.2)", borderTopColor: "#4C6EF5",
+                    animation: "ufm-spin 0.75s linear infinite", display: "inline-block",
+                  }} />
+                ) : (
+                  <span style={{
+                    width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
+                    background: isFlagged ? "#d97706" : isDone ? "#16a34a" : isActive ? "#7c3aed" : "#cbd5e1",
+                  }} />
+                )}
                 <span style={{ fontWeight: 700, color: "#7c3aed", marginRight: 2 }}>#{i + 1}</span>
                 {name}
+                {isReplacing && (
+                  <span style={{ fontSize: 9, color: "#4C6EF5", fontWeight: 700, marginLeft: 2 }}>⟳</span>
+                )}
               </button>
             );
           })}
@@ -478,14 +514,26 @@ export default function CheckingPanel({
                     const paths = item?.result?.cutoutPaths;
                     const isMulti = Array.isArray(paths) && paths.length > 1;
                     const displayPath = isMulti ? paths[checkFlavorIdx] : cutoutPath;
+                    const activeJob = (replacementJobs ?? []).find((j) => j.itemId === item.id && j.status === "processing");
                     if (!displayPath) return <div style={{ color: "#94a3b8", fontStyle: "italic" }}>No image available</div>;
                     const src = displayPath.startsWith("http") ? displayPath : `file://${displayPath}`;
                     return (
-                      <img
-                        src={src}
-                        style={{ maxWidth: isMulti ? 220 : 300, maxHeight: isMulti ? 180 : 220, objectFit: "contain" }}
-                        alt="Product"
-                      />
+                      <div style={{ position: "relative", display: "inline-flex" }}>
+                        <img
+                          src={src}
+                          style={{ maxWidth: isMulti ? 220 : 300, maxHeight: isMulti ? 180 : 220, objectFit: "contain", opacity: activeJob ? 0.35 : 1, transition: "opacity 0.2s" }}
+                          alt="Product"
+                        />
+                        {activeJob && (
+                          <div style={{
+                            position: "absolute", inset: 0, display: "flex", flexDirection: "column",
+                            alignItems: "center", justifyContent: "center", gap: 6,
+                          }}>
+                            <div style={{ width: 24, height: 24, border: "3px solid rgba(76,110,245,0.18)", borderTopColor: "#4C6EF5", borderRadius: "50%", animation: "ufm-spin 0.75s linear infinite" }} />
+                            <span style={{ fontSize: 10, fontWeight: 700, color: "#4C6EF5", textTransform: "uppercase", letterSpacing: "0.06em" }}>Replacing…</span>
+                          </div>
+                        )}
+                      </div>
                     );
                   })()}
                   {/* Image replacement buttons */}
@@ -526,18 +574,26 @@ export default function CheckingPanel({
                 </div>
               )}
               {step === "price" && (
-                <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
                   <div>
                     <label style={editLabelStyle}>Sale price</label>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <span style={{ fontSize: 18, color: "#475569" }}>$</span>
-                      <input
-                        value={editSalePrice}
-                        onChange={(e) => setEditSalePrice(e.target.value)}
-                        style={{ ...editInputStyle, fontSize: 20, fontWeight: 700 }}
-                        placeholder="9.99"
-                      />
-                    </div>
+                    <input
+                      value={editSalePrice}
+                      onChange={(e) => { setEditSalePrice(e.target.value); setSalePriceTouched(true); }}
+                      onBlur={() => setSalePriceTouched(true)}
+                      style={{
+                        ...editInputStyle,
+                        fontSize: 20,
+                        fontWeight: 700,
+                        borderColor: salePriceTouched && salePriceFormatError ? "#dc2626" : undefined,
+                      }}
+                      placeholder={SALE_PRICE_PLACEHOLDER}
+                    />
+                    {salePriceTouched && salePriceFormatError ? (
+                      <div style={{ fontSize: 10, color: "#dc2626", marginTop: 3 }}>{salePriceFormatError}</div>
+                    ) : (
+                      <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 3 }}>{SALE_PRICE_FORMAT_HINT}</div>
+                    )}
                   </div>
                   <div>
                     <label style={editLabelStyle}>Regular price</label>
@@ -549,7 +605,18 @@ export default function CheckingPanel({
                     />
                   </div>
                   {priceChanged && onSaveDiscountDetails && (
-                    <button onClick={handleSavePrice} style={{ ...btnBase("#7c3aed"), marginTop: 4, fontSize: 13, padding: "8px 16px" }}>
+                    <button
+                      onClick={handleSavePrice}
+                      disabled={!!salePriceFormatError}
+                      style={{
+                        ...btnBase("#7c3aed"),
+                        marginTop: 4,
+                        fontSize: 13,
+                        padding: "8px 16px",
+                        opacity: salePriceFormatError ? 0.45 : 1,
+                        cursor: salePriceFormatError ? "not-allowed" : "pointer",
+                      }}
+                    >
                       Save ✓
                     </button>
                   )}
@@ -663,20 +730,31 @@ export default function CheckingPanel({
           zIndex={21000}
         />
       )}
-      {googleSearchItemId && onSearchReplace && (
-        <GoogleSearchModal
-          itemId={googleSearchItemId}
-          initialQuery={getQueryForItem(googleSearchItemId)}
-          currentImageSrc={(() => {
-            const it = items.find((x: any) => x.id === googleSearchItemId);
-            const src = it?.result?.cutoutPath ?? it?.result?.inputPath;
-            return src ? (src.startsWith("http") ? src : `file://${src}`) : undefined;
-          })()}
-          onReplace={(id, data) => { onSearchReplace(id, data); setGoogleSearchItemId(null); }}
-          onClose={() => setGoogleSearchItemId(null)}
-          zIndex={21000}
-        />
-      )}
+      {googleSearchItemId && onSearchReplace && (() => {
+        const _gItem = items.find((x: any) => x.id === googleSearchItemId);
+        const _gIsMulti = Array.isArray(_gItem?.result?.cutoutPaths) && _gItem.result.cutoutPaths.length > 1;
+        const _gQuery = getQueryForItem(googleSearchItemId);
+        return (
+          <GoogleSearchModal
+            itemId={googleSearchItemId}
+            initialQuery={_gQuery}
+            currentImageSrc={(() => {
+              const src = _gItem?.result?.cutoutPath ?? _gItem?.result?.inputPath;
+              return src ? (src.startsWith("http") ? src : `file://${src}`) : undefined;
+            })()}
+            isMultiFlavor={_gIsMulti}
+            cutoutPaths={_gItem?.result?.cutoutPaths}
+            jobs={(replacementJobs ?? []).filter((j) => j.itemId === googleSearchItemId)}
+            onDropImage={onEnqueueGoogleReplace
+              ? (url, flavorIdx) => onEnqueueGoogleReplace(googleSearchItemId, url, _gQuery, _gIsMulti, flavorIdx)
+              : undefined
+            }
+            onReplace={(id, data) => { onSearchReplace(id, data); setGoogleSearchItemId(null); }}
+            onClose={() => setGoogleSearchItemId(null)}
+            zIndex={21000}
+          />
+        );
+      })()}
     </div>
   );
 }

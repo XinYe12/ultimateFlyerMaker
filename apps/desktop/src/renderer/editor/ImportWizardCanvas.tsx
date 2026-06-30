@@ -7,6 +7,10 @@ import {
   renderReadonlyDepartmentFill,
 } from "./importWizardCellHelpers";
 import { WizardViewMode } from "./importWizardViewState";
+import {
+  EditableBoxResizeHandle,
+} from "./editableBoxResize";
+import EditableBoxResizeHandles, { EDITABLE_BOX_SELECTION_BORDER } from "./EditableBoxResizeHandles";
 
 export type WizardCanvasStep = "regions" | "cellStyle" | "components";
 
@@ -36,7 +40,7 @@ type BoxDragStart = (
   e: React.MouseEvent,
   boxId: string,
   mode: "move" | "resize",
-  corner?: "tl" | "tr" | "bl" | "br",
+  handle?: EditableBoxResizeHandle,
   box?: { x: number; y: number; width: number; height: number }
 ) => void;
 
@@ -320,12 +324,11 @@ export default function ImportWizardCanvas({
               top: box.y * scale,
               width: box.width * scale,
               height: box.height * scale,
-              border: isSelected ? "2px solid #3b82f6" : `1px dashed ${showFill ? "#64748b" : "#3b82f6"}`,
               boxSizing: "border-box",
               cursor: blockDrag ? "crosshair" : "move",
               userSelect: "none",
-              overflow: "hidden",
-              background: showFill ? undefined : "transparent",
+              overflow: "visible",
+              background: "transparent",
               pointerEvents: blockDrag ? "none" : "auto",
             }}
             onMouseDown={e => {
@@ -335,29 +338,24 @@ export default function ImportWizardCanvas({
               onBoxDragStart(e, box.id, "move", undefined, box);
             }}
           >
-            {renderImportBoxOverlay(box, scale, isSelected, outlineOnly, undefined, dynamicDataContext)}
-            {isSelected && (["tl", "tr", "bl", "br"] as const).map(corner => (
-              <div
-                key={corner}
-                style={{
-                  position: "absolute",
-                  width: HANDLE_SIZE,
-                  height: HANDLE_SIZE,
-                  background: "#3b82f6",
-                  border: "2px solid #fff",
-                  borderRadius: 2,
-                  cursor: corner === "tl" || corner === "br" ? "nwse-resize" : "nesw-resize",
-                  ...(corner === "tl" ? { top: -HANDLE_SIZE / 2, left: -HANDLE_SIZE / 2 }
-                    : corner === "tr" ? { top: -HANDLE_SIZE / 2, right: -HANDLE_SIZE / 2 }
-                    : corner === "bl" ? { bottom: -HANDLE_SIZE / 2, left: -HANDLE_SIZE / 2 }
-                    : { bottom: -HANDLE_SIZE / 2, right: -HANDLE_SIZE / 2 }),
-                }}
-                onMouseDown={e => {
-                  e.stopPropagation();
-                  onBoxDragStart(e, box.id, "resize", corner, box);
-                }}
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                overflow: "hidden",
+                border: isSelected ? EDITABLE_BOX_SELECTION_BORDER : `1px dashed ${showFill ? "#64748b" : "#3b82f6"}`,
+                boxSizing: "border-box",
+                background: showFill ? undefined : "transparent",
+                pointerEvents: "none",
+              }}
+            >
+              {renderImportBoxOverlay(box, scale, isSelected, outlineOnly, undefined, dynamicDataContext)}
+            </div>
+            {isSelected && (
+              <EditableBoxResizeHandles
+                onHandleMouseDown={(e, handle) => onBoxDragStart(e, box.id, "resize", handle, box)}
               />
-            ))}
+            )}
           </div>
         );
       })}

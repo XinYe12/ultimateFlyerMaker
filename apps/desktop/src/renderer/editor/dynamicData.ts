@@ -202,15 +202,24 @@ export function collectFlyerDays(
   return CYCLE_ORDER.filter(d => all.has(d));
 }
 
+function snapToFriday(d: Date): Date {
+  const dow = d.getDay();
+  if (dow === 5) return d;
+  const daysToFriday = (5 - dow + 7) % 7 || 7;
+  const snapped = new Date(d);
+  snapped.setDate(d.getDate() + daysToFriday);
+  return snapped;
+}
+
 function cycleStartFromContext(ctx: DynamicDataContext): Date {
   return ctx.flyerWeekStart
-    ? new Date(ctx.flyerWeekStart + "T00:00:00")
+    ? snapToFriday(new Date(ctx.flyerWeekStart + "T00:00:00"))
     : getCycleStartFriday(new Date());
 }
 
 function validCycleStartFromContext(ctx: DynamicDataContext): Date {
   return ctx.flyerWeekStart
-    ? new Date(ctx.flyerWeekStart + "T00:00:00")
+    ? snapToFriday(new Date(ctx.flyerWeekStart + "T00:00:00"))
     : getDisplayCycleStartFriday(new Date());
 }
 

@@ -25,6 +25,7 @@ export type FlyerPlacement = {
   titleBg?: string
   titleBgPad?: number
   titleEffect?: 'stroke' | 'glow' | 'shadow'
+  titleStyleFrom?: string
   priceFontFamily?: string
   priceColor?: string
   priceShowDollar?: boolean
@@ -51,4 +52,5 @@ export type FlyerPlacement = {
   titleOffsetY?: number    // px nudge from default title anchor; positive = up
   priceOffsetX?: number    // px nudge from default right anchor; positive = inward (left)
   priceOffsetY?: number    // px nudge from default bottom anchor; positive = up
+  priceStyleFrom?: string
 }

@@ -56,6 +56,12 @@ export interface TextSideToolbarProps {
   onApplyToDepartment?: () => void;
   onApplyGlobally?: () => void;
   departmentLabel?: string;
+  titleDeptFollowers?: number;
+  titleGlobalFollowers?: number;
+  priceDeptFollowers?: number;
+  priceGlobalFollowers?: number;
+  titleFollowingScope?: 'dept' | 'global';
+  priceFollowingScope?: 'dept' | 'global';
   onClose: () => void;
   visible: boolean;
 }
@@ -161,6 +167,12 @@ export default function TextSideToolbar({
   onApplyToDepartment,
   onApplyGlobally,
   departmentLabel,
+  titleDeptFollowers = 0,
+  titleGlobalFollowers = 0,
+  priceDeptFollowers = 0,
+  priceGlobalFollowers = 0,
+  titleFollowingScope,
+  priceFollowingScope,
   onClose,
   visible,
 }: TextSideToolbarProps) {
@@ -364,58 +376,94 @@ export default function TextSideToolbar({
             </>
           )}
 
-          {activePopout === 'apply' && (
-            <>
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8 }}>
-                Apply {isTitle ? 'title' : 'price'} style
-              </div>
-              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 10, lineHeight: 1.4 }}>
-                Copy font, color, size &amp; effects to other text fields.
-              </div>
-              {onApplyToDepartment && (
-                <button
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={() => { onApplyToDepartment(); setActivePopout(null); }}
-                  style={{
-                    display: 'block', width: '100%', marginBottom: 8,
-                    padding: '8px 10px', borderRadius: 8,
-                    border: '1px solid #d1d5db', background: '#fff',
-                    color: '#374151', fontSize: 12, fontWeight: 600,
-                    textAlign: 'left', cursor: 'pointer',
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.background = '#f9fafb'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = '#fff'; }}
-                >
-                  This department
-                  {departmentLabel ? (
-                    <span style={{ display: 'block', fontSize: 10, fontWeight: 500, color: '#6b7280', marginTop: 2 }}>
-                      {departmentLabel}
+          {activePopout === 'apply' && (() => {
+            const deptFollowers = isTitle ? titleDeptFollowers : priceDeptFollowers;
+            const globalFollowers = isTitle ? titleGlobalFollowers : priceGlobalFollowers;
+            const followingScope = isTitle ? titleFollowingScope : priceFollowingScope;
+            const deptActive = deptFollowers > 0;
+            const globalActive = globalFollowers > 0;
+            return (
+              <>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 6 }}>
+                  Apply {isTitle ? 'title' : 'price'} style
+                </div>
+                <div style={{ fontSize: 11, color: '#6b7280', marginBottom: followingScope ? 8 : 10, lineHeight: 1.4 }}>
+                  Copy font, color, size &amp; effects to other cards.
+                </div>
+                {followingScope && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 5,
+                    padding: '5px 8px', borderRadius: 6, marginBottom: 10,
+                    background: '#fefce8', border: '1px solid #fde68a',
+                    fontSize: 10, fontWeight: 600, color: '#92400e',
+                  }}>
+                    <span style={{ fontSize: 12 }}>↗</span>
+                    Following {followingScope === 'global' ? 'global' : 'dept'} style
+                  </div>
+                )}
+                {onApplyToDepartment && (
+                  <button
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={() => { onApplyToDepartment(); setActivePopout(null); }}
+                    style={{
+                      display: 'block', width: '100%', marginBottom: 8,
+                      padding: '8px 10px', borderRadius: 8, textAlign: 'left', cursor: 'pointer',
+                      border: deptActive ? '1px solid #bfdbfe' : '1px solid #d1d5db',
+                      background: deptActive ? '#eff6ff' : '#fff',
+                      color: deptActive ? '#1d4ed8' : '#374151',
+                      fontSize: 12, fontWeight: 600,
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = deptActive ? '#dbeafe' : '#f9fafb'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = deptActive ? '#eff6ff' : '#fff'; }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span>This department</span>
+                      {deptActive && (
+                        <span style={{
+                          fontSize: 9, fontWeight: 700, padding: '1px 5px',
+                          borderRadius: 10, background: '#3b82f6', color: '#fff',
+                        }}>{deptFollowers} synced</span>
+                      )}
+                    </div>
+                    {departmentLabel && (
+                      <span style={{ display: 'block', fontSize: 10, fontWeight: 500, color: deptActive ? '#3b82f6' : '#6b7280', marginTop: 2 }}>
+                        {departmentLabel}
+                      </span>
+                    )}
+                  </button>
+                )}
+                {onApplyGlobally && (
+                  <button
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={() => { onApplyGlobally(); setActivePopout(null); }}
+                    style={{
+                      display: 'block', width: '100%',
+                      padding: '8px 10px', borderRadius: 8, textAlign: 'left', cursor: 'pointer',
+                      border: globalActive ? '1px solid #a5b4fc' : '1px solid #d1d5db',
+                      background: globalActive ? '#eef2ff' : '#fff',
+                      color: globalActive ? '#3730a3' : '#374151',
+                      fontSize: 12, fontWeight: 600,
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = globalActive ? '#e0e7ff' : '#f9fafb'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = globalActive ? '#eef2ff' : '#fff'; }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span>All departments</span>
+                      {globalActive && (
+                        <span style={{
+                          fontSize: 9, fontWeight: 700, padding: '1px 5px',
+                          borderRadius: 10, background: '#6366f1', color: '#fff',
+                        }}>{globalFollowers}+ synced</span>
+                      )}
+                    </div>
+                    <span style={{ display: 'block', fontSize: 10, fontWeight: 500, color: globalActive ? '#6366f1' : '#6b7280', marginTop: 2 }}>
+                      Entire flyer template
                     </span>
-                  ) : null}
-                </button>
-              )}
-              {onApplyGlobally && (
-                <button
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={() => { onApplyGlobally(); setActivePopout(null); }}
-                  style={{
-                    display: 'block', width: '100%',
-                    padding: '8px 10px', borderRadius: 8,
-                    border: '1px solid #bfdbfe', background: '#eff6ff',
-                    color: '#1d4ed8', fontSize: 12, fontWeight: 600,
-                    textAlign: 'left', cursor: 'pointer',
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.background = '#dbeafe'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = '#eff6ff'; }}
-                >
-                  All departments
-                  <span style={{ display: 'block', fontSize: 10, fontWeight: 500, color: '#3b82f6', marginTop: 2 }}>
-                    Entire flyer template
-                  </span>
-                </button>
-              )}
-            </>
-          )}
+                  </button>
+                )}
+              </>
+            );
+          })()}
         </div>
       )}
 

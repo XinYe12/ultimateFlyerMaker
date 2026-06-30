@@ -1,6 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Modal from "../components/ui/Modal";
 import Button from "../components/ui/Button";
+import {
+  validateSalePrice,
+  SALE_PRICE_PLACEHOLDER,
+  SALE_PRICE_FORMAT_HINT,
+} from "../utils/priceFormat";
 
 type Props = {
   itemId: string;
@@ -23,7 +28,6 @@ const inputStyle: React.CSSProperties = {
   fontSize: "var(--text-base)",
   border: "1px solid var(--color-border)",
   borderRadius: "var(--radius-md)",
-  marginBottom: 14,
   fontFamily: "var(--font-sans)",
 };
 
@@ -33,6 +37,20 @@ const labelStyle: React.CSSProperties = {
   fontWeight: "var(--font-semibold)",
   color: "var(--color-text)",
   marginBottom: "var(--space-1)",
+};
+
+const hintStyle: React.CSSProperties = {
+  fontSize: 11,
+  color: "#64748b",
+  marginTop: 4,
+  marginBottom: 14,
+};
+
+const errorStyle: React.CSSProperties = {
+  fontSize: 11,
+  color: "#dc2626",
+  marginTop: 4,
+  marginBottom: 14,
 };
 
 export default function DiscountDetailsDialog({
@@ -52,12 +70,16 @@ export default function DiscountDetailsDialog({
   const [salePrice, setSalePrice] = useState(() =>
     String(initialSalePrice ?? "")
   );
+  const [salePriceTouched, setSalePriceTouched] = useState(false);
+
+  const salePriceFormatError = validateSalePrice(salePrice);
 
   const parsePrice = (v: unknown) =>
     parseFloat(String(v ?? "").replace(/^\$/, ""));
   const regNum = parsePrice(regularPrice);
-  const saleNum = parsePrice(salePrice);
-  const priceError =
+  const saleNumRaw = salePrice.trim().match(/\$?([\d.]+)/)?.[1] ?? "";
+  const saleNum = parsePrice(saleNumRaw);
+  const priceRangeError =
     String(regularPrice).trim() &&
     String(salePrice).trim() &&
     !isNaN(regNum) &&
@@ -66,8 +88,10 @@ export default function DiscountDetailsDialog({
       ? "Sale price cannot be higher than regular price."
       : "";
 
+  const hasError = (salePriceTouched && !!salePriceFormatError) || !!priceRangeError;
+
   const handleSave = () => {
-    if (priceError) return;
+    if (salePriceFormatError || priceRangeError) return;
     onSave(itemId, englishTitle, regularPrice, salePrice);
   };
 
@@ -92,6 +116,7 @@ export default function DiscountDetailsDialog({
       >
         Shown on the product card and used for Database search.
       </p>
+
       <label style={labelStyle}>English title</label>
       <input
         type="text"
@@ -99,44 +124,54 @@ export default function DiscountDetailsDialog({
         onChange={(e) => setEnglishTitle(e.target.value)}
         placeholder="e.g. Norwegian Mackerel Fillet"
         autoFocus
-        style={inputStyle}
+        style={{ ...inputStyle, marginBottom: 14 }}
       />
+
       <label style={labelStyle}>Regular price</label>
       <input
         type="text"
         value={regularPrice}
         onChange={(e) => setRegularPrice(e.target.value)}
         placeholder="e.g. 25.00"
-        style={inputStyle}
+        style={{ ...inputStyle, marginBottom: 14 }}
       />
+
       <label style={labelStyle}>Sale price</label>
       <input
         type="text"
         value={salePrice}
-        onChange={(e) => setSalePrice(e.target.value)}
-        placeholder="e.g. 19.99 or $19.99"
-        style={{ ...inputStyle, marginBottom: 20 }}
+        onChange={(e) => {
+          setSalePrice(e.target.value);
+          setSalePriceTouched(true);
+        }}
+        onBlur={() => setSalePriceTouched(true)}
+        placeholder={SALE_PRICE_PLACEHOLDER}
+        style={{
+          ...inputStyle,
+          borderColor: salePriceTouched && salePriceFormatError ? "#dc2626" : undefined,
+          outline: salePriceTouched && salePriceFormatError ? "none" : undefined,
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter") handleSave();
           if (e.key === "Escape") onClose();
         }}
       />
-      {priceError && (
-        <p
-          style={{
-            margin: "0 0 var(--space-3)",
-            fontSize: "var(--text-sm)",
-            color: "var(--color-error)",
-          }}
-        >
-          {priceError}
-        </p>
+      {salePriceTouched && salePriceFormatError ? (
+        <p style={errorStyle}>{salePriceFormatError}</p>
+      ) : (
+        <p style={hintStyle}>{SALE_PRICE_FORMAT_HINT}</p>
       )}
+
+      {priceRangeError && (
+        <p style={{ ...errorStyle, marginTop: 0 }}>{priceRangeError}</p>
+      )}
+
       <div
         style={{
           display: "flex",
           gap: "var(--space-2)",
           justifyContent: "flex-end",
+          marginTop: 6,
         }}
       >
         <Button variant="secondary" type="button" onClick={onClose}>
@@ -146,7 +181,7 @@ export default function DiscountDetailsDialog({
           variant="primary"
           type="button"
           onClick={handleSave}
-          disabled={!!priceError}
+          disabled={hasError}
         >
           Save
         </Button>

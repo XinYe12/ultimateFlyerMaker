@@ -5,6 +5,8 @@ import { saveCustomTemplate, saveCustomTemplateWithAssets } from "./customTempla
 import ImportTemplateFromImagesDialog from "./ImportTemplateFromImagesDialog";
 import { FONT_OPTIONS, ZH_FONT_OPTIONS } from "./fontOptions";
 import DynamicDataPicker from "./DynamicDataPicker";
+import FontWeightPicker from "./FontWeightPicker";
+import { resolveBoxFontWeight } from "./boxFontWeight";
 import { previewDynamicContext, resolveEditableBoxContent } from "./dynamicData";
 
 const BUILDER_SCALE = 0.4;
@@ -780,7 +782,7 @@ export default function TemplateBuilder({ onSave, onClose, initialConfig }: Prop
                       const innerStyle: React.CSSProperties = {
                         padding: "4px 6px",
                         color: box.textColor,
-                        fontWeight: box.boxType === 'text' ? 600 : 700,
+                        fontWeight: resolveBoxFontWeight(box),
                         fontSize: Math.max(8, (box.fontSize ?? 24) * BUILDER_SCALE),
                         lineHeight: 1.2,
                         textAlign: box.textAlign ?? 'left',
@@ -1186,6 +1188,13 @@ export default function TemplateBuilder({ onSave, onClose, initialConfig }: Prop
                     <option key={opt.value} value={opt.value} style={{ fontFamily: opt.value || undefined }}>{opt.label}</option>
                   ))}
                 </select>
+              </div>
+              <div style={fieldStyle}>
+                <FontWeightPicker
+                  value={selectedBox.fontWeight ?? "normal"}
+                  onChange={v => updateBox(selectedBox.id, { fontWeight: v })}
+                  theme="light"
+                />
               </div>
               <div style={fieldStyle}>
                 <label style={labelStyle}>Font Size</label>

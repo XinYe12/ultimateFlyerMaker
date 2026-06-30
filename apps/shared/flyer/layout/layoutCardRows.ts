@@ -30,12 +30,14 @@ export type CardDef = {
   titleBg?: string;
   titleBgPad?: number;
   titleEffect?: 'stroke' | 'glow' | 'shadow';
+  titleStyleFrom?: string;
   priceFontFamily?: string;
   priceColor?: string;
   priceShowDollar?: boolean;
   priceBg?: string;
   priceBgPad?: number;
   priceEffect?: 'stroke' | 'glow' | 'shadow';
+  priceStyleFrom?: string;
   priceCompDollarRatio?: number;
   priceCompDollarOffsetY?: number;
   priceCompQtyRatio?: number;
@@ -247,6 +249,7 @@ export function layoutCardRows({
       titleBg: card.titleBg,
       titleBgPad: card.titleBgPad,
       titleEffect: card.titleEffect,
+      titleStyleFrom: card.titleStyleFrom,
       priceFontFamily: card.priceFontFamily,
       priceColor: card.priceColor,
       priceShowDollar: card.priceShowDollar,
@@ -273,6 +276,7 @@ export function layoutCardRows({
       titleOffsetY: card.titleOffsetY,
       priceOffsetX: card.priceOffsetX,
       priceOffsetY: card.priceOffsetY,
+      priceStyleFrom: card.priceStyleFrom,
     });
   }
 

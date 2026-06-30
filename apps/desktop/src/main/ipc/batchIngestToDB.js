@@ -13,6 +13,7 @@ import { buildSearchTokens, invalidateEmbeddingCache, buildMatchKeys } from "../
 import { FIRESTORE_COLLECTION } from "../config/vectorConfig.js";
 import { assertCanRead, assertCanWrite, trackReads, trackWrites, trackDeletes, trackStorageUpload, getQuotaStatus } from "./quotaTracker.js";
 import { getResourceProfile } from "../resourceProfile.js";
+import { debugIngest } from "../debugIngest.js";
 
 const _workerPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "../ingestion/pHashWorker.js");
 
@@ -773,18 +774,12 @@ export async function getDbStats() {
   LOG("A", "Called. Using db from ingestion/firebase.js");
   // #region agent log
   debugFirestoreTrack("getDbStats", "start", { callId });
-  fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
-    body: JSON.stringify({
-      sessionId: "2e2f6c",
+  debugIngest({
       location: "batchIngestToDB.js:getDbStats",
       message: "getDbStats entry",
       data: { callId },
       hypothesisId: "B",
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
+      });
   // #endregion
   LOG("B", "Building query: db.collection('" + FIRESTORE_COLLECTION + "').count().get()");
   // count() aggregation costs 1 read regardless of collection size.
@@ -801,18 +796,12 @@ export async function getDbStats() {
     trackReads(1);
     LOG("C", "Query succeeded. count=" + snap.data().count);
     // #region agent log
-    fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
-      body: JSON.stringify({
-        sessionId: "2e2f6c",
+    debugIngest({
         location: "batchIngestToDB.js:getDbStats",
         message: "getDbStats ok",
         data: { callId, ms: Date.now() - t0, count: snap.data().count },
         hypothesisId: "B",
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
+        });
     // #endregion
     return { count: snap.data().count, quota: getQuotaStatus() };
   } finally {

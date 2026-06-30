@@ -30,6 +30,14 @@ function applyTemplateStyleToCards(cards: CardDef[], area: DepartmentAreaDef | n
   return cards.map(c => ({ ...defaults, ...c }));
 }
 
+/** Apply wizard/template cardStyle defaults onto a card layout (e.g. for export). */
+export function applyTemplateCardStyleToCards(
+  cards: CardDef[],
+  area: DepartmentAreaDef | null | undefined,
+): CardDef[] {
+  return applyTemplateStyleToCards(cards, area ?? null);
+}
+
 /**
  * Auto-compute the ideal row count from product count and region dimensions.
  * Targets portrait-ish cells (~1.5 height/width ratio) that fill the region naturally.

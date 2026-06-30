@@ -4,6 +4,7 @@ import { getImageEmbedding, embedText } from "./imageEmbeddingService.js";
 import { computePHash, hammingDistance } from "./pHashService.js";
 import { cosineUnitToRaw, normalizeL2 } from "./vectorUtils.js";
 import { getResourceProfile } from "../resourceProfile.js";
+import { debugIngest } from "../debugIngest.js";
 
 const FIRESTORE_RETRY_ATTEMPTS = 3;
 const FIRESTORE_RETRY_BASE_MS = 250;
@@ -39,18 +40,12 @@ function _onFirestoreOk() {
 function _onFirestoreTimeout() {
   _circuitFails++;
   // #region agent log
-  fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
-    body: JSON.stringify({
-      sessionId: "2e2f6c",
+  debugIngest({
       location: "searchService.js:_onFirestoreTimeout",
       message: "Firestore query timeout",
       data: { circuitFails: _circuitFails, firestoreInFlight: debugFirestoreInFlight },
       hypothesisId: "C",
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
+      });
   // #endregion
   if (_circuitFails === CIRCUIT_OPEN_AFTER) {
     _circuitOpenAt = Date.now();
@@ -103,33 +98,21 @@ async function firestoreRead(opName, operation, timeoutMs, onTimeout) {
     const res = await runFirestoreTimed(() => withFirestoreRetryInner(operation), timeoutMs, () => {
       onTimeout?.();
       // #region agent log
-      fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
-        body: JSON.stringify({
-          sessionId: "2e2f6c",
+      debugIngest({
           location: "searchService.js:firestoreRead",
           message: "firestoreRead timeout",
           data: { opName, callId, ms: Date.now() - t0, firestoreInFlight: debugFirestoreInFlight },
           hypothesisId: "C",
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
+          });
       // #endregion
     });
     // #region agent log
-    fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
-      body: JSON.stringify({
-        sessionId: "2e2f6c",
+    debugIngest({
         location: "searchService.js:firestoreRead",
         message: "firestoreRead ok",
         data: { opName, callId, ms: Date.now() - t0 },
         hypothesisId: "C",
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
+        });
     // #endregion
     return res;
   } finally {
@@ -335,18 +318,12 @@ async function getEmbeddingCache() {
   if (!_embeddingCacheLoad) {
     // #region agent log
     const cacheT0 = Date.now();
-    fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
-      body: JSON.stringify({
-        sessionId: "2e2f6c",
+    debugIngest({
         location: "searchService.js:getEmbeddingCache",
         message: "embedding cache load start",
         data: { firestoreInFlight: debugFirestoreInFlight },
         hypothesisId: "C",
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
+        });
     // #endregion
     _embeddingCacheLoad = firestoreRead(
       "getEmbeddingCache",
@@ -366,36 +343,24 @@ async function getEmbeddingCache() {
         _embeddingCache = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
         _embeddingCacheLoad = null;
         // #region agent log
-        fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
-          body: JSON.stringify({
-            sessionId: "2e2f6c",
+        debugIngest({
             location: "searchService.js:getEmbeddingCache",
             message: "embedding cache load ok",
             data: { docCount: snapshot.size, ms: Date.now() - cacheT0 },
             hypothesisId: "C",
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
+            });
         // #endregion
         return _embeddingCache;
       })
       .catch((err) => {
         _embeddingCacheLoad = null;
         // #region agent log
-        fetch("http://127.0.0.1:7335/ingest/c5a1bb77-37eb-41ef-948b-74b535c107ca", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "2e2f6c" },
-          body: JSON.stringify({
-            sessionId: "2e2f6c",
+        debugIngest({
             location: "searchService.js:getEmbeddingCache",
             message: "embedding cache load fail",
             data: { ms: Date.now() - cacheT0, err: String(err?.message || err).slice(0, 120) },
             hypothesisId: "C",
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
+            });
         // #endregion
         throw err;
       });

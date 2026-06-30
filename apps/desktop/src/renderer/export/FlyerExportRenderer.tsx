@@ -3,12 +3,14 @@
 
 import { useEffect, useState } from "react";
 import { FlyerJob, IngestItem } from "../types";
-import { FlyerTemplateConfig, CustomBoxDef } from "../editor/loadFlyerTemplateConfig";
+import { FlyerTemplateConfig, CustomBoxDef, findDepartmentArea } from "../editor/loadFlyerTemplateConfig";
 import RenderFlyerPlacements from "../editor/RenderFlyerPlacements";
 import { layoutFlyer, layoutFlyerSlots } from "../../../../shared/flyer/layout/layoutFlyer";
 import { isSlottedDepartment, isCardDepartment } from "../editor/loadFlyerTemplateConfig";
 import { layoutCardRows, computeCardRects, resolveLayoutRowsForRendering, CARD_BG, DEFAULT_CELL_GAP } from "../../../../shared/flyer/layout/layoutCardRows";
 import { buildDynamicContextFromJobs, resolveEditableBoxContent } from "../editor/dynamicData";
+import { resolveBoxFontWeight } from "../editor/boxFontWeight";
+import { applyTemplateCardStyleToCards } from "../editor/templateDepartmentLayout";
 
 type Props = {
   templateConfig: FlyerTemplateConfig;
@@ -69,6 +71,11 @@ export default function FlyerExportRenderer({
         const pageDepartments = Object.keys(page.departments ?? {});
         const pageDynamicCtx = buildDynamicContextFromJobs(jobs, pageDepartments);
 
+        // Page dimensions: use template's canvasWidth/canvasHeight if available (custom templates),
+        // falling back to 1650px (built-in templates weekly_v1/v2 are authored at 1650px).
+        const pageW = (page as any).canvasWidth ?? 1650;
+        const pageH = (page as any).canvasHeight ?? undefined;
+
         // Render each page with its departments
         return (
           <div
@@ -79,7 +86,8 @@ export default function FlyerExportRenderer({
               position: "relative",
               background: (page as any).backgroundColor ?? "#fff",
               boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-              width: "1650px",
+              width: pageW,
+              height: !page.imagePath && pageH ? pageH : undefined,
               marginBottom: pageIndex < templateConfig.pages.length - 1 ? "20px" : "0",
             }}
           >
@@ -89,7 +97,7 @@ export default function FlyerExportRenderer({
                 src={page.imagePath}
                 alt={`Page ${pageIndex + 1}`}
                 onLoad={() => handleImageLoad(page.pageId)}
-                style={{ display: "block", width: "1650px", height: "auto" }}
+                style={{ display: "block", width: pageW, height: "auto" }}
               />
             ) : (page as any).boxes ? (
               <div
@@ -148,7 +156,7 @@ export default function FlyerExportRenderer({
                               left: box.textOffsetX ?? 0,
                               top: box.textOffsetY ?? 0,
                               color: box.textColor,
-                              fontWeight: 700,
+                              fontWeight: resolveBoxFontWeight(box),
                               fontSize: box.fontSize ?? 24,
                               fontFamily: box.fontFamily || undefined,
                               lineHeight: 1,
@@ -160,7 +168,7 @@ export default function FlyerExportRenderer({
                               alignItems: box.textVertical === "middle" ? "center" : box.textVertical === "bottom" ? "flex-end" : "flex-start",
                               justifyContent: box.textAlign === "center" ? "center" : box.textAlign === "right" ? "flex-end" : "flex-start",
                               color: box.textColor,
-                              fontWeight: 700,
+                              fontWeight: resolveBoxFontWeight(box),
                               fontSize: box.fontSize ?? 24,
                               fontFamily: box.fontFamily || undefined,
                               lineHeight: 1,
@@ -234,11 +242,11 @@ export default function FlyerExportRenderer({
                 if (!cardLayout || cardLayout.length === 0) return null;
 
                 const cardRegion = deptDef.region;
-                const deptArea = (page as any).departmentAreas?.find(
-                  (a: { departmentKey: string }) => a.departmentKey === deptId
-                );
+                const deptArea = findDepartmentArea(templateConfig, deptId);
+                const templateCardStyle = deptArea?.cardStyle;
+                const styledCardLayout = applyTemplateCardStyleToCards(cardLayout, deptArea);
                 const layoutRows = resolveLayoutRowsForRendering(
-                  cardLayout,
+                  styledCardLayout,
                   job.userRowCounts?.[deptId],
                   deptArea?.rows ?? deptDef.rows,
                 );
@@ -254,11 +262,11 @@ export default function FlyerExportRenderer({
                 const xScale = innerRegion.width / cardRegion.width;
                 const innerCardLayout =
                   xScale !== 1
-                    ? cardLayout.map(c => ({
+                    ? styledCardLayout.map(c => ({
                         ...c,
                         widthPx: Math.max(1, Math.round(c.widthPx * xScale)),
                       }))
-                    : cardLayout;
+                    : styledCardLayout;
 
                 const placements = layoutCardRows({
                   cards: innerCardLayout,
@@ -303,20 +311,32 @@ export default function FlyerExportRenderer({
                       />
                     )}
 
-                    {/* Card backgrounds */}
-                    {cardRects.map((rect) => (
-                      <div
-                        key={`card-bg-${rect.cardId}`}
-                        style={{
-                          position: "absolute",
-                          left: rect.x,
-                          top: rect.y,
-                          width: rect.width,
-                          height: rect.height,
-                          background: CARD_BG,
-                        }}
-                      />
-                    ))}
+                    {/* Card backgrounds — match editor: use wizard cardStyle, not default grey */}
+                    {cardRects.map((rect) => {
+                      const cs = templateCardStyle;
+                      const borderW = Math.max(0, cs?.borderWidth ?? 0);
+                      return (
+                        <div
+                          key={`card-bg-${rect.cardId}`}
+                          style={{
+                            position: "absolute",
+                            left: rect.x,
+                            top: rect.y,
+                            width: rect.width,
+                            height: rect.height,
+                            background: cs?.backgroundColor ?? CARD_BG,
+                            boxSizing: "border-box",
+                            border: borderW > 0
+                              ? `${borderW}px solid ${cs?.borderColor ?? "#e2e8f0"}`
+                              : undefined,
+                            borderRadius: cs?.borderRadius ?? 0,
+                            boxShadow: cs?.hasShadow
+                              ? "0 2px 8px rgba(15, 23, 42, 0.18)"
+                              : undefined,
+                          }}
+                        />
+                      );
+                    })}
 
                     {/* Product content */}
                     <RenderFlyerPlacements

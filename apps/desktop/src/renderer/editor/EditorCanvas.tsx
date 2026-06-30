@@ -24,6 +24,9 @@ import { applyTextStylePatch, textStylePatchFromCard, type TextFieldSection } fr
 import TextComponentsDialog, { PriceCompValues, TitleCompValues, PRICE_COMP_DEFAULTS, TITLE_COMP_DEFAULTS } from "./TextComponentsDialog";
 import CutoutEraserModal from "./CutoutEraserModal";
 import ImageToolbar, { ImageToolbarPatch } from "./ImageToolbar";
+import { resolveEditableBoxContent } from "./dynamicData";
+import { resolveBoxFontWeight } from "./boxFontWeight";
+import type { CustomBoxDef } from "./loadFlyerTemplateConfig";
 
 const BASE_PREVIEW_SCALE = 0.5;
 const MIN_CARD_WIDTH = 150;
@@ -147,7 +150,7 @@ export default function EditorCanvas({
   selectedItemId?: string | null;
   onSelectItem?: (id: string | null) => void;
   onPanelImageDrop?: PanelImageDropHandler;
-  onApplyTextStyleGlobally?: (section: TextFieldSection, patch: Partial<CardDef>) => void;
+  onApplyTextStyleGlobally?: (section: TextFieldSection, patch: Partial<CardDef>, sourceCardId: string) => void;
   onHistoryCommit?: (label: string, departments?: string[]) => void;
   departmentLabel?: string;
   zoom?: number;
@@ -834,8 +837,13 @@ export default function EditorCanvas({
     const source = cardLayout.find(c => c.itemId === selectedItemId);
     if (!source) return;
     const patch = textStylePatchFromCard(source, activeToolbarSection);
+    const fromField = activeToolbarSection === 'title' ? 'titleStyleFrom' : 'priceStyleFrom';
     onHistoryCommit?.('Apply style to department');
-    onCardLayoutChange(cardLayout.map(c => c.itemId ? applyTextStylePatch(c, patch) : c));
+    onCardLayoutChange(cardLayout.map(c => {
+      if (!c.itemId) return c;
+      if (c.id === source.id) return { ...c, [fromField]: undefined };
+      return { ...applyTextStylePatch(c, patch), [fromField]: source.id };
+    }));
   }, [selectedItemId, cardLayout, onCardLayoutChange, activeToolbarSection, onHistoryCommit]);
 
   const handleApplyTextStyleGlobally = useCallback(() => {
@@ -843,7 +851,7 @@ export default function EditorCanvas({
     if (activeToolbarSection !== 'title' && activeToolbarSection !== 'price') return;
     const source = cardLayout.find(c => c.itemId === selectedItemId);
     if (!source) return;
-    onApplyTextStyleGlobally(activeToolbarSection, textStylePatchFromCard(source, activeToolbarSection));
+    onApplyTextStyleGlobally(activeToolbarSection, textStylePatchFromCard(source, activeToolbarSection), source.id);
   }, [selectedItemId, cardLayout, onApplyTextStyleGlobally, activeToolbarSection]);
 
   const handleCropDragStart = useCallback(
@@ -1387,14 +1395,6 @@ export default function EditorCanvas({
       canvasX >= r.x && canvasX <= r.x + r.width &&
       canvasY >= r.y && canvasY <= r.y + r.height
     );
-    // Don't select cards that are currently being processed (cutout or replacement running)
-    if (hit?.itemId) {
-      const hitItem = itemsRef.current.find((it: any) => it.id === hit.itemId);
-      const isProcessing = hitItem?.status === "processing_cutout" || hitItem?.status === "running" ||
-        rerunningCutoutMap.has(hit.itemId) ||
-        (replacementJobs ?? []).some((j: any) => j.itemId === hit.itemId && j.status === "processing");
-      if (isProcessing) return;
-    }
     // Reset text section on every canvas click; text element handlers will re-set it in bubble phase
     setActiveToolbarSection(null);
     onSelectItem(hit?.itemId ?? null);
@@ -1932,6 +1932,25 @@ export default function EditorCanvas({
       (activeToolbarSection === 'title' || activeToolbarSection === 'price') && (() => {
       const firstCard = cardLayout.find(c => c.itemId);
       const activeCard = selectedCard ?? firstCard;
+      const filledCards = cardLayout.filter(c => c.itemId);
+      const titleDeptFollowers = activeCard
+        ? filledCards.filter(c => c.id !== activeCard.id && c.titleStyleFrom === activeCard.id).length
+        : 0;
+      const titleGlobalFollowers = activeCard
+        ? filledCards.filter(c => c.titleStyleFrom === `global:${activeCard.id}`).length
+        : 0;
+      const priceDeptFollowers = activeCard
+        ? filledCards.filter(c => c.id !== activeCard.id && c.priceStyleFrom === activeCard.id).length
+        : 0;
+      const priceGlobalFollowers = activeCard
+        ? filledCards.filter(c => c.priceStyleFrom === `global:${activeCard.id}`).length
+        : 0;
+      const titleFollowingScope = activeCard?.titleStyleFrom
+        ? (activeCard.titleStyleFrom.startsWith('global:') ? 'global' as const : 'dept' as const)
+        : undefined;
+      const priceFollowingScope = activeCard?.priceStyleFrom
+        ? (activeCard.priceStyleFrom.startsWith('global:') ? 'global' as const : 'dept' as const)
+        : undefined;
       return (
         <TextSideToolbar
           activeSection={activeToolbarSection as 'title' | 'price'}
@@ -1968,6 +1987,12 @@ export default function EditorCanvas({
           onApplyToDepartment={handleApplyTextStyleToDepartment}
           onApplyGlobally={onApplyTextStyleGlobally ? handleApplyTextStyleGlobally : undefined}
           departmentLabel={departmentLabel}
+          titleDeptFollowers={titleDeptFollowers}
+          titleGlobalFollowers={titleGlobalFollowers}
+          priceDeptFollowers={priceDeptFollowers}
+          priceGlobalFollowers={priceGlobalFollowers}
+          titleFollowingScope={titleFollowingScope}
+          priceFollowingScope={priceFollowingScope}
           onClose={() => setActiveToolbarSection(null)}
           visible={true}
         />
@@ -2022,6 +2047,9 @@ export default function EditorCanvas({
           titleFont={activeCard?.titleFontFamily}
           titleColor={activeCard?.titleColor ?? '#000000'}
           titleItalic={!!activeCard?.titleItalic}
+          titleEffect={activeCard?.titleEffect}
+          titleEffectColor={activeCard?.titleBg}
+          titleEffectSize={activeCard?.titleBgPad ?? 2}
           titleCompValues={titleCompValues}
           onTitleCompChange={handleSelectedTitleCompChange}
           onClose={() => setShowTextCompDialog(false)}
@@ -2097,6 +2125,86 @@ export default function EditorCanvas({
               display: "block",
             }}
           />
+
+          {/* Editable template boxes (date range, store info, etc.) from the wizard */}
+          {imageSize && page?.boxes && page.boxes.length > 0 && page.boxes.map((box: CustomBoxDef) => {
+            const dynamicCtx = { flyerWeekStart, discountLabels: discountLabels as any };
+            const textContent = resolveEditableBoxContent(box, dynamicCtx);
+            const isVerticalLabel = box.width < box.height * 0.45 && box.height > 40;
+            const hasFreePos = box.textOffsetX != null || box.textOffsetY != null;
+            const bgColor = box.boxType === "image"
+              ? "rgba(148,163,184,0.15)"
+              : box.color === "transparent" ? "transparent" : box.color;
+            return (
+              <div
+                key={box.id}
+                style={{
+                  position: "absolute",
+                  left: box.x,
+                  top: box.y,
+                  width: box.width,
+                  height: box.height,
+                  overflow: "hidden",
+                  pointerEvents: "none",
+                  boxSizing: "border-box",
+                  borderRadius: (box.borderRadius ?? 0),
+                  border: box.borderWidth ? `${box.borderWidth}px solid ${box.borderColor ?? "#000"}` : undefined,
+                }}
+              >
+                <div style={{ position: "absolute", inset: 0, background: bgColor }} />
+                {box.boxType === "image" && box.imagePath ? (
+                  <img
+                    src={box.imagePath}
+                    alt=""
+                    style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
+                  />
+                ) : textContent ? (
+                  hasFreePos ? (
+                    <div style={{
+                      position: "absolute",
+                      left: box.textOffsetX ?? 0,
+                      top: box.textOffsetY ?? 0,
+                    }}>
+                      <div style={{
+                        padding: "2px 6px",
+                        color: box.textColor,
+                        fontWeight: resolveBoxFontWeight(box),
+                        fontSize: box.fontSize ?? 24,
+                        lineHeight: 1.15,
+                        textAlign: box.textAlign ?? "left",
+                        fontFamily: box.fontFamily || undefined,
+                        whiteSpace: "pre-wrap",
+                        textTransform: box.textTransform ?? undefined,
+                        ...(isVerticalLabel ? { writingMode: "vertical-rl" as const, textOrientation: "mixed" as const } : {}),
+                      }}>{textContent}</div>
+                    </div>
+                  ) : (
+                    <div style={{
+                      position: "absolute",
+                      inset: 0,
+                      display: "flex",
+                      alignItems: box.textVertical === "middle" ? "center" : box.textVertical === "bottom" ? "flex-end" : "flex-start",
+                      justifyContent: box.textAlign === "center" ? "center" : box.textAlign === "right" ? "flex-end" : "flex-start",
+                      overflow: "hidden",
+                    }}>
+                      <div style={{
+                        padding: "2px 6px",
+                        color: box.textColor,
+                        fontWeight: resolveBoxFontWeight(box),
+                        fontSize: box.fontSize ?? 24,
+                        lineHeight: 1.15,
+                        textAlign: box.textAlign ?? "left",
+                        fontFamily: box.fontFamily || undefined,
+                        whiteSpace: "pre-wrap",
+                        textTransform: box.textTransform ?? undefined,
+                        ...(isVerticalLabel ? { writingMode: "vertical-rl" as const, textOrientation: "mixed" as const } : {}),
+                      }}>{textContent}</div>
+                    </div>
+                  )
+                ) : null}
+              </div>
+            );
+          })}
 
           {/* White bands covering gaps between department product regions.
               Source flyer images baked into the underprint often have printed

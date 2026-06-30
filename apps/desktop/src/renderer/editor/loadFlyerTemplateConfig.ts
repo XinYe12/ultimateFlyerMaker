@@ -68,6 +68,8 @@ export type CustomBoxDef = {
   highlightRange?: { start: number; end: number };
   /** Font size for text (product, text, image boxes) */
   fontSize?: number;
+  /** Text weight preset for editable / text boxes */
+  fontWeight?: 'thin' | 'normal' | 'bold';
   /** Corner rounding in px (default 0) */
   borderRadius?: number;
   /** Border stroke width in px (default 0 = no border) */
@@ -82,6 +84,8 @@ export type CustomBoxDef = {
   isEditable?: boolean;
   /** Semantic kind for editable fields */
   fieldKind?: 'date_range' | 'store_name' | 'address' | 'footer' | 'decorative' | 'custom';
+  /** CSS text-transform — use 'none' for mixed-case when font is all-caps (e.g. Bebas Neue) */
+  textTransform?: 'none' | 'uppercase' | 'lowercase' | 'capitalize';
 };
 
 /** Visual style of the department region background (step 1). */

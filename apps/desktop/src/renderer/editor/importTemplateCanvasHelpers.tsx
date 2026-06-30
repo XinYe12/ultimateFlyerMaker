@@ -1,6 +1,7 @@
 import React from "react";
 import { CustomBoxDef, DepartmentAreaDef, RegionStyleDef } from "./loadFlyerTemplateConfig";
 import { DynamicDataContext, resolveEditableBoxContent } from "./dynamicData";
+import { resolveBoxFontWeight } from "./boxFontWeight";
 
 export type TextDragState = {
   boxId: string;
@@ -57,7 +58,7 @@ export function renderImportBoxOverlay(
   const innerStyle: React.CSSProperties = {
     padding: "2px 6px",
     color: box.textColor,
-    fontWeight: box.boxType === "text" ? 600 : 700,
+    fontWeight: resolveBoxFontWeight(box),
     fontSize: Math.max(8, (box.fontSize ?? 24) * scale),
     lineHeight: 1.15,
     textAlign: box.textAlign ?? (isVerticalLabel ? "center" : "left"),
@@ -66,6 +67,7 @@ export function renderImportBoxOverlay(
     whiteSpace: "pre-wrap",
     pointerEvents: onTextDragStart && isSelected ? "auto" : "none",
     cursor: onTextDragStart && isSelected ? "grab" : "default",
+    textTransform: box.textTransform ?? undefined,
     ...(isVerticalLabel ? { writingMode: "vertical-rl", textOrientation: "mixed" } : {}),
   };
 

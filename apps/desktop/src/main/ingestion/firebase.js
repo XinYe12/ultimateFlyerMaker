@@ -62,6 +62,7 @@ function _resolveDebugLogPath() {
   return null;
 }
 const _dbgLog = (location, message, data, hypothesisId) => {
+  if (app.isPackaged) return;
   const payload = {
     sessionId: "2e2f6c",
     location,
