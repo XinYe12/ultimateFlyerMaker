@@ -17,7 +17,7 @@ import AddProductDialog, { AddProductData } from "./editor/AddProductDialog";
 
 import { useIngestQueue } from "./useIngestQueue";
 import { useJobQueue } from "./hooks/useJobQueue";
-import { IngestItem, FlyerJob, DepartmentId, CardLayout, CardDef, ReplacementJob, AddProductFormMeta } from "./types";
+import { IngestItem, FlyerJob, DepartmentId, CardLayout, CardDef, ReplacementJob, AddProductFormMeta, DiscountLabel } from "./types";
 import EditorCanvas from "./editor/EditorCanvas";
 import DbSearchModal from "./editor/DbSearchModal";
 import GoogleSearchModal from "./editor/GoogleSearchModal";
@@ -33,9 +33,12 @@ import JobQueueView from "./jobs/JobQueueView";
 import DbUploadView from "./db-upload/DbUploadView";
 import TemplateSelectView from "./editor/TemplateSelectView";
 import ImportTemplateFromImagesDialog from "./editor/ImportTemplateFromImagesDialog";
+import { nextCanvasZoom } from "./editor/canvasZoomUtils";
+import { useCanvasZoomWheel } from "./editor/useCanvasZoomWheel";
 import { saveCustomTemplate, saveCustomTemplateWithAssets, upgradeTemplateUnderprintsIfNeeded } from "./editor/customTemplateStorage";
 import { applySnapshotToQueue } from "./editor/editorHistory";
 import { useEditorHistory } from "./editor/useEditorHistory";
+import { MULTI_BUY_RE, PER_UNIT_RE } from "./utils/priceFormat";
 import { reconcileCardLayoutForDepartment, reconcileRowCountsWithLayouts } from "./editor/templateDepartmentLayout";
 import { deriveRowCount, deriveActiveRowCount } from "../../../shared/flyer/layout/layoutCardRows";
 import { applyTextStylePatch, type TextFieldSection } from "./editor/textFieldStyle";
@@ -147,11 +150,7 @@ export default function App() {
   applyCutoutErrorRef.current = applyCutoutError;
   const jobQueueHook = useJobQueue();
   const { jobs, deleteJob, deleteJobsForTemplate, syncJobFromEditorItems } = jobQueueHook;
-  const [discountLabels, setDiscountLabels] = useState<{
-    id: string;
-    title?: { en: string; zh: string; size: string; regularPrice: string };
-    price?: { display: string; quantity?: number | null; unit?: string; regular?: string; days?: string[] };
-  }[]>([]);
+  const [discountLabels, setDiscountLabels] = useState<DiscountLabel[]>([]);
   const discountLabelsRef = useRef(discountLabels);
   discountLabelsRef.current = discountLabels;
   const [slotOverrides, setSlotOverrides] = useState<Record<number, { x: number; y: number; width: number; height: number }>>({});
@@ -215,6 +214,7 @@ export default function App() {
   const [departmentLocked, setDepartmentLocked] = useState(false);
   const [flyerExported, setFlyerExported] = useState(false);
   const [canvasZoom, setCanvasZoom] = useState(1.0);
+  const editorCanvasScrollRef = useRef<HTMLDivElement>(null);
   const windowZoomRef = useRef(1.0);
   const [canvasKey, setCanvasKey] = useState(0);
   const [departmentSaves, setDepartmentSaves] = useState<DeptSaveEntry[]>([]);
@@ -312,18 +312,17 @@ export default function App() {
   useEffect(() => {
     const unsub = window.ufm.onCanvasZoom(({ delta, reset }: { delta?: number; reset?: boolean }) => {
       if (view === "editor") {
-        setCanvasZoom(prev => {
-          if (reset) return 1.0;
-          return Math.min(3.0, Math.max(0.3, Math.round((prev + (delta ?? 0)) * 10) / 10));
-        });
+        setCanvasZoom(prev => nextCanvasZoom(prev, { delta, reset }));
       } else if (view !== "importTemplate") {
-        const next = reset ? 1.0 : Math.min(3.0, Math.max(0.3, Math.round((windowZoomRef.current + (delta ?? 0)) * 10) / 10));
+        const next = nextCanvasZoom(windowZoomRef.current, { delta, reset });
         windowZoomRef.current = next;
         window.ufm.setWindowZoom(next);
       }
     });
     return unsub;
   }, [view]);
+
+  useCanvasZoomWheel(view === "editor", setCanvasZoom, editorCanvasScrollRef);
 
   // Save-combination progress/complete listeners
   useEffect(() => {
@@ -510,8 +509,10 @@ export default function App() {
       discountLabelCount: discountLabels.length,
     };
     // #region agent log
-    (window as any).ufm?.debugLog?.({ sessionId: 'c3b215', location: 'App.tsx:postClearVerify', message: 'state after clear-all render', data: payload, hypothesisId: 'F', runId: 'post-fix-v3' });
-    fetch('http://127.0.0.1:7361/ingest/57de729c-1f3f-4911-afe7-7b1a23fd9ad6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c3b215'},body:JSON.stringify({sessionId:'c3b215',location:'App.tsx:postClearVerify',message:'state after clear-all render',data:payload,timestamp:Date.now(),hypothesisId:'F',runId:'post-fix-v3'})}).catch(()=>{});
+    if (import.meta.env.DEV) {
+      (window as any).ufm?.debugLog?.({ sessionId: 'c3b215', location: 'App.tsx:postClearVerify', message: 'state after clear-all render', data: payload, hypothesisId: 'F', runId: 'post-fix-v3' });
+      fetch('http://127.0.0.1:7361/ingest/57de729c-1f3f-4911-afe7-7b1a23fd9ad6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c3b215'},body:JSON.stringify({sessionId:'c3b215',location:'App.tsx:postClearVerify',message:'state after clear-all render',data:payload,timestamp:Date.now(),hypothesisId:'F',runId:'post-fix-v3'})}).catch(()=>{});
+    }
     // #endregion
   }, [editorQueue, jobs, templateId, viewingJob, department, cardLayouts, discountLabels]);
 
@@ -730,14 +731,19 @@ export default function App() {
     return () => window.removeEventListener("click", close);
   }, [leftPanelMenuOpen]);
 
-  const handleApplyTextStyleGlobally = useCallback((section: TextFieldSection, patch: Partial<CardDef>) => {
+  const handleApplyTextStyleGlobally = useCallback((section: TextFieldSection, patch: Partial<CardDef>, sourceCardId: string) => {
     commitNow("Apply style to all departments", ["*"]);
+    const fromField = section === 'title' ? 'titleStyleFrom' : 'priceStyleFrom';
     setCardLayouts(prev => {
       const next: Record<string, CardLayout> = { ...prev };
       for (const dept of Object.keys(next)) {
         const layout = next[dept];
         if (!layout?.length) continue;
-        next[dept] = layout.map(c => c.itemId ? applyTextStylePatch(c, patch) : c);
+        next[dept] = layout.map(c => {
+          if (!c.itemId) return c;
+          if (c.id === sourceCardId) return { ...c, [fromField]: undefined };
+          return { ...applyTextStylePatch(c, patch), [fromField]: `global:${sourceCardId}` };
+        });
       }
       return next;
     });
@@ -1815,9 +1821,29 @@ export default function App() {
         : llm?.regular_price != null
           ? String(llm.regular_price)
           : "";
-    const salePriceRaw =
-      (item?.result?.discount as any)?.salePrice ?? (item?.result?.discount as any)?.price?.display ?? llm?.sale_price;
-    const salePrice = salePriceRaw != null ? String(salePriceRaw) : "";
+    // Reconstruct the canonical sale price string for the dialog input.
+    // Prefer structured fields (quantity/salePrice/unit) which hold the components
+    // from the Excel parser separately. Fall back to price.display (converting legacy
+    // "N FOR $price" → canonical "N/price") or LLM value.
+    let salePrice = "";
+    const dQty = d?.quantity;
+    const dSalePrice = d?.salePrice;
+    const dUnit = d?.unit;
+    if (dQty && dSalePrice) {
+      salePrice = `${dQty}/${dSalePrice}`;           // e.g. "2/7.59"
+    } else if (dSalePrice && dUnit) {
+      salePrice = `${dSalePrice}/${dUnit}`;          // e.g. "7.59/ea"
+    } else if (dSalePrice) {
+      salePrice = String(dSalePrice);                // e.g. "7.59"
+    } else {
+      const raw = d?.price?.display ?? (llm?.sale_price != null ? String(llm.sale_price) : "");
+      const legacyMulti = raw.match(/^(\d+)\s+FOR\s+\$?([\d.]+)/i);
+      if (legacyMulti) {
+        salePrice = `${legacyMulti[1]}/${legacyMulti[2]}`;
+      } else {
+        salePrice = raw.replace(/^\$/, "");
+      }
+    }
     setDiscountDetailsDialog({ itemId, englishTitle, regularPrice, salePrice });
   };
 
@@ -1830,9 +1856,15 @@ export default function App() {
     commitNow("Edit title/price text", [department]);
     const item = editorQueue.find((i) => i.id === itemId);
     if (!item?.result) return;
-    const priceDisplay = salePrice.trim()
-      ? salePrice.trim().startsWith("$") ? salePrice.trim() : `$${salePrice.trim()}`
-      : "";
+    // Store in canonical form so parsePriceDisplay can render it correctly.
+    // Parse structured fields back out so discount.quantity / salePrice / unit stay in sync.
+    const canonical = salePrice.trim();
+    const multiSave = canonical.match(MULTI_BUY_RE);
+    const unitSave = canonical.match(PER_UNIT_RE);
+    const newQty = multiSave ? parseInt(multiSave[1], 10) : null;
+    const newSalePrice = multiSave ? multiSave[2] : (unitSave ? unitSave[1] : canonical.replace(/^\$/, ""));
+    const newUnit = unitSave ? unitSave[2] : "";
+    const priceDisplay = canonical;
     updateItem(itemId, {
       result: {
         ...item.result,
@@ -1854,6 +1886,9 @@ export default function App() {
           en: englishTitle.trim(),
           price: { display: priceDisplay },
           regularPrice: regularPrice.trim(),
+          salePrice: newSalePrice,
+          quantity: newQty,
+          unit: newUnit,
         },
       },
     });
@@ -2200,8 +2235,10 @@ export default function App() {
     const jobsToDelete = jobs.filter(j => j.templateId === templateId);
     // #region agent log
     const debugPayload = { editorQueueLen: editorQueue.length, jobsToDeleteLen: jobsToDelete.length, templateId, viewingJobId: viewingJob?.id ?? null, replacementJobsLen: replacementJobs.length };
-    (window as any).ufm?.debugLog?.({ sessionId: 'c3b215', location: 'App.tsx:handleClearAllDepartments', message: 'handler invoked', data: debugPayload, hypothesisId: 'B', runId: 'post-fix-v3' });
-    fetch('http://127.0.0.1:7361/ingest/57de729c-1f3f-4911-afe7-7b1a23fd9ad6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c3b215'},body:JSON.stringify({sessionId:'c3b215',location:'App.tsx:handleClearAllDepartments',message:'handler invoked',data:debugPayload,timestamp:Date.now(),hypothesisId:'B',runId:'post-fix-v3'})}).catch(()=>{});
+    if (import.meta.env.DEV) {
+      (window as any).ufm?.debugLog?.({ sessionId: 'c3b215', location: 'App.tsx:handleClearAllDepartments', message: 'handler invoked', data: debugPayload, hypothesisId: 'B', runId: 'post-fix-v3' });
+      fetch('http://127.0.0.1:7361/ingest/57de729c-1f3f-4911-afe7-7b1a23fd9ad6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c3b215'},body:JSON.stringify({sessionId:'c3b215',location:'App.tsx:handleClearAllDepartments',message:'handler invoked',data:debugPayload,timestamp:Date.now(),hypothesisId:'B',runId:'post-fix-v3'})}).catch(()=>{});
+    }
     // #endregion
 
     // Cancel in-flight background work before wiping state
@@ -2781,8 +2818,11 @@ export default function App() {
                       Add Product
                     </button>
                   )}
-                  {!departmentLocked && editorQueue.length > 0 && (
-                    isDeptCardBased() ? (
+                  {!departmentLocked && editorQueue.length > 0 && (() => {
+                    const anyCutoutRunning = editorQueue.some((it: any) =>
+                      it.status === "processing_cutout" || it.status === "running"
+                    );
+                    return isDeptCardBased() ? (
                       <div style={{
                         display: "flex",
                         background: "#f0f1f3",
@@ -2809,7 +2849,7 @@ export default function App() {
                         </button>
                         <button
                           onClick={() => {
-                            if (editMode) return;
+                            if (editMode || anyCutoutRunning) return;
                             if (verificationDone) {
                               setVerificationDone(false);
                               setVerificationProgress(null);
@@ -2819,16 +2859,16 @@ export default function App() {
                           style={{
                             height: 26, padding: "0 12px",
                             border: "none", borderRadius: 6,
-                            background: !editMode && verificationDone ? "#fff" : "transparent",
-                            boxShadow: !editMode && verificationDone ? "0 1px 3px rgba(0,0,0,0.15)" : "none",
-                            color: editMode ? "#9ca3af" : verificationDone ? "#15803d" : "#6b7280",
+                            background: !editMode && !anyCutoutRunning && verificationDone ? "#fff" : "transparent",
+                            boxShadow: !editMode && !anyCutoutRunning && verificationDone ? "0 1px 3px rgba(0,0,0,0.15)" : "none",
+                            color: editMode || anyCutoutRunning ? "#9ca3af" : verificationDone ? "#15803d" : "#6b7280",
                             fontWeight: 600, fontSize: 13,
-                            cursor: editMode ? "not-allowed" : "pointer",
+                            cursor: editMode || anyCutoutRunning ? "not-allowed" : "pointer",
                             fontFamily: "var(--font-sans)",
                             whiteSpace: "nowrap",
                             transition: "background 0.15s, color 0.15s, box-shadow 0.15s",
                           }}
-                          title={editMode ? "Exit edit mode first" : verificationDone ? "Verification complete — click to re-verify" : "Verify products"}
+                          title={anyCutoutRunning ? "Wait for cutout processing to finish" : editMode ? "Exit edit mode first" : verificationDone ? "Verification complete — click to re-verify" : "Verify products"}
                         >
                           {verificationDone ? "✓ Verified" : "✓ Verify"}
                         </button>
@@ -2836,27 +2876,30 @@ export default function App() {
                     ) : (
                       <button
                         onClick={() => {
+                          if (anyCutoutRunning) return;
                           if (verificationDone) {
                             setVerificationDone(false);
                             setVerificationProgress(null);
                           }
                           setShowCheckingPanel(true);
                         }}
+                        disabled={anyCutoutRunning}
                         style={{
                           ...toolbarBtnBase,
-                          border: verificationDone ? "1.5px solid #16a34a" : "none",
-                          background: verificationDone ? "#dcfce7" : "#7c3aed",
-                          color: verificationDone ? "#15803d" : "#fff",
+                          border: verificationDone && !anyCutoutRunning ? "1.5px solid #16a34a" : "none",
+                          background: anyCutoutRunning ? "#d1d5db" : verificationDone ? "#dcfce7" : "#7c3aed",
+                          color: anyCutoutRunning ? "#9ca3af" : verificationDone ? "#15803d" : "#fff",
+                          cursor: anyCutoutRunning ? "not-allowed" : "pointer",
                           transition: "background 0.2s, color 0.2s",
                         }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = verificationDone ? "#bbf7d0" : "#6d28d9"; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = verificationDone ? "#dcfce7" : "#7c3aed"; }}
-                        title={verificationDone ? "Verification complete — click to re-verify" : "Verify products"}
+                        onMouseEnter={(e) => { if (!anyCutoutRunning) e.currentTarget.style.background = verificationDone ? "#bbf7d0" : "#6d28d9"; }}
+                        onMouseLeave={(e) => { if (!anyCutoutRunning) e.currentTarget.style.background = verificationDone ? "#dcfce7" : "#7c3aed"; }}
+                        title={anyCutoutRunning ? "Wait for cutout processing to finish" : verificationDone ? "Verification complete — click to re-verify" : "Verify products"}
                       >
                         {verificationDone ? "✓ Verified" : "✓ Verify"}
                       </button>
                     )
-                  )}
+                  })()}
                   {verificationDone && (
                     <button
                       onClick={handleToggleLock}
@@ -2959,7 +3002,7 @@ export default function App() {
                     </div>
                   </div>
                   {/* Canvas column — takes remaining space, scrolls independently */}
-                  <div style={{ flex: 1, position: "relative", overflow: "auto" }}>
+                  <div ref={editorCanvasScrollRef} style={{ flex: 1, position: "relative", overflow: "auto" }}>
                     <EditorAutomationBlocker
                       active={isEditorAutomationActive}
                       message={editorAutomationMessage}
@@ -3126,6 +3169,8 @@ export default function App() {
                     onSearchReplace={handleSearchReplace}
                     onDbSelectProduct={enqueueDbReplacementJob}
                     onSaveDiscountDetails={handleSaveDiscountDetails}
+                    replacementJobs={replacementJobs}
+                    onEnqueueGoogleReplace={enqueueReplacementJob}
                   />
                 )}
           </>

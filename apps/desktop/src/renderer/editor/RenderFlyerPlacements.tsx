@@ -8,36 +8,7 @@ import { formatDaysOnlyBanner, getCycleStartFriday } from "../utils/flyerCycle";
 import { acceptPanelImageDrag, handlePanelImageDropEvent, type PanelImageDropHandler } from "./panelImageDrag";
 import { titleNudgeStyle, priceNudgeStyle, type CardOrientation } from "./textElementNudge";
 
-// Helper to parse price display into parts for rendering
-function parsePriceDisplay(display: string) {
-  // Match patterns like "2 FOR $4.99" or "$19.90" or "$4.99/EA"
-  const multiBuyMatch = display.match(/^(\d+)\s+FOR\s+\$?([\d.]+)/i);
-  if (multiBuyMatch) {
-    const [intPart, decPart = ""] = multiBuyMatch[2].split(".");
-    return {
-      type: "MULTI",
-      quantity: multiBuyMatch[1],
-      integer: intPart,
-      decimal: decPart,
-      unit: "",
-    };
-  }
-
-  // Single price pattern: "$19.90" or "$19.90/EA"
-  const singleMatch = display.match(/\$?([\d.]+)(?:\/(\w+))?/i);
-  if (singleMatch) {
-    const [intPart, decPart = ""] = singleMatch[1].split(".");
-    return {
-      type: "SINGLE",
-      quantity: null,
-      integer: intPart,
-      decimal: decPart,
-      unit: singleMatch[2] || "",
-    };
-  }
-
-  return null;
-}
+import { parsePriceDisplay } from "../utils/priceFormat";
 
 const DAY_ABBR: Record<string, string> = {
   mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun",
@@ -635,11 +606,6 @@ function PlacementCard({
     fontStyle: titleItalic ? 'italic' : undefined,
     ...buildTextEffect(titleEffect, titleBg, titleBgPad),
   };
-  // Effect-free variant for supplementary text (reg price, size) that should stay plain
-  const titleBaseStyle: React.CSSProperties = {
-    fontFamily: titleFontFamily ?? undefined,
-    color: titleColor ?? undefined,
-  };
   const priceTextStyle: React.CSSProperties = {
     fontFamily: priceFontFamily ?? undefined,
     color: priceColor ?? undefined,
@@ -1106,6 +1072,19 @@ function PlacementCard({
     />
   ) : null;
 
+  // ── Style-provenance badge (edit mode only) ──
+  const styleFromBadge = editMode && p.titleStyleFrom ? (
+    <div style={{
+      position: 'absolute', top: 3, left: 3, zIndex: 150, pointerEvents: 'none',
+      background: p.titleStyleFrom.startsWith('global:') ? 'rgba(99,102,241,0.85)' : 'rgba(59,130,246,0.85)',
+      color: '#fff', fontSize: 8, fontWeight: 700, padding: '1px 5px',
+      borderRadius: 8, letterSpacing: '0.04em', textTransform: 'uppercase',
+      lineHeight: 1.6,
+    }}>
+      {p.titleStyleFrom.startsWith('global:') ? 'global style' : 'dept style'}
+    </div>
+  ) : null;
+
   // ── No-image placeholder — only during streaming before labels arrive ──
   // Once hasLabel=true, fall through to the normal layout so title/price use proper placement styling.
   if (!imgSrc && !imgSrcs?.length && matchSource === "none" && !hasLabel) {
@@ -1225,6 +1204,7 @@ function PlacementCard({
         onDragOver={handlePanelDragOver}
         onDrop={handlePanelDrop}
       >
+        {styleFromBadge}
         {/* Content wrapper — crop applied only to image div below */}
         <div style={{ position: 'absolute', inset: 0, overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden' }}>
         {titleDrag?.active && (
@@ -1349,7 +1329,7 @@ function PlacementCard({
                     {label.title.en.toUpperCase()}
                   </div>
                   {(label.title.size || label.title.regularPrice) && (
-                    <div className="ufm-title-meta" style={{ fontSize: titleMetaSizeActual, marginTop: 2 + titleMetaOffsetY, ...titleBaseStyle }}>
+                    <div className="ufm-title-meta" style={{ fontSize: titleMetaSizeActual, marginTop: 2 + titleMetaOffsetY, ...titleTextStyle }}>
                       {label.title.size}
                       {label.title.regularPrice && <> REG: {label.title.regularPrice}</>}
                     </div>
@@ -1432,6 +1412,7 @@ function PlacementCard({
         }}
         onClick={editMode ? (e) => { e.stopPropagation(); onSetSelectedEl?.(null); onElementSelect?.(null); if (selectedSubIdx !== null) onSelectSubIdx?.(null); } : undefined}
       >
+        {styleFromBadge}
         {/* Content wrapper — crop applied only to image div below */}
         <div style={{ position: 'absolute', inset: 0, overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden' }}>
         {titleDrag?.active && (
@@ -1485,7 +1466,7 @@ function PlacementCard({
                 {label.title.en.toUpperCase()}
               </div>
               {(label.title.size || label.title.regularPrice) && (
-                <div className="ufm-title-meta" style={{ fontSize: titleMetaSizeActual, marginTop: 2 + titleMetaOffsetY, ...titleBaseStyle }}>
+                <div className="ufm-title-meta" style={{ fontSize: titleMetaSizeActual, marginTop: 2 + titleMetaOffsetY, ...titleTextStyle }}>
                   {label.title.size}
                   {label.title.regularPrice && <> REG: {label.title.regularPrice}</>}
                 </div>
@@ -1630,6 +1611,7 @@ function PlacementCard({
       onDragOver={handlePanelDragOver}
       onDrop={handlePanelDrop}
     >
+      {styleFromBadge}
       {/* Content wrapper — crop is applied only to image zone below */}
       <div style={{ position: 'absolute', inset: 0, overflow: editMode && selectedSubIdx !== null ? 'visible' : 'hidden' }}>
       {/* Layout switch drop zones — shown during title drag */}
@@ -1824,7 +1806,7 @@ function PlacementCard({
             {label.title.en.toUpperCase()}
           </div>
           {(label.title.size || label.title.regularPrice) && (
-            <div className="ufm-title-meta" style={{ fontSize: titleMetaSizeActual, marginTop: 2 + titleMetaOffsetY, ...titleBaseStyle }}>
+            <div className="ufm-title-meta" style={{ fontSize: titleMetaSizeActual, marginTop: 2 + titleMetaOffsetY, ...titleTextStyle }}>
               {label.title.size}
               {label.title.regularPrice && <> REG: {label.title.regularPrice}</>}
             </div>

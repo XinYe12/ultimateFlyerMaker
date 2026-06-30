@@ -215,12 +215,14 @@ export type CardDef = {
   titleBg?: string;
   titleBgPad?: number;
   titleEffect?: 'stroke' | 'glow' | 'shadow';
+  titleStyleFrom?: string;  // provenance: source card id (dept) or 'global:<cardId>' (global)
   priceFontFamily?: string;
   priceColor?: string;
   priceShowDollar?: boolean;
   priceBg?: string;
   priceBgPad?: number;
   priceEffect?: 'stroke' | 'glow' | 'shadow';
+  priceStyleFrom?: string;  // provenance: source card id (dept) or 'global:<cardId>' (global)
   priceCompDollarRatio?: number;
   priceCompDollarOffsetY?: number;
   priceCompQtyRatio?: number;
